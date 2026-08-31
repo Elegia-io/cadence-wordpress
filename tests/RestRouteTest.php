@@ -169,8 +169,18 @@ final class RestRouteTest extends TestCase {
         $this->assertNotEmpty(CadenceLinkRequest::REFUSAL_CODES);
         foreach (CadenceLinkRequest::REFUSAL_CODES as $code) {
             $status = CadenceRestRoute::respond(['ok' => false, 'code' => $code, 'reason' => 'x'])['status'];
-            $this->assertContains($status, [400, 409], $code . ' is not classified');
+            $this->assertContains($status, [400, 409, 503], $code . ' is not classified');
         }
+    }
+
+    /**
+     * A SITE THAT CANNOT DO THIS AT ALL IS A 503, not a 400 blaming the request
+     * and not a 409 inviting a retry that cannot succeed until someone installs
+     * WPML.
+     */
+    public function test_a_site_without_wpml_is_503(): void {
+        $r = CadenceRestRoute::respond(['ok' => false, 'code' => 'wpml_unavailable', 'reason' => 'x']);
+        $this->assertSame(503, $r['status']);
     }
 
     /**

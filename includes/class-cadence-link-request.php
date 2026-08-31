@@ -54,6 +54,7 @@ final class CadenceLinkRequest {
         'group_unknown',
         'already_grouped',
         'group_disagreement',
+        'wpml_unavailable',
     ];
 
     /** A bare lowercase WPML language code: `de`, `pt-br`, `zh-hant-hk`. */
@@ -73,6 +74,25 @@ final class CadenceLinkRequest {
      * @return array{ok: bool, code?: string, reason?: string, written?: int}
      */
     public static function run(array $plan): array {
+        // BEFORE ANYTHING ELSE, INCLUDING THE PLAN'S OWN SHAPE: a server that
+        // cannot perform this request at all has no standing to tell the caller
+        // its request is malformed.
+        //
+        // WordPress is perfectly content with a filter nobody implements -- it
+        // hands back the default it was given -- and with an action nobody
+        // listens to. So on a site with no WPML every precondition below reads
+        // as agreeable and every write goes nowhere. Measured against a real
+        // WordPress 6.8 with WPML absent, this returned `200 {"written": 2}`.
+        //
+        // The question is asked of the CAPABILITY -- is anything listening --
+        // and not of a name: `defined('ICL_SITEPRESS_VERSION')` would be a
+        // check on the spelling of an implementation, and answers yes for a
+        // WPML that is present but has these hooks disabled.
+        if (!has_filter('wpml_element_language_details') || !has_action('wpml_set_element_language_details')) {
+            return ['ok' => false, 'code' => 'wpml_unavailable', 'reason' =>
+                'nothing on this site implements the WPML translation-group hooks, so a link cannot be read or written here'];
+        }
+
         $posts = self::validate_shape($plan);
         if (is_string($posts)) {
             return ['ok' => false, 'code' => 'bad_plan', 'reason' => $posts];
@@ -234,7 +254,11 @@ final class CadenceLinkRequest {
      * @return int|null|false
      */
     private static function current_trid(int $post_id, string $element_type) {
-        $details = apply_filters('wpml_element_language_details', null, [
+        // THE DEFAULT IS THE UNUSABLE ONE. `apply_filters` returns this
+        // unchanged when nothing answers, so the default is what the code
+        // believes about a silent site -- and `null` would make silence mean
+        // "known, and in no group", which is the reading that writes.
+        $details = apply_filters('wpml_element_language_details', false, [
             'element_id'   => $post_id,
             'element_type' => $element_type,
         ]);

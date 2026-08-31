@@ -73,6 +73,7 @@ its last post writes nothing about its first.
 | `200` | Written. `written` is how many. | — |
 | `400` | The request is wrong on its face. | Fix it; re-sending cannot help. |
 | `409` | The site disagrees with the request. | Re-read the site and try again. |
+| `503` | The site has no WPML. | Install it; the request is fine. |
 | `500` | Refused for a reason this version cannot classify. | Report it. |
 
 Refusals carry a stable `code` as well as a human `reason`. Match on the code —
@@ -86,6 +87,7 @@ the reason is prose and changes freely.
 | `group_unknown` | 409 | WPML returned nothing usable for a post — which is **not** "in no group" |
 | `already_grouped` | 409 | a post is already in a group, and creating one would detach it |
 | `group_disagreement` | 409 | the site's group for a post is not the one named |
+| `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks |
 
 ## Development
 

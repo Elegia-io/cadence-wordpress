@@ -69,7 +69,12 @@ final class CadenceRestRoute {
         $stale_plan = ['group_unknown', 'already_grouped', 'group_disagreement'];
 
         $code = $result['code'] ?? null;
-        if (in_array($code, $wrong_plan, true)) {
+        // Neither the caller's fault nor transient: the site is missing what
+        // the request needs. 503 says so; 400 would blame the request and 409
+        // would invite a retry that cannot succeed until someone installs it.
+        if ($code === 'wpml_unavailable') {
+            $status = 503;
+        } elseif (in_array($code, $wrong_plan, true)) {
             $status = 400;
         } elseif (in_array($code, $stale_plan, true)) {
             $status = 409;

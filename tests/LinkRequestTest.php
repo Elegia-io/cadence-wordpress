@@ -226,7 +226,7 @@ final class LinkRequestTest extends TestCase {
     }
 
     /**
-     * EVERY REFUSAL CARRIES A STABLE CODE, and the six causes carry six
+     * EVERY REFUSAL CARRIES A STABLE CODE, and the seven causes carry seven
      * different ones.
      *
      * The reason is prose for a human reading a log. The caller is a program
@@ -261,6 +261,12 @@ final class LinkRequestTest extends TestCase {
                 $this->twoPosts(9);
                 return $this->plan(['trid' => 5, 'create_group' => false]);
             },
+            'wpml_unavailable' => function () {
+                $this->twoPosts(null);
+                WpStub::$wpml_reads = false;
+                WpStub::$wpml_writes = false;
+                return $this->plan(['trid' => null, 'create_group' => true]);
+            },
         ];
 
         $seen = [];
@@ -272,10 +278,10 @@ final class LinkRequestTest extends TestCase {
             $this->assertSame($expected, $r['code'] ?? null, $expected);
             $seen[] = $r['code'];
         }
-        // Six causes, six codes: a mapping that collapsed two of them would
+        // Seven causes, seven codes: a mapping that collapsed two of them would
         // still pass every assertion above if both expectations were changed
         // together, and the caller could no longer tell them apart.
-        $this->assertCount(6, array_unique($seen));
+        $this->assertCount(7, array_unique($seen));
 
         // AND THE PUBLISHED LIST IS THAT LIST. `REFUSAL_CODES` is what the REST
         // layer maps to HTTP statuses; if a seventh refusal is added here and
@@ -286,6 +292,80 @@ final class LinkRequestTest extends TestCase {
         $published = CadenceLinkRequest::REFUSAL_CODES;
         sort($published);
         $this->assertSame($seen, $published);
+    }
+
+    /**
+     * NO WPML IS A REFUSAL, NOT A SUCCESS.
+     *
+     * Measured against a real WordPress with WPML not installed: this returned
+     * `200 {"ok": true, "written": 2}`. Nothing had been written. WordPress
+     * does not object to a filter nobody implements -- it returns the default
+     * it was handed -- and it does not object to an action nobody listens to.
+     * So the code read its own default as WPML's answer, and reported a count
+     * of writes that went nowhere.
+     *
+     * A refusal here costs a human an install. A false success tells the
+     * caller the site is linked, and the caller stops.
+     */
+    public function test_a_site_without_wpml_refuses_rather_than_reporting_a_write(): void {
+        $this->twoPosts(null);
+        WpStub::$wpml_reads = false;
+        WpStub::$wpml_writes = false;
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
+        $this->assertFalse($r['ok']);
+        $this->assertSame('wpml_unavailable', $r['code']);
+        $this->assertSame([], WpStub::$writes);
+        $this->assertArrayNotHasKey('written', $r);
+    }
+
+    /**
+     * AND A READER WITHOUT A WRITER IS THE SAME REFUSAL. This is the asymmetric
+     * half: every precondition can be read and agreed with, and the writes
+     * still go nowhere -- which is the only configuration where the count
+     * returned is both non-zero and entirely fictional.
+     */
+    public function test_wpml_that_answers_reads_but_performs_no_writes_is_refused(): void {
+        $this->twoPosts(null);
+        WpStub::$wpml_writes = false;
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
+        $this->assertFalse($r['ok']);
+        $this->assertSame('wpml_unavailable', $r['code']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * THE MIRROR OF THE TEST ABOVE, and the reason the guard names both hooks.
+     * A site that can write links but cannot be asked about them is refused for
+     * being unable, not reported as `group_unknown` -- which would tell the
+     * caller its posts are in an unreadable state when the truth is that
+     * nothing here reads.
+     */
+    public function test_wpml_that_writes_but_answers_no_reads_is_refused_as_unavailable(): void {
+        $this->twoPosts(null);
+        WpStub::$wpml_reads = false;
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
+        $this->assertFalse($r['ok']);
+        $this->assertSame('wpml_unavailable', $r['code']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * A REGISTERED FILTER THAT DECLINES TO ANSWER IS STILL NOT AN ANSWER.
+     *
+     * `has_filter` says yes -- WPML is installed and hooked site-wide -- and
+     * for this element it hands the value straight back, because nobody enabled
+     * translation for its post type. What comes back is the default this code
+     * supplied, so the default IS what the code believes about silence. It is
+     * `false` (nothing usable) and never `null` (known, and in no group),
+     * because the second reading is the one that goes on to write.
+     */
+    public function test_a_filter_that_declines_to_answer_writes_nothing(): void {
+        $this->twoPosts(null);
+        WpStub::$wpml_declines = true;
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
+        $this->assertFalse($r['ok']);
+        $this->assertSame('group_unknown', $r['code']);
+        $this->assertSame([], WpStub::$writes);
     }
 
     public function test_a_written_plan_carries_no_code(): void {

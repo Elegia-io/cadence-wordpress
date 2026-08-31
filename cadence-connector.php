@@ -22,6 +22,7 @@ if (!defined('ABSPATH')) {
 }
 
 require_once __DIR__ . '/includes/class-cadence-link-request.php';
+require_once __DIR__ . '/includes/class-cadence-content-request.php';
 require_once __DIR__ . '/includes/class-cadence-rest-route.php';
 
 add_action('rest_api_init', static function (): void {
@@ -38,6 +39,21 @@ add_action('rest_api_init', static function (): void {
         // without it is not a weaker version of this -- it is no check at all.
         'permission_callback' => static function ($request): bool {
             return CadenceRestRoute::permitted(
+                (array) $request->get_json_params(),
+                'current_user_can'
+            );
+        },
+    ]);
+
+    register_rest_route('cadence/v1', '/content', [
+        'methods'  => 'POST',
+        'callback' => static function ($request) {
+            $result = CadenceContentRequest::run((array) $request->get_json_params());
+            $answer = CadenceRestRoute::respond($result);
+            return new WP_REST_Response($answer['body'], $answer['status']);
+        },
+        'permission_callback' => static function ($request): bool {
+            return CadenceRestRoute::may_publish(
                 (array) $request->get_json_params(),
                 'current_user_can'
             );

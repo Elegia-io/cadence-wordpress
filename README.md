@@ -39,7 +39,52 @@ code runs on your server, so it re-derives every precondition from the database
 before it writes — including reading each post's *current* translation group and
 refusing when the plan disagrees with what the site actually says.
 
-## The endpoint
+## The endpoints
+
+There are two, and they do not overlap: one puts content on the site, the other
+says which pieces of content are translations of each other.
+
+## Publishing content
+
+```
+POST /wp-json/cadence/v1/content
+```
+
+Requires the post type's own `create_posts` capability, and `publish_posts` as
+well when `status` is `publish` — asked of the type, because WordPress derives a
+type's capabilities from its registration and a custom type's are not `post`'s.
+
+```json
+{
+  "external_id": "piece-2026-08-31-en",
+  "post_type":   "post",
+  "status":      "draft",
+  "title":       "A title",
+  "content":     "<p>Body.</p>"
+}
+```
+
+**`external_id` is what makes a retry safe.** An HTTP pipeline retries, and a
+request that timed out *after* WordPress committed the insert is
+indistinguishable, to the caller, from one that never ran. Retried without an
+identifier, it puts the same article on the site twice — published, and visible
+to real visitors. So the identifier decides: one already on a post is answered
+with that post, and nothing is created.
+
+| Status | | |
+|---|---|---|
+| `201` | created | `created: true`, with `post_id` |
+| `200` | it already existed | `created: false`, same `post_id` |
+
+A repeat under an identifier that is already used is **not** an update. A
+different body under the same identifier means the caller believes it is
+publishing something new; the live article is not this plugin's to overwrite on
+that belief. Trashed posts still answer for their identifier, so a piece
+somebody deleted is not resurrected by the next run of the pipeline.
+
+There is no update endpoint yet.
+
+## Linking translations
 
 ```
 POST /wp-json/cadence/v1/translation-group
@@ -88,6 +133,8 @@ the reason is prose and changes freely.
 | `already_grouped` | 409 | a post is already in a group, and creating one would detach it |
 | `group_disagreement` | 409 | the site's group for a post is not the one named |
 | `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks |
+| `bad_request` | 400 | the content body is not the shape it claims |
+| `insert_failed` | 500 | WordPress refused the insert, or returned no id |
 
 ## Development
 

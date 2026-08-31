@@ -44,6 +44,30 @@ final class WpStub {
      */
     public static bool $wpml_declines = false;
 
+    /** @var list<array> every postarr handed to wp_insert_post */
+    public static array $inserted = [];
+    /** @var list<array> every postarr handed to wp_update_post */
+    public static array $updated = [];
+    /** @var array<int, array<string, mixed>> post_id => meta */
+    public static array $meta = [];
+    /** When set, wp_insert_post returns a WP_Error carrying this message. */
+    public static ?string $insert_fails = null;
+
+    /**
+     * When true, wp_insert_post returns `0` even though it was asked for
+     * errors. `0` is what the non-error form returns on failure, and a filter
+     * on `wp_insert_post_empty_content` or `wp_insert_post_data` can put a
+     * caller on that path from a plugin it does not control. It matters because
+     * `0` is falsy and is also what "no post" looks like everywhere else, so an
+     * unchecked one propagates as a plausible absence rather than an error.
+     */
+    public static bool $insert_returns_zero = false;
+
+    public static int $next_post_id = 100;
+
+    /** @var list<string> the post types this site has registered */
+    public static array $post_types = ['post', 'page'];
+
     public static function reset(): void {
         self::$posts = [];
         self::$writes = [];
@@ -51,6 +75,13 @@ final class WpStub {
         self::$wpml_reads = true;
         self::$wpml_writes = true;
         self::$wpml_declines = false;
+        self::$inserted = [];
+        self::$updated = [];
+        self::$meta = [];
+        self::$insert_fails = null;
+        self::$insert_returns_zero = false;
+        self::$next_post_id = 100;
+        self::$post_types = ['post', 'page'];
     }
 
     public static function add_post(int $id, string $post_type = 'page',
@@ -141,6 +172,95 @@ function has_action(string $hook, $callback = false) {
     return $hook === 'wpml_set_element_language_details' ? WpStub::$wpml_writes : false;
 }
 
+/** WordPress's own error type, in the two respects anything here uses it. */
+final class WP_Error {
+    public function __construct(private string $code = '', private string $message = '') {}
+    public function get_error_message(): string { return $this->message; }
+    public function get_error_code(): string { return $this->code; }
+}
+
+function is_wp_error($thing): bool { return $thing instanceof WP_Error; }
+
+/**
+ * The capability names for a post type. Real WordPress derives these from the
+ * type's registration, and they are NOT the same for every type -- which is the
+ * whole reason the plugin asks for them rather than hard-coding `edit_posts`.
+ */
+function get_post_type_object(string $type): ?object {
+    if (!post_type_exists($type)) {
+        return null;   // exactly what WordPress returns for an unregistered type
+    }
+    $plural = $type === 'post' ? 'posts' : $type . 's';
+    return (object) ['name' => $type, 'cap' => (object) [
+        'create_posts'  => 'create_' . $plural,
+        'publish_posts' => 'publish_' . $plural,
+    ]];
+}
+
+function post_type_exists(string $type): bool {
+    return in_array($type, WpStub::$post_types, true);
+}
+
+/**
+ * Returns a new post's id, or -- and this is the half that gets forgotten -- a
+ * WP_Error, or 0. It does not throw.
+ */
+function wp_insert_post(array $postarr, bool $wp_error = false) {
+    if (WpStub::$insert_returns_zero) {
+        return 0;
+    }
+    if (WpStub::$insert_fails !== null) {
+        return $wp_error
+            ? new WP_Error('db_insert_error', WpStub::$insert_fails)
+            : 0;
+    }
+    $id = WpStub::$next_post_id++;
+    WpStub::$inserted[] = $postarr;
+    WpStub::$posts[$id] = [
+        'post_type' => $postarr['post_type'] ?? 'post',
+        'post_status' => $postarr['post_status'] ?? 'draft',
+        'language' => null, 'trid' => null, 'wpml_knows' => true,
+    ];
+    // `meta_input` is written by wp_insert_post itself, in the same call that
+    // creates the post -- which is why the plugin uses it.
+    foreach ($postarr['meta_input'] ?? [] as $k => $v) {
+        WpStub::$meta[$id][$k] = $v;
+    }
+    return $id;
+}
+
+function wp_update_post(array $postarr, bool $wp_error = false) {
+    WpStub::$updated[] = $postarr;
+    return $postarr['ID'] ?? 0;
+}
+
+function update_post_meta(int $post_id, string $key, $value): bool {
+    WpStub::$meta[$post_id][$key] = $value;
+    return true;
+}
+
+/** Only the meta_key/meta_value/fields=ids shape the plugin asks for. */
+function get_posts(array $args = []): array {
+    $key = $args['meta_key'] ?? null;
+    $value = $args['meta_value'] ?? null;
+    $want_status = $args['post_status'] ?? 'publish';
+    $found = [];
+    foreach (WpStub::$meta as $id => $meta) {
+        // Exact, never a prefix: `piece-1` must not answer for `piece-10`.
+        if (!array_key_exists($key, $meta) || $meta[$key] !== $value) {
+            continue;
+        }
+        // WordPress's default is publish-only; honoured here so that asking
+        // for the default rather than `any` is a difference a test can see.
+        $status = WpStub::$posts[$id]['post_status'] ?? 'draft';
+        if ($want_status !== 'any' && $status !== $want_status) {
+            continue;
+        }
+        $found[] = $id;
+    }
+    return $found;
+}
+
 function esc_html(string $s): string { return $s; }
 function __(string $s, string $d = ''): string { return $s; }
 
@@ -193,3 +313,4 @@ final class WP_REST_Request {
 
 require_once __DIR__ . '/../includes/class-cadence-link-request.php';
 require_once __DIR__ . '/../includes/class-cadence-rest-route.php';
+require_once __DIR__ . '/../includes/class-cadence-content-request.php';

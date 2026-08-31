@@ -14,6 +14,14 @@ final class RestRouteTest extends TestCase {
     /** @var list<array{string, mixed}> every question asked of WordPress */
     private array $asked = [];
 
+    /** A `current_user_can` answering yes for the named capabilities, recording everything. */
+    private function can_cap(array $caps): callable {
+        return function (string $cap, $id = null) use ($caps): bool {
+            $this->asked[] = [$cap, $id];
+            return in_array($cap, $caps, true);
+        };
+    }
+
     /** A `current_user_can` that answers yes for the ids given and records everything. */
     private function can(array $allowed_ids): callable {
         return function (string $cap, $id) use ($allowed_ids): bool {
@@ -141,6 +149,24 @@ final class RestRouteTest extends TestCase {
     }
 
     /**
+     * 201 FOR SOMETHING THAT CAME INTO EXISTENCE, 200 FOR A REPEAT that found
+     * it already there. The body says `created` either way, so a caller never
+     * has to read the status code to know which happened -- but a caller that
+     * does read it gets the truth.
+     */
+    public function test_a_created_post_is_201_and_an_idempotent_repeat_is_200(): void {
+        $made = CadenceRestRoute::respond(['ok' => true, 'created' => true, 'post_id' => 12]);
+        $this->assertSame(201, $made['status']);
+        $this->assertSame(12, $made['body']['post_id']);
+        $this->assertTrue($made['body']['created']);
+
+        $again = CadenceRestRoute::respond(['ok' => true, 'created' => false, 'post_id' => 12]);
+        $this->assertSame(200, $again['status']);
+        $this->assertSame(12, $again['body']['post_id']);
+        $this->assertFalse($again['body']['created']);
+    }
+
+    /**
      * THE TWO KINDS OF REFUSAL ARE DIFFERENT HTTP ANSWERS, because they call
      * for opposite things from the caller: 409 means the site disagreed with
      * the plan, so re-read and try again; 400 means the plan is wrong however
@@ -166,11 +192,18 @@ final class RestRouteTest extends TestCase {
      * ever ask about the codes it already knows.
      */
     public function test_every_published_refusal_code_is_mapped(): void {
-        $this->assertNotEmpty(CadenceLinkRequest::REFUSAL_CODES);
-        foreach (CadenceLinkRequest::REFUSAL_CODES as $code) {
-            $status = CadenceRestRoute::respond(['ok' => false, 'code' => $code, 'reason' => 'x'])['status'];
-            $this->assertContains($status, [400, 409, 503], $code . ' is not classified');
+        $published = array_merge(CadenceLinkRequest::REFUSAL_CODES, CadenceContentRequest::REFUSAL_CODES);
+        $this->assertNotEmpty($published);
+        foreach ($published as $code) {
+            // Asked of the TABLE, not of the status the table produces. 500 is
+            // both "nobody classified this" and the right answer for
+            // `insert_failed`, so a test keying on the number cannot tell a
+            // deliberate 500 from an unclassified one.
+            $this->assertArrayHasKey($code, CadenceRestRoute::STATUS, $code . ' is not classified');
         }
+        // And nothing is classified that no writer emits, which is how a code
+        // renamed on one side and not the other shows up.
+        $this->assertSame([], array_diff(array_keys(CadenceRestRoute::STATUS), $published));
     }
 
     /**
@@ -199,6 +232,57 @@ final class RestRouteTest extends TestCase {
             $this->assertSame(500, $r['status'], (string) $i);
             $this->assertArrayNotHasKey('written', $r['body']);
         }
+    }
+
+    /**
+     * PUBLISHING IS A DIFFERENT PERMISSION FROM DRAFTING, and both are asked
+     * per post type rather than as `edit_posts`.
+     *
+     * WordPress derives a type's capabilities from its registration, so a
+     * custom type's caps are not the ones `post` uses. A plugin that hard-coded
+     * `edit_posts` would let anyone who may draft a blog post write into a type
+     * whose whole point was that they may not.
+     */
+    public function test_creating_needs_the_types_create_cap(): void {
+        $body = ['external_id' => 'x', 'post_type' => 'page', 'status' => 'draft'];
+        $this->assertTrue(CadenceRestRoute::may_publish($body, $this->can_cap(['create_pages'])));
+        $this->assertSame([['create_pages', null]], $this->asked);
+
+        $this->asked = [];
+        $this->assertFalse(CadenceRestRoute::may_publish($body, $this->can_cap(['create_posts'])),
+            'the cap for a different post type let this through');
+    }
+
+    public function test_publishing_needs_the_publish_cap_as_well(): void {
+        $draft   = ['external_id' => 'x', 'post_type' => 'page', 'status' => 'draft'];
+        $publish = ['external_id' => 'x', 'post_type' => 'page', 'status' => 'publish'];
+        $creator = $this->can_cap(['create_pages']);
+
+        $this->assertTrue(CadenceRestRoute::may_publish($draft, $creator));
+        $this->assertFalse(CadenceRestRoute::may_publish($publish, $creator),
+            'a contributor who may draft was allowed to publish');
+        $this->assertTrue(CadenceRestRoute::may_publish(
+            $publish, $this->can_cap(['create_pages', 'publish_pages'])));
+    }
+
+    /**
+     * A TYPE THE SITE DOES NOT HAVE IS REFUSED WITHOUT ASKING ANYTHING.
+     * `get_post_type_object` returns null for it, and reading `->cap` off null
+     * is a fatal error in PHP 8 -- which in a permission callback is a 500 on a
+     * route whose answer should have been "no".
+     */
+    public function test_an_unregistered_post_type_is_refused_and_asks_nothing(): void {
+        foreach ([
+            ['external_id' => 'x', 'post_type' => 'nope', 'status' => 'draft'],
+            ['external_id' => 'x', 'post_type' => 1, 'status' => 'draft'],
+            ['external_id' => 'x', 'status' => 'draft'],
+            ['external_id' => 'x', 'post_type' => 'page'],
+            ['external_id' => 'x', 'post_type' => 'page', 'status' => ['draft']],
+            [],
+        ] as $i => $body) {
+            $this->assertFalse(CadenceRestRoute::may_publish($body, $this->can_cap(['create_pages'])), (string) $i);
+        }
+        $this->assertSame([], $this->asked);
     }
 
     /**

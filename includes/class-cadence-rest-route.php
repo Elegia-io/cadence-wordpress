@@ -48,6 +48,43 @@ final class CadenceRestRoute {
     }
 
     /**
+     * MAY THIS CALLER PUT THIS CONTENT ON THE SITE?
+     *
+     * Asked of the post TYPE's own capabilities, which WordPress derives from
+     * the type's registration and which are not the same for every type. A
+     * plugin hard-coding `edit_posts` would let anybody who may draft a blog
+     * post write into a type whose entire purpose was that they may not.
+     *
+     * Publishing is a second question, not a louder version of the first: the
+     * contributor role exists precisely to separate "may write this" from "may
+     * put it in front of the public".
+     *
+     * @param array    $body The decoded request body.
+     * @param callable $can  `fn(string $cap, mixed $id = null): bool`, i.e. current_user_can.
+     */
+    public static function may_publish(array $body, callable $can): bool {
+        $type   = $body['post_type'] ?? null;
+        $status = $body['status'] ?? null;
+        if (!is_string($type) || !is_string($status)) {
+            return false;
+        }
+        // Null for a type this site has not registered. Reading `->cap` off it
+        // is a fatal in PHP 8 -- inside a permission callback, that is a 500 on
+        // a route whose answer was always going to be "no".
+        $object = get_post_type_object($type);
+        if ($object === null || !isset($object->cap)) {
+            return false;
+        }
+        if (!$can($object->cap->create_posts, null)) {
+            return false;
+        }
+        if ($status === 'publish' && !$can($object->cap->publish_posts, null)) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
      * WHICH HTTP ANSWER A RESULT FROM `CadenceLinkRequest::run` IS.
      *
      * Not a lookup with a friendly default: an unrecognised refusal is a 500,
@@ -60,33 +97,53 @@ final class CadenceRestRoute {
      */
     public static function respond(array $result): array {
         if (($result['ok'] ?? false) === true) {
-            return ['status' => 200, 'body' => ['ok' => true, 'written' => $result['written']]];
+            $body = ['ok' => true];
+            foreach (['written', 'post_id', 'created'] as $k) {
+                if (array_key_exists($k, $result)) {
+                    $body[$k] = $result[$k];
+                }
+            }
+            // 201 only for something that came into existence. An idempotent
+            // repeat is a 200: the caller asked for a post to exist, it does,
+            // and nothing was created this time -- which `created` also says.
+            return ['status' => ($result['created'] ?? false) === true ? 201 : 200, 'body' => $body];
         }
-
-        // The plan is wrong on its face; sending it again cannot help.
-        $wrong_plan = ['bad_plan', 'contradictory_instructions', 'no_group_named'];
-        // The plan disagrees with this site; a fresh read might.
-        $stale_plan = ['group_unknown', 'already_grouped', 'group_disagreement'];
 
         $code = $result['code'] ?? null;
-        // Neither the caller's fault nor transient: the site is missing what
-        // the request needs. 503 says so; 400 would blame the request and 409
-        // would invite a retry that cannot succeed until someone installs it.
-        if ($code === 'wpml_unavailable') {
-            $status = 503;
-        } elseif (in_array($code, $wrong_plan, true)) {
-            $status = 400;
-        } elseif (in_array($code, $stale_plan, true)) {
-            $status = 409;
-        } else {
-            $status = 500;
-        }
-        return ['status' => $status, 'body' => array_filter([
+        return ['status' => self::STATUS[$code] ?? 500, 'body' => array_filter([
             'ok'     => false,
             'code'   => $code,
             'reason' => $result['reason'] ?? null,
         ], static fn ($v) => $v !== null)];
     }
+
+    /**
+     * EVERY REFUSAL CODE, AND THE ANSWER IT IS.
+     *
+     * An explicit table rather than three `in_array` branches with a default,
+     * because a code's classification then has somewhere to be MISSING from --
+     * `test_every_published_refusal_code_is_mapped` asks whether the code is a
+     * key here, which it can answer. Inferring it from the status cannot: 500
+     * is both "unclassified" and the honest answer for `insert_failed`, so a
+     * test that keys on the number cannot tell a deliberate 500 from a code
+     * nobody classified.
+     *
+     * 400 -- the request is wrong however many times it is sent.
+     * 409 -- the request disagrees with this site; re-read and it may not.
+     * 503 -- the site cannot do this at all; nothing about the request is wrong.
+     * 500 -- this server tried and failed.
+     */
+    public const STATUS = [
+        'bad_plan'                   => 400,
+        'contradictory_instructions' => 400,
+        'no_group_named'             => 400,
+        'bad_request'                => 400,
+        'group_unknown'              => 409,
+        'already_grouped'            => 409,
+        'group_disagreement'         => 409,
+        'wpml_unavailable'           => 503,
+        'insert_failed'              => 500,
+    ];
 
     /**
      * The post ids in the body, or null if the body is not the shape it claims.

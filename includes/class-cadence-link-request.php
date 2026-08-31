@@ -35,11 +35,6 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-if (!defined('ABSPATH') && !defined('CADENCE_CONNECTOR_TESTING')) {
-    // Loaded outside WordPress and outside the suite: nothing to do.
-    return;
-}
-
 final class CadenceLinkRequest {
 
     /**

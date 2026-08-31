@@ -16,9 +16,13 @@ final class WpStub {
     /** @var list<array> every wpml_set_element_language_details call */
     public static array $writes = [];
 
+    /** @var array<string, list<int>> capability => the post ids the current user holds it for */
+    public static array $capabilities = [];
+
     public static function reset(): void {
         self::$posts = [];
         self::$writes = [];
+        self::$capabilities = [];
     }
 
     public static function add_post(int $id, string $post_type = 'page',
@@ -76,9 +80,66 @@ function do_action(string $hook, ...$args): void {
     }
 }
 
-function add_action(...$a): void {}
-function register_rest_route(...$a): void {}
+/**
+ * The real one consults roles, the post's author, its post type's capability
+ * map and any number of plugins. The stub answers from an explicit list,
+ * because what is under test is which questions get asked, not how WordPress
+ * answers them.
+ */
+function current_user_can(string $cap, ...$args): bool {
+    $id = $args[0] ?? null;
+    return in_array($id, WpStub::$capabilities[$cap] ?? [], true);
+}
+
 function esc_html(string $s): string { return $s; }
 function __(string $s, string $d = ''): string { return $s; }
 
+// What WordPress defines and every plugin file guards on. Defined here for
+// the same reason WordPress's own test suite defines it: the guard is only
+// disarmed by being genuinely loaded inside WordPress.
+define('ABSPATH', '/wordpress/');
+
+/**
+ * Enough of WordPress's plugin API to load the entry file and see what it
+ * registered. Recording rather than executing: the point is to inspect the
+ * registration, since a route registered with the wrong permission callback
+ * looks exactly like a working one until someone tries it unauthenticated.
+ */
+final class WpHooks {
+    /** @var array<string, list<callable>> */
+    public static array $actions = [];
+    /** @var list<array{string, string, array}> */
+    public static array $routes = [];
+
+    public static function fire(string $hook): void {
+        foreach (self::$actions[$hook] ?? [] as $cb) {
+            $cb();
+        }
+    }
+}
+
+function add_action(string $hook, callable $cb, int $priority = 10, int $args = 1): bool {
+    WpHooks::$actions[$hook][] = $cb;
+    return true;
+}
+
+function register_rest_route(string $namespace, string $route, array $args = [], bool $override = false): bool {
+    WpHooks::$routes[] = [$namespace, $route, $args];
+    return true;
+}
+
+/** The two fields anything downstream of a route actually reads. */
+final class WP_REST_Response {
+    public function __construct(public $data = null, public int $status = 200) {}
+    public function get_data() { return $this->data; }
+    public function get_status(): int { return $this->status; }
+}
+
+/** Only `get_json_params`, which is all the route asks of a request. */
+final class WP_REST_Request {
+    public function __construct(private $json) {}
+    public function get_json_params() { return $this->json; }
+}
+
 require_once __DIR__ . '/../includes/class-cadence-link-request.php';
+require_once __DIR__ . '/../includes/class-cadence-rest-route.php';

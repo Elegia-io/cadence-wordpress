@@ -39,6 +39,63 @@ code runs on your server, so it re-derives every precondition from the database
 before it writes — including reading each post's *current* translation group and
 refusing when the plan disagrees with what the site actually says.
 
+## The endpoint
+
+```
+POST /wp-json/cadence/v1/translation-group
+```
+
+Requires `edit_post` **on every post the request names**, asked per post — not
+the blanket `edit_posts`, which a contributor holds.
+
+```json
+{
+  "trid": null,
+  "create_group": true,
+  "source":       {"post_id": 12, "language_code": "en", "element_type": "post_page",
+                   "source_language_code": null},
+  "translations": [{"post_id": 34, "language_code": "de", "element_type": "post_page",
+                    "source_language_code": "en"}]
+}
+```
+
+Either `create_group` (make a new group from these posts) or `trid` (join this
+existing one). Both together is refused rather than reconciled: it asks for two
+different things and one of them destroys relations.
+
+Every post is read before any post is written, so a request that is wrong about
+its last post writes nothing about its first.
+
+### Answers
+
+| Status | Meaning | What the caller should do |
+|---|---|---|
+| `200` | Written. `written` is how many. | — |
+| `400` | The request is wrong on its face. | Fix it; re-sending cannot help. |
+| `409` | The site disagrees with the request. | Re-read the site and try again. |
+| `500` | Refused for a reason this version cannot classify. | Report it. |
+
+Refusals carry a stable `code` as well as a human `reason`. Match on the code —
+the reason is prose and changes freely.
+
+| Code | | |
+|---|---|---|
+| `bad_plan` | 400 | the body is not the shape it claims |
+| `contradictory_instructions` | 400 | `create_group` and a `trid` together |
+| `no_group_named` | 400 | neither of them |
+| `group_unknown` | 409 | WPML returned nothing usable for a post — which is **not** "in no group" |
+| `already_grouped` | 409 | a post is already in a group, and creating one would detach it |
+| `group_disagreement` | 409 | the site's group for a post is not the one named |
+
+## Development
+
+There is no PHP on the host; `./run-tests.sh` runs PHPUnit in a container.
+
+```
+./run-tests.sh                     # everything
+./run-tests.sh --filter PluginTest # one class
+```
+
 ## Requirements
 
 - WordPress 6.4+

@@ -224,4 +224,74 @@ final class LinkRequestTest extends TestCase {
         $this->assertSame('de', WpStub::$writes[1]['language_code']);
         $this->assertSame('en', WpStub::$writes[1]['source_language_code']);
     }
+
+    /**
+     * EVERY REFUSAL CARRIES A STABLE CODE, and the six causes carry six
+     * different ones.
+     *
+     * The reason is prose for a human reading a log. The caller is a program
+     * deciding whether to re-read the site and retry or to stop and fix its own
+     * plan, and a program deciding that from prose is matching on spellings
+     * this file is free to change. So the decision travels as a code.
+     */
+    public function test_each_refusal_carries_its_own_code(): void {
+        $causes = [
+            'bad_plan' => function () {
+                $this->twoPosts(5);
+                return $this->plan(['trid' => '5']);          // a string trid
+            },
+            'contradictory_instructions' => function () {
+                $this->twoPosts(null);
+                return $this->plan(['trid' => 5, 'create_group' => true]);
+            },
+            'no_group_named' => function () {
+                $this->twoPosts(5);
+                return $this->plan(['trid' => null, 'create_group' => false]);
+            },
+            'group_unknown' => function () {
+                WpStub::add_post(1, 'page', 'en', null);
+                WpStub::add_post(2, 'page', 'de', null, false);
+                return $this->plan(['trid' => null, 'create_group' => true]);
+            },
+            'already_grouped' => function () {
+                $this->twoPosts(9);
+                return $this->plan(['trid' => null, 'create_group' => true]);
+            },
+            'group_disagreement' => function () {
+                $this->twoPosts(9);
+                return $this->plan(['trid' => 5, 'create_group' => false]);
+            },
+        ];
+
+        $seen = [];
+        foreach ($causes as $expected => $arrange) {
+            WpStub::reset();
+            $r = CadenceLinkRequest::run($arrange());
+            $this->assertFalse($r['ok'], $expected . ' was supposed to be refused');
+            $this->assertSame([], WpStub::$writes, $expected);
+            $this->assertSame($expected, $r['code'] ?? null, $expected);
+            $seen[] = $r['code'];
+        }
+        // Six causes, six codes: a mapping that collapsed two of them would
+        // still pass every assertion above if both expectations were changed
+        // together, and the caller could no longer tell them apart.
+        $this->assertCount(6, array_unique($seen));
+
+        // AND THE PUBLISHED LIST IS THAT LIST. `REFUSAL_CODES` is what the REST
+        // layer maps to HTTP statuses; if a seventh refusal is added here and
+        // not added there, the mapping silently stops covering it. Binding the
+        // constant to the codes actually observed is what makes the coverage
+        // test over in RestRouteTest able to fail.
+        sort($seen);
+        $published = CadenceLinkRequest::REFUSAL_CODES;
+        sort($published);
+        $this->assertSame($seen, $published);
+    }
+
+    public function test_a_written_plan_carries_no_code(): void {
+        $this->twoPosts(5);
+        $r = CadenceLinkRequest::run($this->plan());
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertArrayNotHasKey('code', $r);
+    }
 }

@@ -29,6 +29,12 @@
 
 declare(strict_types=1);
 
+// Loaded by WordPress, never fetched over HTTP: an include reached directly
+// runs with none of the environment the code below assumes it has.
+if (!defined('ABSPATH')) {
+    exit;
+}
+
 if (!defined('ABSPATH') && !defined('CADENCE_CONNECTOR_TESTING')) {
     // Loaded outside WordPress and outside the suite: nothing to do.
     return;
@@ -36,17 +42,40 @@ if (!defined('ABSPATH') && !defined('CADENCE_CONNECTOR_TESTING')) {
 
 final class CadenceLinkRequest {
 
+    /**
+     * Every code `run` can refuse with. Published so the REST layer can be
+     * tested for covering all of them rather than for covering the ones its
+     * own tests happened to name.
+     */
+    public const REFUSAL_CODES = [
+        'bad_plan',
+        'contradictory_instructions',
+        'no_group_named',
+        'group_unknown',
+        'already_grouped',
+        'group_disagreement',
+    ];
+
     /** A bare lowercase WPML language code: `de`, `pt-br`, `zh-hant-hk`. */
     private const LANGUAGE = '/\A[a-z]{2,3}(?:-[a-z0-9]{2,8})*\z/';
 
     /**
+     * A REFUSAL CARRIES A CODE AS WELL AS A REASON. The reason is prose, for
+     * the human reading a log, and it is free to change. The code is the API:
+     * the caller uses it to decide whether to re-read this site and retry
+     * (`group_unknown`, `already_grouped`, `group_disagreement` -- the site
+     * disagrees with the plan) or to stop and fix the plan itself (`bad_plan`,
+     * `contradictory_instructions`, `no_group_named` -- no re-read can help).
+     * A caller that had to tell those apart by matching the prose would be
+     * matching on spellings this file changes freely.
+     *
      * @param array $plan the JSON body, already decoded
-     * @return array{ok: bool, reason?: string, written?: int}
+     * @return array{ok: bool, code?: string, reason?: string, written?: int}
      */
     public static function run(array $plan): array {
         $posts = self::validate_shape($plan);
         if (is_string($posts)) {
-            return ['ok' => false, 'reason' => $posts];
+            return ['ok' => false, 'code' => 'bad_plan', 'reason' => $posts];
         }
 
         $create = $plan['create_group'];
@@ -57,10 +86,12 @@ final class CadenceLinkRequest {
         // the eager reading is the destructive one. A caller sending both has a
         // bug; picking a winner would hide it behind a plausible result.
         if ($create && $trid !== null) {
-            return ['ok' => false, 'reason' => 'create_group is set and a trid is given; these are contradictory'];
+            return ['ok' => false, 'code' => 'contradictory_instructions',
+                    'reason' => 'create_group is set and a trid is given; these are contradictory'];
         }
         if (!$create && $trid === null) {
-            return ['ok' => false, 'reason' => 'no trid and create_group is not set; there is no group to join'];
+            return ['ok' => false, 'code' => 'no_group_named',
+                    'reason' => 'no trid and create_group is not set; there is no group to join'];
         }
 
         // EVERY POST IS READ BEFORE ANY IS WRITTEN. Reading them one at a time
@@ -69,17 +100,17 @@ final class CadenceLinkRequest {
         foreach ($posts as $p) {
             $actual = self::current_trid($p['post_id'], $p['element_type']);
             if ($actual === false) {
-                return ['ok' => false, 'reason' => sprintf(
+                return ['ok' => false, 'code' => 'group_unknown', 'reason' => sprintf(
                     'post %d: WPML returned no language details, so its translation group is unknown; refusing to write one',
                     $p['post_id'])];
             }
             if ($create && $actual !== null) {
-                return ['ok' => false, 'reason' => sprintf(
+                return ['ok' => false, 'code' => 'already_grouped', 'reason' => sprintf(
                     'post %d is already in translation group %d, so a new group cannot be created without detaching it',
                     $p['post_id'], $actual)];
             }
             if (!$create && $actual !== $trid) {
-                return ['ok' => false, 'reason' => sprintf(
+                return ['ok' => false, 'code' => 'group_disagreement', 'reason' => sprintf(
                     'post %d is in translation group %s on this site, but the plan says %d; refusing to write a link over a disagreement',
                     $p['post_id'], $actual === null ? 'none' : (string) $actual, $trid)];
             }

@@ -85,6 +85,35 @@ final class CadenceRestRoute {
     }
 
     /**
+     * MAY THIS CALLER REWRITE THIS POST?
+     *
+     * `edit_post` on the one post the request names -- the linker's question,
+     * not the content endpoint's. `create_posts`, which `may_publish` asks, is
+     * the wrong question entirely here: the post already exists, somebody else
+     * may have written it, and a caller who may only create would be rewriting
+     * their work.
+     *
+     * One question covers the published case too, because WordPress maps the
+     * `edit_post` meta capability onto `edit_published_posts` for a post that
+     * is live. A second capability asked from here would have to be chosen
+     * from the request, and the request does not say what the post's status is
+     * -- the site does.
+     *
+     * @param array    $body The decoded request body.
+     * @param callable $can  `fn(string $cap, mixed $id): bool`, i.e. current_user_can.
+     */
+    public static function may_replace(array $body, callable $can): bool {
+        $id = $body['post_id'] ?? null;
+        // Never coerced, and never asked about when it cannot be read:
+        // `current_user_can('edit_post', '41 OR 1')` is a question about a
+        // different post, and PHP would answer it.
+        if (!is_int($id) || $id < 1) {
+            return false;
+        }
+        return $can('edit_post', $id);
+    }
+
+    /**
      * WHICH HTTP ANSWER A RESULT FROM `CadenceLinkRequest::run` IS.
      *
      * Not a lookup with a friendly default: an unrecognised refusal is a 500,
@@ -98,7 +127,11 @@ final class CadenceRestRoute {
     public static function respond(array $result): array {
         if (($result['ok'] ?? false) === true) {
             $body = ['ok' => true];
-            foreach (['written', 'post_id', 'created'] as $k) {
+            // A NAMED SET, so a writer's new key does not reach the caller by
+            // accident -- and does not fail to reach it silently either, since
+            // `test_a_rewrite_answers_200_and_carries_the_new_revision` asks
+            // for the one a replacement cannot be made without.
+            foreach (['written', 'post_id', 'created', 'revision'] as $k) {
                 if (array_key_exists($k, $result)) {
                     $body[$k] = $result[$k];
                 }
@@ -138,11 +171,17 @@ final class CadenceRestRoute {
         'contradictory_instructions' => 400,
         'no_group_named'             => 400,
         'bad_request'                => 400,
+        'bad_replacement'            => 400,
         'group_unknown'              => 409,
         'already_grouped'            => 409,
         'group_disagreement'         => 409,
+        'post_missing'               => 409,
+        'identifier_mismatch'        => 409,
+        'revision_mismatch'          => 409,
         'wpml_unavailable'           => 503,
+        'no_row_lock'                => 503,
         'insert_failed'              => 500,
+        'update_failed'              => 500,
     ];
 
     /**

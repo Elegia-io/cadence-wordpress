@@ -35,13 +35,74 @@ final class PluginTest extends TestCase {
         // Named, not indexed: a test reading `$routes[0]` starts asserting
         // about a different endpoint the day one is registered above it, and
         // still passes while doing so.
-        $this->assertSame(['/translation-group', '/content'], array_keys($this->routes));
+        $this->assertSame(['/translation-group', '/content', '/content/replace'],
+            array_keys($this->routes));
         $this->route = ['cadence/v1', '/translation-group', $this->routes['/translation-group']];
     }
 
-    public function test_registers_both_routes_under_its_own_namespace_as_post(): void {
+    public function test_registers_its_routes_under_its_own_namespace_as_post(): void {
         $this->assertSame('POST', $this->routes['/translation-group']['methods']);
         $this->assertSame('POST', $this->routes['/content']['methods']);
+        $this->assertSame('POST', $this->routes['/content/replace']['methods']);
+    }
+
+    /**
+     * REPLACING IS ITS OWN ROUTE, AND ITS OWN PERMISSION QUESTION. The content
+     * route asks the post TYPE whether this caller may create; that is the
+     * wrong question entirely for a post that already exists and belongs to
+     * whoever wrote it, and a route wired to it would let a caller who may
+     * only create rewrite an article somebody published.
+     *
+     * `edit_post` on the one post named is the question whose answer matches
+     * what the request will change -- and WordPress maps that meta capability
+     * onto `edit_published_posts` for a post that is live, so the one question
+     * covers the live case without this file knowing the status.
+     */
+    public function test_the_replace_route_authorises_the_post_it_names(): void {
+        $permit = $this->routes['/content/replace']['permission_callback'];
+        $this->assertIsCallable($permit);
+        $this->assertNotSame('__return_true', $permit);
+        $this->assertFalse($permit(new WP_REST_Request(null)));
+
+        WpStub::$capabilities = ['edit_post' => [41]];
+        $this->assertTrue($permit(new WP_REST_Request(['post_id' => 41])));
+        $this->assertFalse($permit(new WP_REST_Request(['post_id' => 42])),
+            'a caller rewrote a post it may not edit');
+        $this->assertFalse($permit(new WP_REST_Request(['post_id' => '41'])),
+            'a coerced id was authorised as the post it is not');
+    }
+
+    /**
+     * THE ROUTE REWRITES ONCE. Sent a second time -- the shape a lost response
+     * produces -- it is refused with the status that tells the caller to
+     * re-read the site rather than to keep sending.
+     */
+    public function test_the_replace_route_rewrites_once_and_refuses_the_replay(): void {
+        $made = ($this->routes['/content']['callback'])(new WP_REST_Request([
+            'external_id' => 'p-1', 'post_type' => 'post', 'status' => 'draft',
+            'title' => 'T', 'content' => 'C']));
+        $body = ['external_id' => 'p-1', 'post_id' => $made->get_data()['post_id'],
+                 'revision' => $made->get_data()['revision'],
+                 'title' => 'T2', 'content' => 'C2'];
+
+        $call = $this->routes['/content/replace']['callback'];
+        $done = $call(new WP_REST_Request($body));
+        $this->assertSame(200, $done->get_status());
+        $this->assertFalse($done->get_data()['created']);
+        $this->assertNotSame($body['revision'], $done->get_data()['revision']);
+        $this->assertCount(1, WpStub::$updated);
+
+        $replay = $call(new WP_REST_Request($body));
+        $this->assertSame(409, $replay->get_status());
+        $this->assertSame('revision_mismatch', $replay->get_data()['code']);
+        $this->assertCount(1, WpStub::$updated, 'the replay rewrote the post again');
+    }
+
+    public function test_the_replace_route_refuses_a_body_it_cannot_read(): void {
+        $r = ($this->routes['/content/replace']['callback'])(new WP_REST_Request(null));
+        $this->assertSame(400, $r->get_status());
+        $this->assertSame('bad_replacement', $r->get_data()['code']);
+        $this->assertSame([], WpStub::$updated);
     }
 
     /**

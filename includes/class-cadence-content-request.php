@@ -50,8 +50,16 @@ final class CadenceContentRequest {
      */
     public const REFUSAL_CODES = ['bad_request', 'insert_failed'];
 
-    /** @return array{ok: bool, created?: bool, post_id?: int, code?: string, reason?: string} */
-    public static function run(array $body): array {
+    /**
+     * @param array    $body the JSON body, already decoded
+     * @param callable $can  `fn(string $cap, mixed $id): bool`, i.e. current_user_can.
+     *                       Required, and with no default: what it gates is
+     *                       whether this route hands out the token a rewrite
+     *                       has to name, and a default would be a licence to
+     *                       skip that at the one call site that forgot it.
+     * @return array{ok: bool, created?: bool, post_id?: int, revision?: string, code?: string, reason?: string}
+     */
+    public static function run(array $body, callable $can): array {
         $fields = self::validate($body);
         if (is_string($fields)) {
             return ['ok' => false, 'code' => 'bad_request', 'reason' => $fields];
@@ -63,7 +71,27 @@ final class CadenceContentRequest {
             // means "this piece"; a body that differs under it means the caller
             // believes it is publishing something new, and the live article is
             // not this code's to overwrite on that belief.
-            return ['ok' => true, 'created' => false, 'post_id' => $existing];
+            // WITH THE REVISION THE POST ACTUALLY HOLDS, which is how a caller
+            // whose body no longer matches the site finds that out -- and how
+            // it gets the value a replacement has to name. Read from the post,
+            // so a hand edit since publication is in the answer.
+            //
+            // AND ONLY FOR A CALLER THAT MAY REWRITE THAT POST. This route is
+            // authorised on the post TYPE -- `create_posts`, which any
+            // contributor on that type holds -- and that says nothing about
+            // the particular post an identifier already in use resolves to.
+            // That post may be somebody else's article. The revision is the
+            // proof `/content/replace` demands that the caller has SEEN the
+            // text it is about to destroy, so handing it out here on a weaker
+            // question would let a caller satisfy that proof by guessing an
+            // identifier and reading the answer, having read no article at all.
+            // The question asked is `edit_post` on that post, which is the one
+            // the rewrite itself is authorised on and nothing weaker.
+            $answer = ['ok' => true, 'created' => false, 'post_id' => $existing];
+            if ($can('edit_post', $existing)) {
+                $answer = array_merge($answer, CadenceRevision::answer($existing));
+            }
+            return $answer;
         }
 
         $id = wp_insert_post([
@@ -90,7 +118,18 @@ final class CadenceContentRequest {
                     'reason' => 'WordPress returned no post id and no error'];
         }
 
-        return ['ok' => true, 'created' => true, 'post_id' => $id];
+        // The revision is read back rather than computed from the body: what
+        // WordPress stores is what it was given after `wp_kses` and the save
+        // filters have had it, and a revision of the request would disagree
+        // with the post from the moment it was made.
+        //
+        // UNGATED, DELIBERATELY, unlike the branch above. This post did not
+        // exist a moment ago and its text is the text this caller just sent,
+        // so there is nothing here to disclose -- and gating it would leave a
+        // pipeline unable to replace what it published without a capability it
+        // does not need in order to publish.
+        return array_merge(['ok' => true, 'created' => true, 'post_id' => $id],
+                           CadenceRevision::answer($id));
     }
 
     /**

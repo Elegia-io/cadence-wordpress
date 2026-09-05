@@ -54,6 +54,25 @@ final class WpStub {
     public static ?string $insert_fails = null;
 
     /**
+     * THE SAME TWO FAILURE SWITCHES FOR `wp_update_post`, which fails in the
+     * same two ways and is read for its return value in the same way. Without
+     * them the refusals on that path are unreachable through these stubs and a
+     * mutant deleting them passes the suite -- which is exactly how the `false`
+     * branch of `current_trid` survived once already.
+     */
+    public static ?string $update_fails = null;
+    public static bool $update_returns_zero = false;
+
+    /**
+     * When true, `get_post` answers null for every id. Not "the post is gone":
+     * the post is there and this process could not read it. It exists so that
+     * the branch where a revision cannot be computed is reachable, because the
+     * tempting answer there -- one derived from the caller's own request -- is
+     * the single answer that would be wrong.
+     */
+    public static bool $post_read_fails = false;
+
+    /**
      * When true, wp_insert_post returns `0` even though it was asked for
      * errors. `0` is what the non-error form returns on failure, and a filter
      * on `wp_insert_post_empty_content` or `wp_insert_post_data` can put a
@@ -62,6 +81,33 @@ final class WpStub {
      * unchecked one propagates as a plausible absence rather than an error.
      */
     public static bool $insert_returns_zero = false;
+
+    /**
+     * WHAT THE ROW ITSELF HOLDS, when that is not what `get_post` answers.
+     *
+     * Not a contrivance: `get_post` reads WordPress's object cache, and a
+     * concurrent process editing the post in wp-admin invalidates that cache
+     * in ITS process, not in this one. So a request can hold a WP_Post whose
+     * text the database no longer has -- which is precisely the window a
+     * check made before a write sits in. Keyed by post id; the fields given
+     * override what `$wpdb` reports for that row, and nothing else.
+     *
+     * @var array<int, array<string, string>>
+     */
+    public static array $row_override = [];
+
+    /**
+     * Ids whose row is gone by the time it is locked, though `get_post`
+     * answered for them. A post deleted between the two reads, or a row the
+     * locking read could not get. Not the same as `$post_read_fails`, which
+     * is about the first read.
+     *
+     * @var list<int>
+     */
+    public static array $rows_gone = [];
+
+    /** When set, `wp_update_post` throws it -- as a hook on `save_post` can. */
+    public static ?string $update_throws = null;
 
     public static int $next_post_id = 100;
 
@@ -80,7 +126,14 @@ final class WpStub {
         self::$meta = [];
         self::$insert_fails = null;
         self::$insert_returns_zero = false;
+        self::$update_fails = null;
+        self::$update_returns_zero = false;
+        self::$post_read_fails = false;
+        self::$row_override = [];
+        self::$rows_gone = [];
+        self::$update_throws = null;
         self::$next_post_id = 100;
+        $GLOBALS['wpdb'] = new WpdbStub();
         self::$post_types = ['post', 'page'];
     }
 
@@ -92,12 +145,109 @@ final class WpStub {
     }
 }
 
+/**
+ * `$wpdb`, in the four things the plugin asks of it.
+ *
+ * ENOUGH TO SEE THE ORDER, which is the whole point: what is under test is
+ * that the text a replacement is checked against is read under a row lock the
+ * write then happens inside, rather than read once beforehand and trusted. A
+ * stub cannot run two requests at once, so it does the next best thing --
+ * `get_row` can be made to answer something `get_post` does not, which is
+ * exactly the disagreement a concurrent edit produces.
+ */
+final class WpdbStub {
+
+    /** The posts table's name, as WordPress exposes it. */
+    public string $posts = 'wp_posts';
+
+    /** @var list<string> every statement, in the order it was issued */
+    public array $log = [];
+
+    /** A statement prefix `query` answers false to, as a failing one does. */
+    public ?string $fails_on = null;
+
+    public function prepare(string $sql, ...$args): string {
+        foreach ($args as $arg) {
+            $sql = preg_replace('/%d/', (string) (int) $arg, $sql, 1);
+        }
+        return $sql;
+    }
+
+    /** False on error, and anything else on success -- which is all the plugin reads. */
+    public function query(string $sql) {
+        $this->log[] = $sql;
+        if ($this->fails_on !== null && stripos($sql, $this->fails_on) === 0) {
+            return false;
+        }
+        return true;
+    }
+
+    /** The row, or null -- for a row that is not there and for a failed read alike. */
+    public function get_row(string $sql): ?object {
+        $this->log[] = $sql;
+        if (!preg_match('/WHERE ID = (\d+)/', $sql, $m)) {
+            return null;
+        }
+        $id = (int) $m[1];
+        if (!isset(WpStub::$posts[$id]) || in_array($id, WpStub::$rows_gone, true)) {
+            return null;
+        }
+        $post = WpStub::$posts[$id];
+        $over = WpStub::$row_override[$id] ?? [];
+        return (object) [
+            'post_title'   => $over['post_title']   ?? ($post['post_title']   ?? ''),
+            'post_content' => $over['post_content'] ?? ($post['post_content'] ?? ''),
+        ];
+    }
+
+    /** Every statement of a kind, so a test can assert the order of two of them. */
+    public function statements(string ...$needles): array {
+        return array_values(array_filter($this->log, static function (string $s) use ($needles): bool {
+            foreach ($needles as $n) {
+                if (stripos($s, $n) !== false) {
+                    return true;
+                }
+            }
+            return false;
+        }));
+    }
+}
+
 function get_post_type(int $id) {
     return WpStub::$posts[$id]['post_type'] ?? false;
 }
 
 function get_post_status(int $id) {
     return isset(WpStub::$posts[$id]) ? 'publish' : false;
+}
+
+/**
+ * The post row itself. WordPress hands back a WP_Post or, for an id this site
+ * does not have, null -- and null is the whole reason anything asks: a caller
+ * naming a post that is not here is talking about a different site.
+ */
+function get_post($post_id = null): ?WP_Post {
+    if (WpStub::$post_read_fails) {
+        return null;
+    }
+    $id = is_int($post_id) ? $post_id : 0;
+    if (!isset(WpStub::$posts[$id])) {
+        return null;
+    }
+    $p = WpStub::$posts[$id];
+    return new WP_Post($id, $p['post_title'] ?? '', $p['post_content'] ?? '',
+                       $p['post_status'] ?? 'draft', $p['post_type'] ?? 'post');
+}
+
+/** Single-value meta, including WordPress's own answer for meta that is not there. */
+function get_post_meta(int $post_id, string $key = '', bool $single = false) {
+    $value = WpStub::$meta[$post_id][$key] ?? null;
+    if ($single) {
+        // `''`, not null and not false. A plugin reading this as "no value" by
+        // truthiness cannot tell it from a meta value that is an empty string.
+        return $value ?? '';
+    }
+    return $value === null ? [] : [$value];
 }
 
 /**
@@ -172,6 +322,22 @@ function has_action(string $hook, $callback = false) {
     return $hook === 'wpml_set_element_language_details' ? WpStub::$wpml_writes : false;
 }
 
+/**
+ * The post object, in the five fields anything here reads. Real WordPress
+ * declares far more, and declares them without types; typed here so that a
+ * stub handing back something a real WP_Post could never hold fails loudly in
+ * the test rather than quietly in the code under test.
+ */
+final class WP_Post {
+    public function __construct(
+        public int $ID,
+        public string $post_title = '',
+        public string $post_content = '',
+        public string $post_status = 'draft',
+        public string $post_type = 'post'
+    ) {}
+}
+
 /** WordPress's own error type, in the two respects anything here uses it. */
 final class WP_Error {
     public function __construct(private string $code = '', private string $message = '') {}
@@ -219,6 +385,8 @@ function wp_insert_post(array $postarr, bool $wp_error = false) {
     WpStub::$posts[$id] = [
         'post_type' => $postarr['post_type'] ?? 'post',
         'post_status' => $postarr['post_status'] ?? 'draft',
+        'post_title' => $postarr['post_title'] ?? '',
+        'post_content' => $postarr['post_content'] ?? '',
         'language' => null, 'trid' => null, 'wpml_knows' => true,
     ];
     // `meta_input` is written by wp_insert_post itself, in the same call that
@@ -229,9 +397,41 @@ function wp_insert_post(array $postarr, bool $wp_error = false) {
     return $id;
 }
 
+/**
+ * Returns the post's id, or -- the half that gets forgotten, exactly as with
+ * `wp_insert_post` -- a WP_Error, or 0. It does not throw, and a failure
+ * changes nothing on the site, which is why neither branch records anything.
+ */
 function wp_update_post(array $postarr, bool $wp_error = false) {
+    if (WpStub::$update_throws !== null) {
+        // A `save_post` hook in a plugin this one does not control, throwing.
+        // It matters because it leaves this code mid-transaction.
+        throw new RuntimeException(WpStub::$update_throws);
+    }
+    if (WpStub::$update_returns_zero) {
+        return 0;
+    }
+    if (WpStub::$update_fails !== null) {
+        return $wp_error
+            ? new WP_Error('db_update_error', WpStub::$update_fails)
+            : 0;
+    }
     WpStub::$updated[] = $postarr;
-    return $postarr['ID'] ?? 0;
+    // Recorded on the SAME timeline as the plugin's own statements. The real
+    // one issues an UPDATE on this connection, so where it falls relative to
+    // a transaction the plugin opened is a fact a test can read -- and the
+    // whole question here is whether the write happens inside the lock.
+    $GLOBALS['wpdb']->log[] = 'UPDATE (wp_update_post)';
+    $id = $postarr['ID'] ?? 0;
+    // The site now holds what was written, so the next read of this post sees
+    // it -- without which nothing here could tell a check made against the
+    // post from one made against the request that changed it.
+    foreach (['post_title', 'post_content', 'post_status'] as $field) {
+        if (isset($postarr[$field], WpStub::$posts[$id])) {
+            WpStub::$posts[$id][$field] = $postarr[$field];
+        }
+    }
+    return $id;
 }
 
 function update_post_meta(int $post_id, string $key, $value): bool {
@@ -311,6 +511,10 @@ final class WP_REST_Request {
     public function get_json_params() { return $this->json; }
 }
 
+$GLOBALS['wpdb'] = new WpdbStub();
+
 require_once __DIR__ . '/../includes/class-cadence-link-request.php';
 require_once __DIR__ . '/../includes/class-cadence-rest-route.php';
+require_once __DIR__ . '/../includes/class-cadence-revision.php';
 require_once __DIR__ . '/../includes/class-cadence-content-request.php';
+require_once __DIR__ . '/../includes/class-cadence-replace-request.php';

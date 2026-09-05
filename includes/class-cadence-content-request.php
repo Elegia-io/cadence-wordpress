@@ -50,7 +50,7 @@ final class CadenceContentRequest {
      */
     public const REFUSAL_CODES = ['bad_request', 'insert_failed'];
 
-    /** @return array{ok: bool, created?: bool, post_id?: int, code?: string, reason?: string} */
+    /** @return array{ok: bool, created?: bool, post_id?: int, revision?: string, code?: string, reason?: string} */
     public static function run(array $body): array {
         $fields = self::validate($body);
         if (is_string($fields)) {
@@ -63,7 +63,12 @@ final class CadenceContentRequest {
             // means "this piece"; a body that differs under it means the caller
             // believes it is publishing something new, and the live article is
             // not this code's to overwrite on that belief.
-            return ['ok' => true, 'created' => false, 'post_id' => $existing];
+            // WITH THE REVISION THE POST ACTUALLY HOLDS, which is how a caller
+            // whose body no longer matches the site finds that out -- and how
+            // it gets the value a replacement has to name. Read from the post,
+            // so a hand edit since publication is in the answer.
+            return array_merge(['ok' => true, 'created' => false, 'post_id' => $existing],
+                               CadenceRevision::answer($existing));
         }
 
         $id = wp_insert_post([
@@ -90,7 +95,12 @@ final class CadenceContentRequest {
                     'reason' => 'WordPress returned no post id and no error'];
         }
 
-        return ['ok' => true, 'created' => true, 'post_id' => $id];
+        // The revision is read back rather than computed from the body: what
+        // WordPress stores is what it was given after `wp_kses` and the save
+        // filters have had it, and a revision of the request would disagree
+        // with the post from the moment it was made.
+        return array_merge(['ok' => true, 'created' => true, 'post_id' => $id],
+                           CadenceRevision::answer($id));
     }
 
     /**

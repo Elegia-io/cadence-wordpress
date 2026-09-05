@@ -1,7 +1,8 @@
 # Cadence Connector for WordPress
 
-Publishes content produced by [Cadence](https://elegia.io) into WordPress, and
-links the language variants of a piece into a single WPML translation group.
+Publishes content produced by [Cadence](https://elegia.io) into WordPress,
+replaces the pieces it published, and links the language variants of a piece
+into a single WPML translation group.
 
 ## Why it exists
 
@@ -20,7 +21,8 @@ This plugin exposes an endpoint that writes that relationship through WPML's own
 - WordPress 6.4+
 - PHP 8.1+
 - WPML with the String Translation and Translation Management add-ons, for the
-  translation-linking endpoint. The publishing endpoint does not need WPML.
+  translation-linking endpoint. The publishing and replacing endpoints do not
+  need WPML.
 
 ## Installing
 
@@ -29,7 +31,7 @@ Download `cadence-connector.zip` from the
 In WordPress, go to **Plugins → Add New → Upload Plugin**, choose the zip, install
 it and activate.
 
-Both endpoints are then live under `/wp-json/cadence/v1/`. Nothing else is added:
+The endpoints are then live under `/wp-json/cadence/v1/`. Nothing else is added:
 no settings page, no post types, no front-end output.
 
 Callers authenticate as a WordPress user. Application Passwords (**Users → Profile
@@ -62,8 +64,9 @@ when the plan disagrees with what the site actually says.
 
 ## The endpoints
 
-There are two, and they do not overlap: one puts content on the site, the other
-says which pieces of content are translations of each other.
+There are three, and they do not overlap: one puts content on the site, one
+replaces what it put there, and one says which pieces of content are
+translations of each other.
 
 ### Publishing content
 
@@ -95,8 +98,8 @@ post, and nothing is created.
 
 | Status | | |
 |---|---|---|
-| `201` | created | `created: true`, with `post_id` |
-| `200` | it already existed | `created: false`, same `post_id` |
+| `201` | created | `created: true`, with `post_id` and `revision` |
+| `200` | it already existed | `created: false`, same `post_id`, the post's current `revision` |
 
 A repeat under an identifier that is already used is not an update. A different
 body under the same identifier means the caller believes it is publishing
@@ -104,7 +107,62 @@ something new; the live article is not this plugin's to overwrite on that belief
 Trashed posts still answer for their identifier, so a piece somebody deleted is
 not resurrected by the next run of the pipeline.
 
-There is no update endpoint yet.
+**That rule has not changed.** What has changed is that a caller which really
+does mean to rewrite the article now has somewhere to say so — the endpoint
+below — instead of hoping this one would infer it.
+
+`revision` names the text the post holds right now: the title and the content,
+hashed. It is derived from the post every time it is answered and stored
+nowhere, so an edit somebody makes in wp-admin changes it. It is the value a
+replacement has to name.
+
+### Replacing content
+
+```
+POST /wp-json/cadence/v1/content/replace
+```
+
+Requires `edit_post` on the post named, asked of that one post. WordPress maps
+that capability onto `edit_published_posts` for a post that is live, so the one
+question covers a live article too.
+
+```json
+{
+  "external_id": "piece-2026-08-31-en",
+  "post_id":     41,
+  "revision":    "sha256:9f2c…",
+  "title":       "A corrected title",
+  "content":     "<p>A corrected body.</p>"
+}
+```
+
+**The caller states that it is replacing, and says what it believes it is
+replacing.** A rewrite that silently overwrites a post a human has since edited
+destroys work somebody did by hand, exactly as a wrong translation link does. So
+this plugin re-reads the post, hashes what it finds, and refuses when that is not
+the `revision` the request names. Nothing is written on any refusal.
+
+`post_id` and `external_id` must agree with each other on this site: the post
+named has to be the piece named. A caller's map from its own identifier to a
+WordPress post id lives on another machine and goes stale — a restore from
+backup, a migration, a post deleted and re-created — and the post at that id is
+then somebody else's article.
+
+The title and the content are replaced. The post's status is not: whether the
+piece is in front of the public is not a rewrite's decision, and republishing
+something a human took down is the same destruction one field across.
+
+| Status | | |
+|---|---|---|
+| `200` | rewritten | `created: false`, with `post_id` and the new `revision` |
+| `409` | the site disagrees | nothing was written; re-read and try again |
+
+**A replacement is not idempotent, and that is deliberate.** Sent twice — the
+shape a lost response produces — the second is refused with `revision_mismatch`,
+because after the first the site no longer holds the text the request names. The
+refusal names the revision the site does hold, which is the one the first
+attempt answered with, so a caller that lost that answer still learns the post's
+current state from the refusal instead of sending again.
 
 ### Linking translations
 
@@ -157,6 +215,11 @@ the reason is prose and changes freely.
 | `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks |
 | `bad_request` | 400 | the content body is not the shape it claims |
 | `insert_failed` | 500 | WordPress refused the insert, or returned no id |
+| `bad_replacement` | 400 | the replacement body is not the shape it claims |
+| `post_missing` | 409 | this site has no readable post with that id |
+| `identifier_mismatch` | 409 | that post is a different piece, or none of this plugin's |
+| `revision_mismatch` | 409 | the post holds text the replacement does not name |
+| `update_failed` | 500 | WordPress refused the update, or returned no id |
 
 ## Development
 

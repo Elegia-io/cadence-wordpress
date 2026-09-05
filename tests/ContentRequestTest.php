@@ -188,6 +188,25 @@ final class ContentRequestTest extends TestCase {
     }
 
     /**
+     * A POST THAT CANNOT BE READ BACK IS STILL A POST THAT WAS CREATED. The
+     * revision is derived from what the site holds, so a site that will not
+     * answer produces no revision -- and the honest answer is to leave the key
+     * out. Answering with one computed from the request instead would hand the
+     * caller a token this site never agreed to, which is the one value that
+     * would make its next replacement wrong in the direction that writes.
+     * Refusing the whole request would be a second lie: the post exists.
+     */
+    public function test_a_post_that_cannot_be_read_back_is_still_a_created_post(): void {
+        WpStub::$post_read_fails = true;
+        $r = CadenceContentRequest::run($this->body());
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertTrue($r['created']);
+        $this->assertCount(1, WpStub::$inserted);
+        $this->assertArrayNotHasKey('revision', $r,
+            'a revision was answered for content nothing could read');
+    }
+
+    /**
      * WORDPRESS FAILING IS NOT WORDPRESS SUCCEEDING. `wp_insert_post` returns a
      * WP_Error rather than throwing, and a caller that reads the return value
      * as an id gets `0` -- which is falsy, and is also what "no post" looks

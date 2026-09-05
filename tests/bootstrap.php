@@ -54,6 +54,25 @@ final class WpStub {
     public static ?string $insert_fails = null;
 
     /**
+     * THE SAME TWO FAILURE SWITCHES FOR `wp_update_post`, which fails in the
+     * same two ways and is read for its return value in the same way. Without
+     * them the refusals on that path are unreachable through these stubs and a
+     * mutant deleting them passes the suite -- which is exactly how the `false`
+     * branch of `current_trid` survived once already.
+     */
+    public static ?string $update_fails = null;
+    public static bool $update_returns_zero = false;
+
+    /**
+     * When true, `get_post` answers null for every id. Not "the post is gone":
+     * the post is there and this process could not read it. It exists so that
+     * the branch where a revision cannot be computed is reachable, because the
+     * tempting answer there -- one derived from the caller's own request -- is
+     * the single answer that would be wrong.
+     */
+    public static bool $post_read_fails = false;
+
+    /**
      * When true, wp_insert_post returns `0` even though it was asked for
      * errors. `0` is what the non-error form returns on failure, and a filter
      * on `wp_insert_post_empty_content` or `wp_insert_post_data` can put a
@@ -80,6 +99,9 @@ final class WpStub {
         self::$meta = [];
         self::$insert_fails = null;
         self::$insert_returns_zero = false;
+        self::$update_fails = null;
+        self::$update_returns_zero = false;
+        self::$post_read_fails = false;
         self::$next_post_id = 100;
         self::$post_types = ['post', 'page'];
     }
@@ -98,6 +120,35 @@ function get_post_type(int $id) {
 
 function get_post_status(int $id) {
     return isset(WpStub::$posts[$id]) ? 'publish' : false;
+}
+
+/**
+ * The post row itself. WordPress hands back a WP_Post or, for an id this site
+ * does not have, null -- and null is the whole reason anything asks: a caller
+ * naming a post that is not here is talking about a different site.
+ */
+function get_post($post_id = null): ?WP_Post {
+    if (WpStub::$post_read_fails) {
+        return null;
+    }
+    $id = is_int($post_id) ? $post_id : 0;
+    if (!isset(WpStub::$posts[$id])) {
+        return null;
+    }
+    $p = WpStub::$posts[$id];
+    return new WP_Post($id, $p['post_title'] ?? '', $p['post_content'] ?? '',
+                       $p['post_status'] ?? 'draft', $p['post_type'] ?? 'post');
+}
+
+/** Single-value meta, including WordPress's own answer for meta that is not there. */
+function get_post_meta(int $post_id, string $key = '', bool $single = false) {
+    $value = WpStub::$meta[$post_id][$key] ?? null;
+    if ($single) {
+        // `''`, not null and not false. A plugin reading this as "no value" by
+        // truthiness cannot tell it from a meta value that is an empty string.
+        return $value ?? '';
+    }
+    return $value === null ? [] : [$value];
 }
 
 /**
@@ -172,6 +223,22 @@ function has_action(string $hook, $callback = false) {
     return $hook === 'wpml_set_element_language_details' ? WpStub::$wpml_writes : false;
 }
 
+/**
+ * The post object, in the five fields anything here reads. Real WordPress
+ * declares far more, and declares them without types; typed here so that a
+ * stub handing back something a real WP_Post could never hold fails loudly in
+ * the test rather than quietly in the code under test.
+ */
+final class WP_Post {
+    public function __construct(
+        public int $ID,
+        public string $post_title = '',
+        public string $post_content = '',
+        public string $post_status = 'draft',
+        public string $post_type = 'post'
+    ) {}
+}
+
 /** WordPress's own error type, in the two respects anything here uses it. */
 final class WP_Error {
     public function __construct(private string $code = '', private string $message = '') {}
@@ -219,6 +286,8 @@ function wp_insert_post(array $postarr, bool $wp_error = false) {
     WpStub::$posts[$id] = [
         'post_type' => $postarr['post_type'] ?? 'post',
         'post_status' => $postarr['post_status'] ?? 'draft',
+        'post_title' => $postarr['post_title'] ?? '',
+        'post_content' => $postarr['post_content'] ?? '',
         'language' => null, 'trid' => null, 'wpml_knows' => true,
     ];
     // `meta_input` is written by wp_insert_post itself, in the same call that
@@ -229,9 +298,31 @@ function wp_insert_post(array $postarr, bool $wp_error = false) {
     return $id;
 }
 
+/**
+ * Returns the post's id, or -- the half that gets forgotten, exactly as with
+ * `wp_insert_post` -- a WP_Error, or 0. It does not throw, and a failure
+ * changes nothing on the site, which is why neither branch records anything.
+ */
 function wp_update_post(array $postarr, bool $wp_error = false) {
+    if (WpStub::$update_returns_zero) {
+        return 0;
+    }
+    if (WpStub::$update_fails !== null) {
+        return $wp_error
+            ? new WP_Error('db_update_error', WpStub::$update_fails)
+            : 0;
+    }
     WpStub::$updated[] = $postarr;
-    return $postarr['ID'] ?? 0;
+    $id = $postarr['ID'] ?? 0;
+    // The site now holds what was written, so the next read of this post sees
+    // it -- without which nothing here could tell a check made against the
+    // post from one made against the request that changed it.
+    foreach (['post_title', 'post_content', 'post_status'] as $field) {
+        if (isset($postarr[$field], WpStub::$posts[$id])) {
+            WpStub::$posts[$id][$field] = $postarr[$field];
+        }
+    }
+    return $id;
 }
 
 function update_post_meta(int $post_id, string $key, $value): bool {
@@ -313,4 +404,6 @@ final class WP_REST_Request {
 
 require_once __DIR__ . '/../includes/class-cadence-link-request.php';
 require_once __DIR__ . '/../includes/class-cadence-rest-route.php';
+require_once __DIR__ . '/../includes/class-cadence-revision.php';
 require_once __DIR__ . '/../includes/class-cadence-content-request.php';
+require_once __DIR__ . '/../includes/class-cadence-replace-request.php';

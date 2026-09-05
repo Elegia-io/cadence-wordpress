@@ -50,7 +50,10 @@ add_action('rest_api_init', static function (): void {
     register_rest_route('cadence/v1', '/content', [
         'methods'  => 'POST',
         'callback' => static function ($request) {
-            $result = CadenceContentRequest::run((array) $request->get_json_params());
+            $result = CadenceContentRequest::run(
+                (array) $request->get_json_params(),
+                'current_user_can'
+            );
             $answer = CadenceRestRoute::respond($result);
             return new WP_REST_Response($answer['body'], $answer['status']);
         },

@@ -82,6 +82,33 @@ final class WpStub {
      */
     public static bool $insert_returns_zero = false;
 
+    /**
+     * WHAT THE ROW ITSELF HOLDS, when that is not what `get_post` answers.
+     *
+     * Not a contrivance: `get_post` reads WordPress's object cache, and a
+     * concurrent process editing the post in wp-admin invalidates that cache
+     * in ITS process, not in this one. So a request can hold a WP_Post whose
+     * text the database no longer has -- which is precisely the window a
+     * check made before a write sits in. Keyed by post id; the fields given
+     * override what `$wpdb` reports for that row, and nothing else.
+     *
+     * @var array<int, array<string, string>>
+     */
+    public static array $row_override = [];
+
+    /**
+     * Ids whose row is gone by the time it is locked, though `get_post`
+     * answered for them. A post deleted between the two reads, or a row the
+     * locking read could not get. Not the same as `$post_read_fails`, which
+     * is about the first read.
+     *
+     * @var list<int>
+     */
+    public static array $rows_gone = [];
+
+    /** When set, `wp_update_post` throws it -- as a hook on `save_post` can. */
+    public static ?string $update_throws = null;
+
     public static int $next_post_id = 100;
 
     /** @var list<string> the post types this site has registered */
@@ -102,7 +129,11 @@ final class WpStub {
         self::$update_fails = null;
         self::$update_returns_zero = false;
         self::$post_read_fails = false;
+        self::$row_override = [];
+        self::$rows_gone = [];
+        self::$update_throws = null;
         self::$next_post_id = 100;
+        $GLOBALS['wpdb'] = new WpdbStub();
         self::$post_types = ['post', 'page'];
     }
 
@@ -111,6 +142,74 @@ final class WpStub {
                                     bool $wpml_knows = true): void {
         self::$posts[$id] = ['post_type' => $post_type, 'language' => $language,
                              'trid' => $trid, 'wpml_knows' => $wpml_knows];
+    }
+}
+
+/**
+ * `$wpdb`, in the four things the plugin asks of it.
+ *
+ * ENOUGH TO SEE THE ORDER, which is the whole point: what is under test is
+ * that the text a replacement is checked against is read under a row lock the
+ * write then happens inside, rather than read once beforehand and trusted. A
+ * stub cannot run two requests at once, so it does the next best thing --
+ * `get_row` can be made to answer something `get_post` does not, which is
+ * exactly the disagreement a concurrent edit produces.
+ */
+final class WpdbStub {
+
+    /** The posts table's name, as WordPress exposes it. */
+    public string $posts = 'wp_posts';
+
+    /** @var list<string> every statement, in the order it was issued */
+    public array $log = [];
+
+    /** A statement prefix `query` answers false to, as a failing one does. */
+    public ?string $fails_on = null;
+
+    public function prepare(string $sql, ...$args): string {
+        foreach ($args as $arg) {
+            $sql = preg_replace('/%d/', (string) (int) $arg, $sql, 1);
+        }
+        return $sql;
+    }
+
+    /** False on error, and anything else on success -- which is all the plugin reads. */
+    public function query(string $sql) {
+        $this->log[] = $sql;
+        if ($this->fails_on !== null && stripos($sql, $this->fails_on) === 0) {
+            return false;
+        }
+        return true;
+    }
+
+    /** The row, or null -- for a row that is not there and for a failed read alike. */
+    public function get_row(string $sql): ?object {
+        $this->log[] = $sql;
+        if (!preg_match('/WHERE ID = (\d+)/', $sql, $m)) {
+            return null;
+        }
+        $id = (int) $m[1];
+        if (!isset(WpStub::$posts[$id]) || in_array($id, WpStub::$rows_gone, true)) {
+            return null;
+        }
+        $post = WpStub::$posts[$id];
+        $over = WpStub::$row_override[$id] ?? [];
+        return (object) [
+            'post_title'   => $over['post_title']   ?? ($post['post_title']   ?? ''),
+            'post_content' => $over['post_content'] ?? ($post['post_content'] ?? ''),
+        ];
+    }
+
+    /** Every statement of a kind, so a test can assert the order of two of them. */
+    public function statements(string ...$needles): array {
+        return array_values(array_filter($this->log, static function (string $s) use ($needles): bool {
+            foreach ($needles as $n) {
+                if (stripos($s, $n) !== false) {
+                    return true;
+                }
+            }
+            return false;
+        }));
     }
 }
 
@@ -304,6 +403,11 @@ function wp_insert_post(array $postarr, bool $wp_error = false) {
  * changes nothing on the site, which is why neither branch records anything.
  */
 function wp_update_post(array $postarr, bool $wp_error = false) {
+    if (WpStub::$update_throws !== null) {
+        // A `save_post` hook in a plugin this one does not control, throwing.
+        // It matters because it leaves this code mid-transaction.
+        throw new RuntimeException(WpStub::$update_throws);
+    }
     if (WpStub::$update_returns_zero) {
         return 0;
     }
@@ -313,6 +417,11 @@ function wp_update_post(array $postarr, bool $wp_error = false) {
             : 0;
     }
     WpStub::$updated[] = $postarr;
+    // Recorded on the SAME timeline as the plugin's own statements. The real
+    // one issues an UPDATE on this connection, so where it falls relative to
+    // a transaction the plugin opened is a fact a test can read -- and the
+    // whole question here is whether the write happens inside the lock.
+    $GLOBALS['wpdb']->log[] = 'UPDATE (wp_update_post)';
     $id = $postarr['ID'] ?? 0;
     // The site now holds what was written, so the next read of this post sees
     // it -- without which nothing here could tell a check made against the
@@ -401,6 +510,8 @@ final class WP_REST_Request {
     public function __construct(private $json) {}
     public function get_json_params() { return $this->json; }
 }
+
+$GLOBALS['wpdb'] = new WpdbStub();
 
 require_once __DIR__ . '/../includes/class-cadence-link-request.php';
 require_once __DIR__ . '/../includes/class-cadence-rest-route.php';

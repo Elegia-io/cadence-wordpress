@@ -179,6 +179,7 @@ final class CadenceRestRoute {
         'identifier_mismatch'        => 409,
         'revision_mismatch'          => 409,
         'wpml_unavailable'           => 503,
+        'no_row_lock'                => 503,
         'insert_failed'              => 500,
         'update_failed'              => 500,
     ];

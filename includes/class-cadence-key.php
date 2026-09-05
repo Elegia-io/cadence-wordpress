@@ -36,8 +36,14 @@ final class CadenceKey {
      * An explicit set rather than free text, so `issue` has something to refuse
      * against. A grant spelled `content.publsh` would otherwise be stored, be
      * held by nothing, and read on the admin screen as a key that works.
+     *
+     * `content.publish` AND `content.replace` ARE SEPARATE, DELIBERATELY. A key
+     * that may create must not silently also be able to overwrite: creating
+     * writes a post nobody has seen yet; replacing destroys text a human may
+     * have hand-edited since. A pipeline that needs both holds both, granted
+     * as two ticks on the same key -- but one is never implied by the other.
      */
-    public const CAPABILITIES = ['content.publish', 'translation.link'];
+    public const CAPABILITIES = ['content.publish', 'content.replace', 'translation.link'];
 
     /** The request header the key is presented in. */
     public const HEADER = 'X-Cadence-Key';

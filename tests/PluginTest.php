@@ -35,13 +35,70 @@ final class PluginTest extends TestCase {
         // Named, not indexed: a test reading `$routes[0]` starts asserting
         // about a different endpoint the day one is registered above it, and
         // still passes while doing so.
-        $this->assertSame(['/translation-group', '/content'], array_keys($this->routes));
+        $this->assertSame(['/translation-group', '/content', '/content/replace'],
+            array_keys($this->routes));
         $this->route = ['cadence/v1', '/translation-group', $this->routes['/translation-group']];
     }
 
-    public function test_registers_both_routes_under_its_own_namespace_as_post(): void {
+    public function test_registers_its_routes_under_its_own_namespace_as_post(): void {
         $this->assertSame('POST', $this->routes['/translation-group']['methods']);
         $this->assertSame('POST', $this->routes['/content']['methods']);
+        $this->assertSame('POST', $this->routes['/content/replace']['methods']);
+    }
+
+    /**
+     * REPLACING IS ITS OWN ROUTE, AND ITS OWN CAPABILITY. The content route is
+     * authorised on `content.publish`; that grants nothing here, because a key
+     * that may create must not silently also be able to overwrite -- creating
+     * writes a post nobody has seen, and replacing destroys text a human may
+     * have hand-edited since. A pipeline that needs both holds both.
+     */
+    public function test_the_replace_route_takes_only_a_replace_capable_key(): void {
+        $permit = $this->routes['/content/replace']['permission_callback'];
+        $this->assertIsCallable($permit);
+        $this->assertNotSame('__return_true', $permit);
+        $this->assertFalse($permit(new WP_REST_Request(null)));
+
+        $publisher = CadenceKey::issue('tenant-a', ['content.publish']);
+        $this->assertFalse($permit(new WP_REST_Request(['post_id' => 41], $this->key($publisher))),
+            'a key that may only create was allowed to rewrite');
+
+        $replacer = CadenceKey::issue('tenant-b', ['content.replace']);
+        $this->assertTrue($permit(new WP_REST_Request(['post_id' => 41], $this->key($replacer))));
+    }
+
+    /**
+     * THE ROUTE REWRITES ONCE. Sent a second time -- the shape a lost response
+     * produces -- it is refused with the status that tells the caller to
+     * re-read the site rather than to keep sending.
+     */
+    public function test_the_replace_route_rewrites_once_and_refuses_the_replay(): void {
+        $made = ($this->routes['/content']['callback'])(new WP_REST_Request([
+            'external_id' => 'p-1', 'post_type' => 'post', 'status' => 'draft',
+            'title' => 'T', 'content' => 'C', 'language' => 'en',
+            'declared' => ['multilingual' => true, 'languages' => ['en']]]));
+        $body = ['external_id' => 'p-1', 'post_id' => $made->get_data()['post_id'],
+                 'revision' => $made->get_data()['revision'],
+                 'title' => 'T2', 'content' => 'C2'];
+
+        $call = $this->routes['/content/replace']['callback'];
+        $done = $call(new WP_REST_Request($body));
+        $this->assertSame(200, $done->get_status());
+        $this->assertFalse($done->get_data()['created']);
+        $this->assertNotSame($body['revision'], $done->get_data()['revision']);
+        $this->assertCount(1, WpStub::$updated);
+
+        $replay = $call(new WP_REST_Request($body));
+        $this->assertSame(409, $replay->get_status());
+        $this->assertSame('revision_mismatch', $replay->get_data()['code']);
+        $this->assertCount(1, WpStub::$updated, 'the replay rewrote the post again');
+    }
+
+    public function test_the_replace_route_refuses_a_body_it_cannot_read(): void {
+        $r = ($this->routes['/content/replace']['callback'])(new WP_REST_Request(null));
+        $this->assertSame(400, $r->get_status());
+        $this->assertSame('bad_replacement', $r->get_data()['code']);
+        $this->assertSame([], WpStub::$updated);
     }
 
     /**
@@ -158,6 +215,9 @@ final class PluginTest extends TestCase {
         $this->assertFalse(($this->route[2]['permission_callback'])(new WP_REST_Request($body)));
         $this->assertFalse(($this->routes['/content']['permission_callback'])(new WP_REST_Request(
             ['piece_id' => 'x', 'post_type' => 'post', 'status' => 'publish'])));
+        $this->assertFalse(($this->routes['/content/replace']['permission_callback'])(new WP_REST_Request(
+            ['post_id' => 1])),
+            'a WordPress user with every capability rewrote a post through a route that asks no user at all');
     }
 
     /**

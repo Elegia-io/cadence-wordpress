@@ -168,6 +168,18 @@ machine, only podman or docker.
 ./run-tests.sh --filter PluginTest # one class
 ```
 
+### What CI enforces
+
+`.github/workflows/ci.yml` runs on every pull request and on every push to
+`main`: `php -l` over every tracked PHP file on **PHP 8.1**, the version the
+plugin header declares as its minimum, and the PHPUnit suite on PHP 8.3. Before
+that workflow existed this repository ran nothing — the suite above was a
+command someone chose to type (`Elegia-io/cadence`#1259).
+
+What it still does **not** exercise is the plugin against a real WordPress: the
+suite drives the refusals through stubs, so a change to how WordPress or WPML
+actually behaves is caught by nobody here (`Elegia-io/cadence`#1262).
+
 ## Licence
 
 GPL-2.0-or-later. See [LICENSE](LICENSE).

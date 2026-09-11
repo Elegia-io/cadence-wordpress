@@ -1,0 +1,91 @@
+# What this repository ENFORCES. Until this file existed it ran nothing at all:
+# `./run-tests.sh` was a command a maintainer chose to type, and a pull request
+# to a plugin that authenticates to a client's live WordPress merged with no
+# test having run anywhere (Elegia-io/cadence#1259).
+#
+# Two jobs, because they answer different questions and one cannot answer the
+# other's:
+#
+#   `syntax` runs on the OLDEST PHP the plugin header claims to support (8.1).
+#   A newer PHP parses everything 8.1 parses and more, so linting only on 8.3
+#   would accept syntax that fatals on half the sites this declares itself
+#   compatible with.
+#
+#   `tests` runs the PHPUnit suite, which is the plugin's own REFUSALS -- what
+#   it checks before it writes. PHPUnit 11 needs PHP >= 8.2, so it runs on 8.3,
+#   the version ./run-tests.sh uses locally.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  syntax:
+    name: php -l on the declared minimum
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          # Must match `Requires PHP` in cadence-connector.php. tests/PluginTest.php
+          # asserts that header is >= 8.1; this is the other half of that claim.
+          php-version: '8.1'
+          coverage: none
+
+      - name: Lint every PHP file
+        run: |
+          # Counted, and refused on zero: a walk that matched nothing would
+          # otherwise print no errors and exit 0, which reads exactly like a
+          # pass. `git ls-files` rather than `find` so a stray file in the
+          # runner's workspace cannot pad or fail the count.
+          mapfile -t files < <(git ls-files '*.php')
+          echo "${#files[@]} PHP file(s) to lint"
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no PHP files found, which is not a pass" >&2
+            exit 1
+          fi
+          failed=0
+          for f in "${files[@]}"; do
+            php -l "$f" || failed=1
+          done
+          exit "$failed"
+
+  tests:
+    name: PHPUnit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Fetch PHPUnit
+        # The same phar ./run-tests.sh fetches, for the reason recorded there:
+        # this plugin has no runtime dependencies, and adding a vendor tree to
+        # acquire a test runner would be the largest thing in the repository.
+        run: curl -sSfL -o .phpunit.phar https://phar.phpunit.de/phpunit-11.phar
+
+      - name: Run the suite
+        # --fail-on-empty-test-suite so a bootstrap that loaded no tests is red
+        # rather than a green summary over nothing.
+        run: |
+          php .phpunit.phar \
+            --bootstrap tests/bootstrap.php \
+            --do-not-cache-result \
+            --colors=never \
+            --fail-on-empty-test-suite \
+            tests

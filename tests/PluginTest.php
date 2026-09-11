@@ -74,10 +74,10 @@ final class PluginTest extends TestCase {
      */
     public function test_the_replace_route_rewrites_once_and_refuses_the_replay(): void {
         $made = ($this->routes['/content']['callback'])(new WP_REST_Request([
-            'external_id' => 'p-1', 'post_type' => 'post', 'status' => 'draft',
+            'piece_id' => 'p-1', 'post_type' => 'post', 'status' => 'draft',
             'title' => 'T', 'content' => 'C', 'language' => 'en',
             'declared' => ['multilingual' => true, 'languages' => ['en']]]));
-        $body = ['external_id' => 'p-1', 'post_id' => $made->get_data()['post_id'],
+        $body = ['piece_id' => 'p-1', 'post_id' => $made->get_data()['post_id'],
                  'revision' => $made->get_data()['revision'],
                  'title' => 'T2', 'content' => 'C2'];
 

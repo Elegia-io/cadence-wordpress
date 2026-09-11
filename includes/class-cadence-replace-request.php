@@ -103,7 +103,7 @@ final class CadenceReplaceRequest {
         // a post deleted and re-created -- and post 41 is then somebody else's
         // article, which this would rewrite while every other check agreed.
         $stored = get_post_meta($fields['post_id'], CadenceContentRequest::META, true);
-        if ($stored !== $fields['external_id']) {
+        if ($stored !== $fields['piece_id']) {
             // WITHOUT NAMING WHAT THE SITE HOLDS. The stored identifier is
             // protected meta, which the REST API does not expose; a refusal
             // that spelled it out would hand it to any caller holding a key
@@ -115,7 +115,7 @@ final class CadenceReplaceRequest {
             return ['ok' => false, 'code' => 'identifier_mismatch', 'reason' => sprintf(
                 'post %d is not `%s` on this site; it is %s',
                 $fields['post_id'],
-                $fields['external_id'],
+                $fields['piece_id'],
                 is_string($stored) && $stored !== ''
                     ? 'a different piece this connector published'
                     : 'not a piece this connector published')];
@@ -186,7 +186,7 @@ final class CadenceReplaceRequest {
     /**
      * The single write, inside the transaction its precondition was checked in.
      *
-     * @param array{external_id: string, post_id: int, revision: string, title: string, content: string} $fields
+     * @param array{piece_id: string, post_id: int, revision: string, title: string, content: string} $fields
      */
     private static function write(object $wpdb, array $fields): array {
         $id = wp_update_post([
@@ -229,16 +229,30 @@ final class CadenceReplaceRequest {
     /**
      * The body's own shape, checked without coercion.
      *
-     * @return array{external_id: string, post_id: int, revision: string, title: string, content: string}|string
+     * @return array{piece_id: string, post_id: int, revision: string, title: string, content: string}|string
      */
     private static function validate(array $body) {
-        foreach (['external_id', 'revision', 'title', 'content'] as $key) {
+        // ONE NAME FOR ONE VALUE ACROSS THE WIRE, and it is `/content`'s.
+        // Elegia-io/cadence#1282 settled that the wire carries one spelling both
+        // repositories use, and picked `piece_id`. This route was written before
+        // that landed and asked for `external_id`, so a caller sending the same
+        // value to the two routes had to spell it two ways -- which is the exact
+        // shape #1282 exists to prevent, reintroduced on a route that had not
+        // shipped yet. Aligned here, at the cheapest moment there will ever be.
+        //
+        // The alias is the same one `/content` accepts and for the same reason: a
+        // released connector answered to it, and a 0.1.0 caller must not break.
+        // The reply says `piece_id` either way.
+        if (!isset($body['piece_id']) && isset($body['external_id'])) {
+            $body['piece_id'] = $body['external_id'];
+        }
+        foreach (['piece_id', 'revision', 'title', 'content'] as $key) {
             if (!isset($body[$key]) || !is_string($body[$key])) {
                 return sprintf('%s must be present and a string', $key);
             }
         }
-        if (trim($body['external_id']) === '') {
-            return 'external_id must not be blank; it is what says which piece this replaces';
+        if (trim($body['piece_id']) === '') {
+            return 'piece_id must not be blank; it is what says which piece this replaces';
         }
         if (trim($body['revision']) === '') {
             return 'revision must not be blank; it is what says which text this replaces';
@@ -249,7 +263,7 @@ final class CadenceReplaceRequest {
             return 'post_id must be a positive integer, and is never read from a string';
         }
         return [
-            'external_id' => $body['external_id'],
+            'piece_id'    => $body['piece_id'],
             'post_id'     => $body['post_id'],
             'revision'    => $body['revision'],
             'title'       => $body['title'],

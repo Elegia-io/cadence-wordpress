@@ -219,8 +219,9 @@ final class ReplaceRequestTest extends TestCase {
             'the refusal does not say which piece was asked for');
         // AND NOT THE ONE THE SITE HOLDS. The stored identifier is protected
         // meta, which the REST API does not expose; naming it in a refusal
-        // hands it to any caller holding `edit_post`, who can then send a
-        // replacement that passes this check for a piece it never had.
+        // hands it to any caller holding a key with `content.replace`, who can
+        // then send a replacement that passes this check for a piece it never
+        // had.
         $this->assertStringNotContainsString('piece-2', $r['reason'],
             'the refusal disclosed the identifier the site stores');
         // The two cases are still told apart: this post IS one of ours.

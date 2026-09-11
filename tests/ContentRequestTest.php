@@ -41,17 +41,20 @@ final class ContentRequestTest extends TestCase {
     }
 
     /**
-     * `run`, WITH THE PRESENTED KEY'S CAPABILITY SET. Every test in this file
-     * that does not itself care about disclosure runs a key holding
-     * `content.replace` too, so the revision this route hands back on an
-     * idempotent repeat is not silently withheld and every existing assertion
-     * about the shape of the answer keeps meaning what it says. The gate
-     * itself -- what a key WITHOUT that capability is and is not handed -- is
-     * `test_a_key_without_content_replace_is_not_handed_the_revision` below.
+     * `CadenceContentRequest::run`, WITH THE PRESENTED KEY'S CAPABILITY SET.
+     * Named for what it does rather than what it wraps: `run` is final on
+     * PHPUnit's own TestCase and a method here of that name never gets called.
+     *
+     * Every test in this file that does not itself care about disclosure runs
+     * a key holding `content.replace` too, so the revision this route hands
+     * back on an idempotent repeat is not silently withheld and every existing
+     * assertion about the shape of the answer keeps meaning what it says. The
+     * gate itself -- what a key WITHOUT that capability is and is not handed --
+     * is `test_a_key_without_content_replace_is_not_handed_the_revision` below.
      *
      * @param list<string> $capabilities
      */
-    private function run(array $body, array $capabilities = ['content.replace']): array {
+    private function publish(array $body, array $capabilities = ['content.replace']): array {
         return CadenceContentRequest::run(
             $body,
             static fn (string $capability): bool => in_array($capability, $capabilities, true)
@@ -59,7 +62,7 @@ final class ContentRequestTest extends TestCase {
     }
 
     public function test_creates_a_post_and_returns_its_id(): void {
-        $r = $this->run($this->body());
+        $r = $this->publish($this->body());
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertTrue($r['created']);
         $this->assertIsInt($r['post_id']);
@@ -73,8 +76,8 @@ final class ContentRequestTest extends TestCase {
      * says plainly that it did not create anything.
      */
     public function test_the_same_piece_id_twice_creates_one_post(): void {
-        $first  = $this->run($this->body());
-        $second = $this->run($this->body());
+        $first  = $this->publish($this->body());
+        $second = $this->publish($this->body());
         $this->assertTrue($second['ok'], $second['reason'] ?? '');
         $this->assertFalse($second['created']);
         $this->assertSame($first['post_id'], $second['post_id']);
@@ -89,8 +92,8 @@ final class ContentRequestTest extends TestCase {
      * is creating a second one.
      */
     public function test_a_changed_body_under_a_used_id_neither_rewrites_nor_duplicates(): void {
-        $first = $this->run($this->body());
-        $again = $this->run($this->body(['title' => 'Rewritten', 'content' => 'x']));
+        $first = $this->publish($this->body());
+        $again = $this->publish($this->body(['title' => 'Rewritten', 'content' => 'x']));
         $this->assertFalse($again['created']);
         $this->assertSame($first['post_id'], $again['post_id']);
         $this->assertCount(1, WpStub::$inserted);
@@ -102,14 +105,14 @@ final class ContentRequestTest extends TestCase {
      * lookup that matched a prefix would let `piece-1` answer for `piece-10`.
      */
     public function test_a_different_piece_id_creates_a_second_post(): void {
-        $this->run($this->body(['piece_id' => 'piece-1']));
-        $r = $this->run($this->body(['piece_id' => 'piece-10']));
+        $this->publish($this->body(['piece_id' => 'piece-1']));
+        $r = $this->publish($this->body(['piece_id' => 'piece-10']));
         $this->assertTrue($r['created']);
         $this->assertCount(2, WpStub::$inserted);
     }
 
     public function test_the_piece_id_is_recorded_on_the_post_it_created(): void {
-        $r = $this->run($this->body(['piece_id' => 'piece-7']));
+        $r = $this->publish($this->body(['piece_id' => 'piece-7']));
         $this->assertSame('piece-7', WpStub::$meta[$r['post_id']]['_cadence_external_id'] ?? null);
     }
 
@@ -123,7 +126,7 @@ final class ContentRequestTest extends TestCase {
         foreach (['auto-draft', 'inherit', 'trash', 'publised', '', 'future'] as $status) {
             WpStub::reset();
             WpStub::$capabilities = ['publish_posts' => [null], 'edit_posts' => [null]];
-            $r = $this->run($this->body(['status' => $status]));
+            $r = $this->publish($this->body(['status' => $status]));
             $this->assertFalse($r['ok'], $status . ' was accepted');
             $this->assertSame('bad_request', $r['code']);
             $this->assertSame([], WpStub::$inserted, $status);
@@ -134,7 +137,7 @@ final class ContentRequestTest extends TestCase {
         foreach (['draft', 'pending', 'publish'] as $status) {
             WpStub::reset();
             WpStub::$capabilities = ['publish_posts' => [null], 'edit_posts' => [null]];
-            $r = $this->run($this->body(['status' => $status]));
+            $r = $this->publish($this->body(['status' => $status]));
             $this->assertTrue($r['ok'], $status . ': ' . ($r['reason'] ?? ''));
             $this->assertSame($status, WpStub::$inserted[0]['post_status']);
         }
@@ -146,7 +149,7 @@ final class ContentRequestTest extends TestCase {
      * invisible to every query and every admin screen.
      */
     public function test_refuses_a_post_type_the_site_does_not_have(): void {
-        $r = $this->run($this->body(['post_type' => 'not_registered']));
+        $r = $this->publish($this->body(['post_type' => 'not_registered']));
         $this->assertFalse($r['ok']);
         $this->assertSame('bad_request', $r['code']);
         $this->assertSame([], WpStub::$inserted);
@@ -167,7 +170,7 @@ final class ContentRequestTest extends TestCase {
         ] as $why => $over) {
             WpStub::reset();
             WpStub::$capabilities = ['publish_posts' => [null], 'edit_posts' => [null]];
-            $r = $this->run($this->body($over));
+            $r = $this->publish($this->body($over));
             $this->assertFalse($r['ok'], $why);
             $this->assertSame('bad_request', $r['code'], $why);
             $this->assertSame([], WpStub::$inserted, $why);
@@ -182,10 +185,10 @@ final class ContentRequestTest extends TestCase {
      * is worse than a duplicate because a human deliberately removed it.
      */
     public function test_a_trashed_post_still_answers_for_its_identifier(): void {
-        $first = $this->run($this->body(['status' => 'publish']));
+        $first = $this->publish($this->body(['status' => 'publish']));
         WpStub::$posts[$first['post_id']]['post_status'] = 'trash';
 
-        $again = $this->run($this->body(['status' => 'publish']));
+        $again = $this->publish($this->body(['status' => 'publish']));
         $this->assertTrue($again['ok'], $again['reason'] ?? '');
         $this->assertFalse($again['created'], 'a deleted piece was published again');
         $this->assertSame($first['post_id'], $again['post_id']);
@@ -198,8 +201,8 @@ final class ContentRequestTest extends TestCase {
      * about the word `trash`.
      */
     public function test_a_draft_answers_for_its_identifier(): void {
-        $first = $this->run($this->body(['status' => 'draft']));
-        $again = $this->run($this->body(['status' => 'draft']));
+        $first = $this->publish($this->body(['status' => 'draft']));
+        $again = $this->publish($this->body(['status' => 'draft']));
         $this->assertFalse($again['created']);
         $this->assertSame($first['post_id'], $again['post_id']);
     }
@@ -212,7 +215,7 @@ final class ContentRequestTest extends TestCase {
      * leave to a comment, so the mechanism is asserted instead.
      */
     public function test_the_identifier_travels_in_the_insert_call(): void {
-        $this->run($this->body(['piece_id' => 'piece-9']));
+        $this->publish($this->body(['piece_id' => 'piece-9']));
         $this->assertSame('piece-9',
             WpStub::$inserted[0]['meta_input'][CadenceContentRequest::META] ?? null);
     }
@@ -228,7 +231,7 @@ final class ContentRequestTest extends TestCase {
      */
     public function test_a_post_that_cannot_be_read_back_is_still_a_created_post(): void {
         WpStub::$post_read_fails = true;
-        $r = $this->run($this->body());
+        $r = $this->publish($this->body());
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertTrue($r['created']);
         $this->assertCount(1, WpStub::$inserted);
@@ -244,7 +247,7 @@ final class ContentRequestTest extends TestCase {
      */
     public function test_an_insert_that_fails_is_reported_as_a_failure(): void {
         WpStub::$insert_fails = 'database is on fire';
-        $r = $this->run($this->body());
+        $r = $this->publish($this->body());
         $this->assertFalse($r['ok']);
         $this->assertSame('insert_failed', $r['code']);
         $this->assertStringContainsString('database is on fire', $r['reason']);
@@ -261,7 +264,7 @@ final class ContentRequestTest extends TestCase {
      */
     public function test_a_zero_with_no_error_is_reported_as_a_failure(): void {
         WpStub::$insert_returns_zero = true;
-        $r = $this->run($this->body());
+        $r = $this->publish($this->body());
         $this->assertFalse($r['ok']);
         $this->assertSame('insert_failed', $r['code']);
         $this->assertArrayNotHasKey('post_id', $r);
@@ -275,11 +278,11 @@ final class ContentRequestTest extends TestCase {
      */
     public function test_a_failed_insert_leaves_the_identifier_free(): void {
         WpStub::$insert_fails = 'nope';
-        $this->run($this->body());
+        $this->publish($this->body());
         $this->assertSame([], WpStub::$meta);
 
         WpStub::$insert_fails = null;
-        $r = $this->run($this->body());
+        $r = $this->publish($this->body());
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertTrue($r['created']);
     }
@@ -293,7 +296,7 @@ final class ContentRequestTest extends TestCase {
      * had nothing to parse until now.
      */
     public function test_a_created_post_reports_what_it_placed(): void {
-        $r = $this->run($this->body(['piece_id' => 'p-1']));
+        $r = $this->publish($this->body(['piece_id' => 'p-1']));
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertSame([
             'piece_id'             => 'p-1',
@@ -311,8 +314,8 @@ final class ContentRequestTest extends TestCase {
 
     /** The idempotent repeat reports the same placement, and `created` false. */
     public function test_an_idempotent_repeat_reports_the_post_that_is_already_there(): void {
-        $first  = $this->run($this->body());
-        $second = $this->run($this->body());
+        $first  = $this->publish($this->body());
+        $second = $this->publish($this->body());
         $this->assertFalse($second['created']);
         $this->assertSame($first['report'], $second['report']);
         $this->assertSame(['en'], $second['report']['placed'],
@@ -328,7 +331,7 @@ final class ContentRequestTest extends TestCase {
      */
     public function test_a_language_the_site_cannot_serve_is_reported_not_dropped(): void {
         WpStub::$active_languages = ['en' => [], 'de' => []];
-        $r = $this->run($this->body([
+        $r = $this->publish($this->body([
             'declared' => ['multilingual' => true, 'languages' => ['en', 'de', 'it']],
         ]));
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
@@ -344,7 +347,7 @@ final class ContentRequestTest extends TestCase {
 
     /** `linked` is empty and says so: linking is the other route's write. */
     public function test_this_route_never_reports_a_link_it_did_not_make(): void {
-        $r = $this->run($this->body());
+        $r = $this->publish($this->body());
         $this->assertSame([], $r['report']['linked']);
         $this->assertSame([], WpStub::$writes);
     }
@@ -353,7 +356,7 @@ final class ContentRequestTest extends TestCase {
     public function test_a_declaration_that_disagrees_with_the_site_places_nothing(): void {
         WpStub::$wpml_reads  = false;
         WpStub::$wpml_writes = false;
-        $r = $this->run($this->body([
+        $r = $this->publish($this->body([
             'declared' => ['multilingual' => true, 'languages' => ['en']],
         ]));
         $this->assertFalse($r['ok']);
@@ -371,10 +374,10 @@ final class ContentRequestTest extends TestCase {
         $body['external_id'] = $body['piece_id'];
         unset($body['piece_id']);
 
-        $first = $this->run($body);
+        $first = $this->publish($body);
         $this->assertTrue($first['created']);
         $this->assertSame('piece-2026-08-31-en', $first['report']['piece_id']);
-        $this->assertFalse($this->run($this->body())['created'],
+        $this->assertFalse($this->publish($this->body())['created'],
             'the same piece under the two spellings became two posts');
     }
 
@@ -384,7 +387,7 @@ final class ContentRequestTest extends TestCase {
      * disclose, and a key holding only `content.publish` still gets it.
      */
     public function test_a_created_posts_revision_is_handed_to_a_key_with_no_replace_capability(): void {
-        $r = $this->run($this->body(), []);
+        $r = $this->publish($this->body(), []);
         $this->assertTrue($r['created']);
         $this->assertArrayHasKey('revision', $r,
             'a key that just created this post was not told its own revision');
@@ -398,8 +401,8 @@ final class ContentRequestTest extends TestCase {
      * no article; it is never handed to a key that cannot act on it.
      */
     public function test_a_key_without_content_replace_is_not_handed_the_revision_on_a_repeat(): void {
-        $first  = $this->run($this->body());
-        $second = $this->run($this->body(), []);
+        $first  = $this->publish($this->body());
+        $second = $this->publish($this->body(), []);
         $this->assertFalse($second['created']);
         $this->assertSame($first['post_id'], $second['post_id']);
         $this->assertArrayNotHasKey('revision', $second,
@@ -408,8 +411,8 @@ final class ContentRequestTest extends TestCase {
 
     /** THE TWIN: a key that DOES hold `content.replace` is handed it. */
     public function test_a_key_with_content_replace_is_handed_the_revision_on_a_repeat(): void {
-        $first  = $this->run($this->body());
-        $second = $this->run($this->body(), ['content.replace']);
+        $first  = $this->publish($this->body());
+        $second = $this->publish($this->body(), ['content.replace']);
         $this->assertFalse($second['created']);
         $this->assertArrayHasKey('revision', $second);
         $this->assertSame($first['revision'], $second['revision']);

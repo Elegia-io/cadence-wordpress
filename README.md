@@ -48,12 +48,19 @@ never again; the site stores only a SHA-256 of it. Present it as a header:
 X-Cadence-Key: <the key>
 ```
 
-Two capabilities exist, and a key carries only the ones it was issued for:
+Three capabilities exist, and a key carries only the ones it was issued for:
 
 | Capability | Opens |
 |---|---|
 | `content.publish` | `POST /content` |
+| `content.replace` | `POST /content/replace` |
 | `translation.link` | `POST /translation-group` |
+
+`content.publish` and `content.replace` are separate on purpose: a key that may
+create must not silently also be able to overwrite. A pipeline that both
+publishes and revises holds both, ticked on the same key; a pipeline that only
+ever publishes cannot rewrite anything, even its own posts, without this being
+granted separately.
 
 **Revoking** is the *Revoke* button beside the key. It takes effect on the next
 request; the row stays, marked revoked, so there is a record that this tenant had
@@ -202,16 +209,14 @@ hashed. It is derived from the post every time it is answered and stored
 nowhere, so an edit somebody makes in wp-admin changes it. It is the value a
 replacement has to name.
 
-**On a repeat, the revision is answered only to a caller that may edit that
-post.** This endpoint is authorised on the post *type* — `create_posts`, which
-any contributor on that type holds — and an identifier already in use may
-resolve to somebody else's article. The revision is the replace endpoint's
-proof that the caller has seen the text it is about to overwrite, so handing it
-out on the weaker question would let a caller satisfy that proof by guessing an
-identifier rather than by reading the article. A caller that holds `edit_post`
-on the post — the same capability the rewrite itself needs — is answered with
-it. On a `201` it is always answered: the post did not exist a moment ago and
-its text is the text the caller just sent.
+**On a repeat, the revision is answered only to a key that also holds
+`content.replace`.** This endpoint is authorised on `content.publish` alone,
+and an identifier already in use may resolve to somebody else's article. The
+revision is the replace endpoint's proof that the caller has seen the text it
+is about to overwrite, so handing it out to a key that lacks `content.replace`
+would let a caller satisfy that proof by guessing an identifier rather than by
+reading the article. On a `201` it is always answered: the post did not exist
+a moment ago and its text is the text the caller just sent.
 
 ### Replacing content
 
@@ -219,9 +224,9 @@ its text is the text the caller just sent.
 POST /wp-json/cadence/v1/content/replace
 ```
 
-Requires `edit_post` on the post named, asked of that one post. WordPress maps
-that capability onto `edit_published_posts` for a post that is live, so the one
-question covers a live article too.
+Requires a key carrying `content.replace`. `content.publish` alone does not
+open this route — a key that may create must not silently also be able to
+overwrite.
 
 ```json
 {

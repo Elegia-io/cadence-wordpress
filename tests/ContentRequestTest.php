@@ -40,6 +40,31 @@ final class ContentRequestTest extends TestCase {
         ], $over);
     }
 
+    /**
+     * THE BYLINE REACHES THE INSERT.
+     *
+     * Nothing else is done with it: `post_author` is a field on the row. The
+     * request is still authenticated by a key that confers no WordPress
+     * identity, and this id does not change that.
+     */
+    public function test_the_keys_byline_is_the_posts_author(): void {
+        $r = CadenceContentRequest::run($this->body(), 7);
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame(7, WpStub::$inserted[0]['post_author'] ?? null);
+    }
+
+    /**
+     * THE TWIN, AND THE PRE-EXISTING KEY. A key issued before keys carried a
+     * byline passes none, and the insert is then exactly the insert this
+     * connector has always made -- the field is absent, not 0 written by us.
+     * An install that publishes today goes on publishing.
+     */
+    public function test_no_byline_leaves_the_author_field_untouched(): void {
+        $r = CadenceContentRequest::run($this->body());
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertArrayNotHasKey('post_author', WpStub::$inserted[0]);
+    }
+
     public function test_creates_a_post_and_returns_its_id(): void {
         $r = CadenceContentRequest::run($this->body());
         $this->assertTrue($r['ok'], $r['reason'] ?? '');

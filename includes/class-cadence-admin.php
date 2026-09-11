@@ -53,7 +53,10 @@ final class CadenceAdmin {
                 CadenceKey::CAPABILITIES,
                 array_map('sanitize_text_field', (array) ($post['caps'] ?? []))
             ));
-            $result = CadenceKey::issue(sanitize_text_field((string) ($post['label'] ?? '')), $capabilities);
+            // The author goes through as it was posted. Whether it names a
+            // user this site has is `CadenceKey`'s question, not this file's.
+            $result = CadenceKey::issue(sanitize_text_field((string) ($post['label'] ?? '')), $capabilities,
+                                        sanitize_text_field((string) ($post['author'] ?? '')));
             if (is_string($result)) {
                 $error = $result;
             } else {
@@ -85,11 +88,21 @@ final class CadenceAdmin {
             echo '<div class="notice notice-warning"><p>Copy this key now; it is not shown again.</p><p><code>'
                 . esc_html(sanitize_text_field(wp_unslash((string) $_GET['issued']))) . '</code></p></div>';
         }
-        echo '<table class="widefat"><thead><tr><th>Label</th><th>Id</th><th>Grants</th><th>State</th><th></th></tr></thead><tbody>';
+        echo '<table class="widefat"><thead><tr><th>Label</th><th>Id</th><th>Grants</th><th>Byline</th><th>State</th><th></th></tr></thead><tbody>';
         foreach (CadenceKey::all() as $id => $record) {
             echo '<tr><td>' . esc_html((string) $record['label']) . '</td>'
                 . '<td><code>' . esc_html($id) . '</code></td>'
                 . '<td>' . esc_html(implode(', ', $record['caps'])) . '</td>'
+                // A KEY ISSUED BEFORE KEYS CARRIED A BYLINE says so here.
+                // Posts it creates have no author, as they always have; this
+                // is the only place that fact is visible, and re-issuing the
+                // key is the fix.
+                . '<td>' . (isset($record['author'])
+                    // Empty for a user deleted since: the id is then what
+                    // there is to show, and blank would read as no byline.
+                    ? esc_html(get_the_author_meta('display_name', (int) $record['author'])
+                               ?: '#' . (int) $record['author'])
+                    : 'none — re-issue to set one') . '</td>'
                 . '<td>' . ($record['revoked_at'] === null ? 'active' : 'revoked') . '</td><td>';
             if ($record['revoked_at'] === null) {
                 self::form(['do' => 'revoke', 'id' => $id], 'Revoke');
@@ -101,6 +114,13 @@ final class CadenceAdmin {
         wp_nonce_field(self::ACTION);
         echo '<input type="hidden" name="action" value="' . esc_attr(self::ACTION) . '">';
         echo '<p><label>Tenant label <input name="label" required></label></p>';
+        // The byline posts made with this key will carry. Defaulted to whoever
+        // is on this screen, who holds `manage_options` -- that is what reached
+        // it -- and so is a real user of this site by construction. It grants
+        // the key nothing; it is a name on a post.
+        echo '<p>Byline author ';
+        wp_dropdown_users(['name' => 'author', 'selected' => get_current_user_id()]);
+        echo '</p>';
         foreach (CadenceKey::CAPABILITIES as $capability) {
             echo '<p><label><input type="checkbox" name="caps[]" value="' . esc_attr($capability) . '"> '
                 . esc_html($capability) . '</label></p>';

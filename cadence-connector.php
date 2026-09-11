@@ -55,7 +55,13 @@ add_action('rest_api_init', static function (): void {
     register_rest_route('cadence/v1', '/content', [
         'methods'  => 'POST',
         'callback' => static function ($request) {
-            $result = CadenceContentRequest::run((array) $request->get_json_params());
+            $result = CadenceContentRequest::run(
+                (array) $request->get_json_params(),
+                // The byline this key names, and nothing else: it fills
+                // `post_author` on the insert. The request remains
+                // unauthenticated as far as WordPress is concerned.
+                CadenceKey::author_for($request->get_header(CadenceKey::HEADER))
+            );
             $answer = CadenceRestRoute::respond($result);
             return new WP_REST_Response($answer['body'], $answer['status']);
         },

@@ -198,8 +198,10 @@ There is no update endpoint yet.
 POST /wp-json/cadence/v1/translation-group
 ```
 
-Requires `edit_post` on every post the request names, asked per post rather than
-the blanket `edit_posts`, which a contributor holds.
+Requires a key carrying `translation.link`. Once the key answers,
+`CadenceRestRoute::names_posts()` refuses a body naming no posts, or one whose
+shape it cannot read — an empty request authorises nothing, so there is nothing
+there to say yes to.
 
 ```json
 {

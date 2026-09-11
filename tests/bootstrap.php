@@ -16,6 +16,20 @@ final class WpStub {
     /** @var list<array> every wpml_set_element_language_details call */
     public static array $writes = [];
 
+    /**
+     * @var list<int> element ids the write LEAVES IN NO GROUP.
+     *
+     * WPML's own documented outcome, not an invented failure: the action drops
+     * an element's translation relations rather than reporting anything, and
+     * it returns nothing whatever it does. A caller cannot tell from the write
+     * that the relation it asked for is gone -- it can only read the site back,
+     * which is why the report does.
+     */
+    public static array $wpml_write_detaches = [];
+
+    /** The next group id WPML invents for a write that names none. */
+    public static int $next_trid = 900;
+
     /** @var array<string, list<int>> capability => the post ids the current user holds it for */
     public static array $capabilities = [];
 
@@ -89,6 +103,8 @@ final class WpStub {
         self::$capabilities = [];
         self::$wpml_reads = true;
         self::$wpml_writes = true;
+        self::$wpml_write_detaches = [];
+        self::$next_trid = 900;
         self::$wpml_declines = false;
         self::$inserted = [];
         self::$updated = [];
@@ -169,7 +185,33 @@ function do_action(string $hook, ...$args): void {
         return;   // nothing listening; the call is a no-op, as on a real site
     }
     if ($hook === 'wpml_set_element_language_details') {
-        WpStub::$writes[] = $args[0] ?? [];
+        $d = $args[0] ?? [];
+        WpStub::$writes[] = $d;
+
+        // AND THE WRITE CHANGES WHAT A LATER READ RETURNS. Recording the call
+        // and leaving the site's answers alone modelled a writer nothing can
+        // observe, which is the one shape a report read back from the site can
+        // never be tested against: every read-back would answer with the state
+        // from before the write.
+        $id = (int) ($d['element_id'] ?? 0);
+        if (!isset(WpStub::$posts[$id])) {
+            return;
+        }
+        WpStub::$posts[$id]['language'] = $d['language_code'] ?? null;
+        WpStub::$posts[$id]['wpml_knows'] = true;
+        if (in_array($id, WpStub::$wpml_write_detaches, true)) {
+            WpStub::$posts[$id]['trid'] = null;   // the relation is gone
+            return;
+        }
+        // WPML's own documentation for this action: *"If set to FALSE it will
+        // create a new trid for the element causing any potential translation
+        // relations to/from it to disappear."* A new one PER ELEMENT -- the
+        // action is told about one element and has no way to know the call is
+        // one of a set.
+        WpStub::$posts[$id]['trid'] = $d['trid'] ?? null;
+        if (WpStub::$posts[$id]['trid'] === null) {
+            WpStub::$posts[$id]['trid'] = WpStub::$next_trid++;
+        }
     }
 }
 

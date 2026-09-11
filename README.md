@@ -197,7 +197,7 @@ appeared:
 | `piece_id` | echoed back, so a reply can be bound to a request |
 | `post_id` | the integer WordPress assigned; the caller type-checks it before verifying anything else |
 | `placed` | the languages the piece landed in |
-| `linked` | the languages associated as translations. Always empty here: linking is the other endpoint's write |
+| `linked` | the languages associated as translations. Always empty here: linking is the other endpoint's write, and it reports them |
 | `refused` | `[language, reason]` pairs — this connector's own refusals, not transport failures |
 | `observed_unsupported` | requested languages this site cannot serve |
 
@@ -226,6 +226,7 @@ there to say yes to.
 
 ```json
 {
+  "piece_id": "piece-2026-08-31-en",
   "trid": null,
   "create_group": true,
   "source":       {"post_id": 12, "language_code": "en", "element_type": "post_page",
@@ -239,6 +240,12 @@ Either `create_group` (make a new group from these posts) or `trid` (join this
 existing one). Both together is refused rather than reconciled: it asks for two
 different things and one of them destroys relations.
 
+`piece_id` is the piece the source post is, the same identifier `/content` was
+given for it. It is optional: without it the answer is the bare `{"ok": true,
+"written": N}` this route has always sent, because a report filed under no
+identifier is one nothing can be joined to. Present and blank — or present and
+not a string — is refused, for the reason `/content` refuses it.
+
 Every post is read before any post is written, so a request that is wrong about
 its last post writes nothing about its first.
 
@@ -246,11 +253,50 @@ its last post writes nothing about its first.
 
 | Status | Meaning | What the caller should do |
 |---|---|---|
-| `200` | Written. `written` is how many. | Nothing. |
+| `200` | Written. `written` is how many, and the report below says which. | Nothing. |
 | `400` | The request is wrong on its face. | Fix it; re-sending cannot help. |
 | `409` | The site disagrees with the request. | Re-read the site and try again. |
 | `503` | The site has no WPML. | Install it; the request is fine. |
 | `500` | Refused for a reason this version cannot classify. | Report it. |
+
+A request naming a `piece_id` is answered with the same report as `/content`,
+flat in the body:
+
+```json
+{
+  "ok": true,
+  "written": 2,
+  "piece_id": "piece-2026-08-31-en",
+  "post_id": 12,
+  "placed": [],
+  "linked": ["de"],
+  "refused": []
+}
+```
+
+| Field | |
+|---|---|
+| `piece_id` | echoed back, so a reply can be bound to a request |
+| `post_id` | the **source** post. `piece_id` names the piece and the source is the post that piece is, so this is the same pair `/content` reported when it placed it |
+| `placed` | always empty here, for the mirror of the reason `linked` is empty on `/content`: this route associates posts that already exist and creates none |
+| `linked` | the translation languages the site puts in the source's group **when read back after the write** |
+| `refused` | always empty in a successful answer: every refusal this route has is total, and returns `ok: false` with nothing written |
+
+`observed_unsupported` is absent rather than empty. This route never asks the
+site which languages it serves, so an empty list would be an absence nothing
+measured.
+
+**`linked` is read back from the site, never copied out of the request.** WPML's
+action returns nothing whatever it does, so the only evidence a link was made is
+what the site says afterwards — and a `linked` built from the plan would report
+every language the caller asked for, which is the request echoed back with an
+`ok` beside it. `written` is how many writes were *issued*; the two disagreeing
+is the signal. In particular a `create_group` request currently reports
+`linked: []` — see the note below.
+
+The source's own language is not in `linked`. That is what `/content` reported
+under `placed` for this piece, and leaving it out makes an empty `linked`
+unambiguous: nothing was associated, rather than "only the piece itself".
 
 Refusals carry a stable `code` as well as a human `reason`. Match on the code;
 the reason is prose and changes freely.
@@ -268,6 +314,12 @@ the reason is prose and changes freely.
 | `capability_mismatch` | 409 | the declaration and the site disagree about WPML |
 | `unsupported_language` | 409 | this site has no active WPML language for the piece itself |
 | `insert_failed` | 500 | WordPress refused the insert, or returned no id |
+
+**A `create_group` request reports `linked: []` today.** It writes a null trid for
+every element, and WPML documents a falsy trid as creating a new group for *that*
+element — so the posts may end in one group each, which is what reading the site
+back says. Joining an existing group with `trid` is unaffected. Tracked upstream;
+the report is what made it visible, and it is reported rather than hidden.
 
 ## Development
 

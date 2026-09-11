@@ -374,4 +374,121 @@ final class LinkRequestTest extends TestCase {
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertArrayNotHasKey('code', $r);
     }
+
+    // ---- the report -------------------------------------------------------
+    //
+    // `written` says how many links were made and nothing said WHICH, so the
+    // caller's ledger recorded that nothing was linked on every run that
+    // linked something. These pin the field that answers it, and -- more --
+    // pin that it is READ BACK rather than copied out of the plan.
+
+    public function test_a_plan_naming_its_piece_reports_what_the_site_now_says(): void {
+        $this->twoPosts(5);
+        $r = CadenceLinkRequest::run($this->plan(['piece_id' => 'piece-1']));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame(2, $r['written']);
+        // The WHOLE report, by identity: a field appearing here that nothing
+        // named is as much a change to the contract as one going missing, and
+        // this is also where "ids, counts and language codes only" is enforced
+        // -- a title or a slug could only arrive as a new key.
+        $this->assertSame([
+            'piece_id' => 'piece-1',
+            'post_id'  => 1,
+            'placed'   => [],
+            'linked'   => ['de'],
+            'refused'  => [],
+        ], $r['report']);
+    }
+
+    /**
+     * THE REPORT IS NOT THE REQUEST WITH AN `ok` BESIDE IT. Post 2's write is
+     * taken and leaves it in no group -- which is WPML's documented behaviour
+     * when it drops relations, and the action returns nothing either way. The
+     * plan still names `de`; the site no longer has it. A `linked` projected
+     * from the plan reports `de`, beside a `written: 3` that agrees with it.
+     * One read back reports `fr` alone.
+     */
+    public function test_a_write_that_did_not_land_is_not_reported_as_linked(): void {
+        $this->twoPosts(5);
+        WpStub::add_post(3, 'page', 'fr', 5);
+        WpStub::$wpml_write_detaches = [2];
+        $r = CadenceLinkRequest::run($this->plan(['piece_id' => 'piece-1', 'translations' => [
+            ['post_id' => 2, 'language_code' => 'de',
+             'element_type' => 'post_page', 'source_language_code' => 'en'],
+            ['post_id' => 3, 'language_code' => 'fr',
+             'element_type' => 'post_page', 'source_language_code' => 'en'],
+        ]]));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame(3, $r['written']);
+        $this->assertSame(['fr'], $r['report']['linked']);
+    }
+
+    /**
+     * A read-back that says "no group" links nothing. `null` is a reading and
+     * `false` is not, and neither of them is a group: a report that treated
+     * either as one would claim the write landed because the call was made.
+     */
+    public function test_a_source_the_site_puts_in_no_group_links_nothing(): void {
+        $this->twoPosts(5);
+        WpStub::$wpml_write_detaches = [1];
+        $r = CadenceLinkRequest::run($this->plan(['piece_id' => 'piece-1']));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame([], $r['report']['linked']);
+    }
+
+    /**
+     * `create_group` writes a null trid for every element, and WPML's own
+     * documentation says a falsy trid creates a NEW trid for THAT element. So
+     * the site ends with two groups of one and nothing is linked -- which the
+     * report says and `written: 2` does not. Tracked as Elegia-io/cadence#1310;
+     * this test pins the REPORTING, not the linking, and is expected to change
+     * when the write does.
+     */
+    public function test_the_create_group_path_reports_the_links_it_did_not_make(): void {
+        $this->twoPosts(null);
+        $r = CadenceLinkRequest::run($this->plan(
+            ['trid' => null, 'create_group' => true, 'piece_id' => 'piece-1']));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame(2, $r['written']);
+        $this->assertSame([], $r['report']['linked']);
+    }
+
+    /**
+     * A CALLER THAT NAMES NO PIECE GETS EXACTLY WHAT IT GOT BEFORE. The report
+     * is filed under the piece; with no piece there is nothing for a ledger to
+     * join it to, and an answer carrying half a report would be read as one.
+     */
+    public function test_a_plan_naming_no_piece_carries_no_report(): void {
+        $this->twoPosts(5);
+        $r = CadenceLinkRequest::run($this->plan());
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertArrayNotHasKey('report', $r);
+        $this->assertSame(['ok' => true, 'written' => 2], $r);
+    }
+
+    /**
+     * A blank identifier is refused rather than reported under, for the reason
+     * `/content` refuses it: it is what a ledger row is found by. And refused
+     * BEFORE the write, like every other refusal in this file.
+     */
+    #[DataProvider('unusablePieceIds')]
+    public function test_an_unusable_piece_id_writes_nothing($piece_id): void {
+        $this->twoPosts(5);
+        $r = CadenceLinkRequest::run($this->plan(['piece_id' => $piece_id]));
+        $this->assertFalse($r['ok']);
+        $this->assertSame('bad_plan', $r['code']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    public static function unusablePieceIds(): array {
+        return [
+            'blank'      => [''],
+            'whitespace' => ["  \t "],
+            'an int'     => [12],
+            // `true` passes a loose string check in more than one language and
+            // would be written into the ledger as `1`.
+            'true'       => [true],
+            'an array'   => [['piece-1']],
+        ];
+    }
 }

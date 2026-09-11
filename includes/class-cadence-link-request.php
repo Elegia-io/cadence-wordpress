@@ -66,7 +66,8 @@ final class CadenceLinkRequest {
      * matching on spellings this file changes freely.
      *
      * @param array $plan the JSON body, already decoded
-     * @return array{ok: bool, code?: string, reason?: string, written?: int}
+     * @return array{ok: bool, code?: string, reason?: string, written?: int,
+     *               report?: array}
      */
     public static function run(array $plan): array {
         // BEFORE ANYTHING ELSE, INCLUDING THE PLAN'S OWN SHAPE: a server that
@@ -91,6 +92,19 @@ final class CadenceLinkRequest {
         $posts = self::validate_shape($plan);
         if (is_string($posts)) {
             return ['ok' => false, 'code' => 'bad_plan', 'reason' => $posts];
+        }
+
+        // WHICH PIECE THIS LINK BELONGS TO, and the one field of the report
+        // this route cannot derive from the site. OPTIONAL, and the report is
+        // emitted only when it is given: a caller that names no piece gets
+        // exactly the `{ok, written}` it got before this field existed, rather
+        // than a report filed under an identity the ledger cannot join to
+        // anything. `piece_id` and not a second spelling -- the wire carries
+        // one name for this value, and `/content` already answers under it.
+        $piece_id = $plan['piece_id'] ?? null;
+        if ($piece_id !== null && (!is_string($piece_id) || trim($piece_id) === '')) {
+            return ['ok' => false, 'code' => 'bad_plan',
+                    'reason' => 'piece_id is present but is not a non-blank string'];
         }
 
         $create = $plan['create_group'];
@@ -140,7 +154,80 @@ final class CadenceLinkRequest {
                 'source_language_code' => $p['source_language_code'],
             ]);
         }
-        return ['ok' => true, 'written' => count($posts)];
+        $answer = ['ok' => true, 'written' => count($posts)];
+        if ($piece_id !== null) {
+            $answer['report'] = self::report($piece_id, $posts);
+        }
+        return $answer;
+    }
+
+    /**
+     * WHAT THIS CALL ACTUALLY DID, in the fields the caller's verifier reads.
+     *
+     * `linked` IS RE-READ FROM THE SITE, NEVER PROJECTED FROM THE PLAN. The
+     * languages are all sitting in `$posts` and copying them out would be
+     * cheaper, truthful-looking and wrong: it would report a link for every
+     * element the plan named, which is the request echoed back with an `ok`
+     * beside it. `do_action` returns nothing at all, so the only evidence a
+     * write landed is what WPML says afterwards -- and the same silence that
+     * produced `200 {"written": 2}` on a site with no WPML produces an empty
+     * `linked` here, which is the direction of error this field is for.
+     *
+     * So: the SOURCE's group is read back first, and a translation is reported
+     * as linked only when the site puts it in that same group. A group that
+     * cannot be read at all (`false`, or `null` for "in no group") links
+     * nothing, and `written` beside an empty `linked` is the honest shape for
+     * writes that went nowhere.
+     *
+     * `placed` is empty here and always will be, for the mirror image of the
+     * reason `linked` is empty on `/content`: this route associates posts that
+     * already exist and creates none. Reporting a placement it did not make is
+     * the same error one boundary over.
+     *
+     * `observed_unsupported` is ABSENT rather than empty. This route never asks
+     * the site which languages it serves, and an empty list would be an absence
+     * nothing measured -- the one field here that would be a claim rather than
+     * a reading.
+     *
+     * Ids, counts and language codes only. No title, no slug, no excerpt: a
+     * report travels to a caller that is trusted with the link it asked for and
+     * not with the site's copy.
+     *
+     * @param list<array> $posts the validated plan, source first
+     */
+    private static function report(string $piece_id, array $posts): array {
+        $source = $posts[0];
+        // The SOURCE's post id: `piece_id` names the piece, and the source is
+        // the post that piece is. It is the pair `/content` already reported
+        // when it placed that piece, so the two rows join on both fields; a
+        // translation's id would be a different piece's, and picking one of
+        // several would be arbitrary.
+        $group  = self::current_trid($source['post_id'], $source['element_type']);
+
+        $linked = [];
+        if (is_int($group)) {
+            foreach (array_slice($posts, 1) as $p) {
+                if (self::current_trid($p['post_id'], $p['element_type']) === $group) {
+                    $linked[] = $p['language_code'];
+                }
+            }
+        }
+
+        return [
+            'piece_id' => $piece_id,
+            'post_id'  => $source['post_id'],
+            'placed'   => [],
+            // The source's own language is deliberately NOT in here. It is
+            // what `/content` reported under `placed` for this piece, and
+            // leaving it out makes an empty `linked` unambiguous: nothing was
+            // associated, rather than "only the piece itself".
+            'linked'   => $linked,
+            // Nothing was refused per language. Every refusal this route has is
+            // total -- it returns `ok: false` and writes nothing -- so a report
+            // exists only where there is no refusal to list. Measured, not
+            // assumed empty.
+            'refused'  => [],
+        ];
     }
 
     /**

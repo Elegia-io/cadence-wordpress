@@ -54,9 +54,10 @@ final class CadenceKey {
      * dictionary for a stretch to slow down.
      *
      * @param list<string> $capabilities
+     * @param int|string    $author the user id posts made with this key carry
      * @return array{id: string, secret: string}|string
      */
-    public static function issue(string $label, array $capabilities) {
+    public static function issue(string $label, array $capabilities, $author) {
         if (trim($label) === '') {
             return 'a key needs a label, so a tenant can be told apart from another at revocation time';
         }
@@ -69,6 +70,16 @@ final class CadenceKey {
                                implode(', ', self::CAPABILITIES));
             }
         }
+        // THE BYLINE. Checked here and not on the screen, for the same reason
+        // the capability names are: a value the admin file decided by itself is
+        // a decision nothing runs a test against. `get_userdata` is the SITE's
+        // answer -- a plugin has no list of the users a site has, and a byline
+        // naming a user who does not exist is the empty byline this exists to
+        // stop, written down.
+        $author = self::user_id($author);
+        if ($author === null) {
+            return 'the author must be an id of a user this site has; a post this key creates carries it as its byline';
+        }
         $id     = bin2hex(random_bytes(8));
         $secret = bin2hex(random_bytes(32));
         $keys   = self::records();
@@ -76,11 +87,55 @@ final class CadenceKey {
             'label'      => $label,
             'hash'       => hash('sha256', $secret),
             'caps'       => array_values(array_unique($capabilities)),
+            'author'     => $author,
             'created'    => time(),
             'revoked_at' => null,
         ];
         update_option(self::OPTION, $keys);
         return ['id' => $id, 'secret' => $id . '.' . $secret];
+    }
+
+    /**
+     * The user id this value names, or null.
+     *
+     * A string is accepted because that is what a form posts. `ctype_digit`
+     * rather than a bare cast: `(int) 'editor'` is 0 and `(int) '3 posts'` is
+     * 3, so a cast turns something nobody typed into a user id, and only the
+     * site not happening to have that user would refuse it.
+     *
+     * @param mixed $author
+     */
+    private static function user_id($author): ?int {
+        if (is_string($author) && ctype_digit($author)) {
+            $author = (int) $author;
+        }
+        if (!is_int($author) || $author < 1 || get_userdata($author) === false) {
+            return null;
+        }
+        return $author;
+    }
+
+    /**
+     * THE BYLINE A POST THIS KEY CREATES CARRIES, or null for a key issued
+     * before a key carried one.
+     *
+     * IT GRANTS NOTHING, AND IS READ NOWHERE ELSE. The id fills `post_author`
+     * and that is all: nothing here calls `wp_set_current_user`, and a request
+     * authenticated by this key still carries no WordPress identity, which is
+     * the entire safety argument for the key existing. Making this id the
+     * current user would replace a credential scoped to two capabilities with
+     * one scoped to whatever that user's role can do.
+     *
+     * NULL FOR A KEY ISSUED BEFORE THIS CHANGE, deliberately. The insert then
+     * omits `post_author` exactly as every insert did before, so an install
+     * that publishes today goes on publishing: refusing would break it over a
+     * field it never had, and substituting any user would put a byline on a
+     * post that person did not choose. The admin screen marks those keys, so
+     * the fix is visible and is the operator's to make -- re-issue the key.
+     */
+    public static function author_for($presented): ?int {
+        $author = self::grant($presented)['author'] ?? null;
+        return is_int($author) && $author > 0 ? $author : null;
     }
 
     /**
@@ -104,7 +159,7 @@ final class CadenceKey {
      * no use for them and a template that prints one is a template that leaks
      * the only stored half of the credential.
      *
-     * @return array<string, array{label: string, caps: list<string>, created: int, revoked_at: int|null}>
+     * @return array<string, array{label: string, caps: list<string>, author?: int, created: int, revoked_at: int|null}>
      */
     public static function all(): array {
         $out = [];
@@ -133,7 +188,7 @@ final class CadenceKey {
     /**
      * The record a presented key authenticates as, or null.
      *
-     * @return array{label: string, caps: list<string>}|null
+     * @return array{label: string, caps: list<string>, author?: int}|null
      */
     private static function grant($presented): ?array {
         if (!is_string($presented)) {

@@ -71,6 +71,15 @@ final class WpStub {
     /** @var array<string, mixed> the site's options table, in the two calls anything here makes */
     public static array $options = [];
 
+    /**
+     * @var array<int, string> the users this site has, id => display name.
+     *
+     * A list rather than "any id is a user": a key's byline is checked against
+     * the site, and a stub that said yes to every id would make that check
+     * unreachable from here.
+     */
+    public static array $users = [7 => 'A Real Person'];
+
     /** @var list<string> the post types this site has registered */
     public static array $post_types = ['post', 'page'];
 
@@ -90,6 +99,7 @@ final class WpStub {
         self::$post_types = ['post', 'page'];
         self::$active_languages = ['en' => ['code' => 'en'], 'de' => ['code' => 'de']];
         self::$options = [];
+        self::$users = [7 => 'A Real Person'];
     }
 
     public static function add_post(int $id, string $post_type = 'page',
@@ -273,6 +283,17 @@ function get_posts(array $args = []): array {
         $found[] = $id;
     }
     return $found;
+}
+
+/**
+ * A WP_User, or FALSE for an id this site has no user for -- which is the half
+ * that matters: `get_userdata(0)` is false on every WordPress, and 0 is what
+ * `post_author` takes when nothing sets it.
+ */
+function get_userdata(int $id) {
+    return isset(WpStub::$users[$id])
+        ? (object) ['ID' => $id, 'display_name' => WpStub::$users[$id]]
+        : false;
 }
 
 function get_option(string $name, $default = false) {

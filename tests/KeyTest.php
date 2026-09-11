@@ -18,8 +18,9 @@ final class KeyTest extends TestCase {
         WpStub::reset();
     }
 
-    private function issue(array $caps = ['content.publish'], string $label = 'tenant-a'): array {
-        $key = CadenceKey::issue($label, $caps);
+    private function issue(array $caps = ['content.publish'], string $label = 'tenant-a',
+                           $author = 7): array {
+        $key = CadenceKey::issue($label, $caps, $author);
         $this->assertIsArray($key, is_string($key) ? $key : '');
         return $key;
     }
@@ -45,13 +46,97 @@ final class KeyTest extends TestCase {
         $this->assertTrue(CadenceKey::authorises($key['secret'], 'translation.link'));
     }
 
+    /**
+     * THE BYLINE THE KEY NAMES, AND WHAT IT IS NOT.
+     *
+     * `post_author` is the only thing this id is ever read for. It is not a
+     * WordPress identity: the key still authorises exactly the capabilities it
+     * was issued for, and nothing else on the site.
+     */
+    public function test_a_key_names_the_byline_it_was_issued_with(): void {
+        $key = $this->issue(['content.publish'], 'tenant-a', 7);
+        $this->assertSame(7, CadenceKey::author_for($key['secret']));
+    }
+
+    /**
+     * AN ID THIS SITE HAS NO USER FOR IS REFUSED, at the moment the key is
+     * issued -- which is the moment a human is on the screen to fix it. A
+     * byline naming nobody is the empty byline this exists to stop, stored.
+     *
+     * The string forms matter: a form posts a string, and a cast would turn
+     * `'editor'` into 0 and `'7 posts'` into 7.
+     */
+    public function test_refuses_to_issue_a_byline_this_site_has_no_user_for(): void {
+        foreach ([99, 0, -1, '', 'editor', '7 posts', '7.0', 7.0, true, null, [7]] as $i => $author) {
+            $this->assertIsString(CadenceKey::issue('tenant-a', ['content.publish'], $author), (string) $i);
+        }
+        $this->assertSame([], CadenceKey::all(), 'a refused issue still wrote a key');
+        // THE TWIN: the same call with an id this site does have is issued, so
+        // the refusals above are the check firing rather than issue() being
+        // broken for everything.
+        $this->assertIsArray(CadenceKey::issue('tenant-a', ['content.publish'], 7));
+        $this->assertIsArray(CadenceKey::issue('tenant-b', ['content.publish'], '7'),
+            'a form posts its fields as strings');
+    }
+
+    /**
+     * A KEY ISSUED BEFORE KEYS CARRIED A BYLINE STILL WORKS, and names none.
+     *
+     * The record is written here in the shape the previous version stored, on
+     * purpose: the option table on an install that upgrades holds exactly this,
+     * and it must not start refusing to publish over a field it never had.
+     * Nothing substitutes a user for it either -- a byline nobody chose is
+     * somebody's name on a post they did not write.
+     */
+    public function test_a_key_issued_before_bylines_authorises_and_names_none(): void {
+        $secret = 'deadbeef';
+        WpStub::$options[CadenceKey::OPTION] = ['old1' => [
+            'label' => 'tenant-a', 'hash' => hash('sha256', $secret),
+            'caps' => ['content.publish'], 'created' => 1, 'revoked_at' => null,
+        ]];
+        $this->assertTrue(CadenceKey::authorises('old1.' . $secret, 'content.publish'),
+            'an upgraded install stopped being able to publish');
+        $this->assertNull(CadenceKey::author_for('old1.' . $secret));
+    }
+
+    /** A key that does not authenticate names no byline either. */
+    public function test_a_revoked_or_unauthenticated_key_names_no_byline(): void {
+        $key = $this->issue(['content.publish'], 'tenant-a', 7);
+        $this->assertNull(CadenceKey::author_for($key['id'] . '.wrong'));
+        $this->assertNull(CadenceKey::author_for('unknown.secret'));
+        $this->assertNull(CadenceKey::author_for(null));
+        CadenceKey::revoke($key['id']);
+        $this->assertNull(CadenceKey::author_for($key['secret']));
+    }
+
+    /**
+     * THE BYLINE NEVER BECOMES A LOGGED-IN USER.
+     *
+     * Asserted over the shipped source rather than over a behaviour, because
+     * the failure is a line somebody adds, not a branch anything here reaches:
+     * one `wp_set_current_user($author)` would turn a credential scoped to two
+     * capabilities into one scoped to whatever that user's role can do, and
+     * every other test in this file would go on passing.
+     */
+    public function test_nothing_shipped_turns_the_byline_into_a_current_user(): void {
+        $files = glob(dirname(__DIR__) . '/includes/*.php');
+        $files[] = dirname(__DIR__) . '/cadence-connector.php';
+        $this->assertGreaterThan(5, count($files), 'the scan found no source to read');
+        foreach ($files as $file) {
+            $source = (string) file_get_contents($file);
+            foreach (['wp_set_current_user(', 'wp_set_auth_cookie(', 'wp_signon('] as $call) {
+                $this->assertStringNotContainsString($call, $source, basename($file));
+            }
+        }
+    }
+
     /** A grant is a name from a published set, never free text. */
     public function test_refuses_to_issue_a_capability_this_connector_does_not_have(): void {
-        $this->assertIsString(CadenceKey::issue('tenant-a', ['content.publsh']));
-        $this->assertIsString(CadenceKey::issue('tenant-a', ['manage_options']));
-        $this->assertIsString(CadenceKey::issue('tenant-a', [['content.publish']]));
-        $this->assertIsString(CadenceKey::issue('tenant-a', []));
-        $this->assertIsString(CadenceKey::issue('   ', ['content.publish']));
+        $this->assertIsString(CadenceKey::issue('tenant-a', ['content.publsh'], 7));
+        $this->assertIsString(CadenceKey::issue('tenant-a', ['manage_options'], 7));
+        $this->assertIsString(CadenceKey::issue('tenant-a', [['content.publish']], 7));
+        $this->assertIsString(CadenceKey::issue('tenant-a', [], 7));
+        $this->assertIsString(CadenceKey::issue('   ', ['content.publish'], 7));
         $this->assertSame([], CadenceKey::all(), 'a refused issue still wrote a key');
     }
 

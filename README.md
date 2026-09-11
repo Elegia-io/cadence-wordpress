@@ -41,8 +41,9 @@ post types, no front-end output.
 
 Callers authenticate with a **connector key**, not as a WordPress user. On
 **Settings → Cadence Connector**, give the key a label naming the tenant it is
-for, tick the capabilities it needs, and press *Issue*. The key is shown once and
-never again; the site stores only a SHA-256 of it. Present it as a header:
+for, tick the capabilities it needs, choose the **byline** its posts will carry,
+and press *Issue*. The key is shown once and never again; the site stores only a
+SHA-256 of it. Present it as a header:
 
 ```
 X-Cadence-Key: <the key>
@@ -62,6 +63,18 @@ publishes and revises holds both, ticked on the same key; a pipeline that only
 ever publishes cannot rewrite anything, even its own posts, without this being
 granted separately.
 
+**The byline** is a WordPress user on this site, defaulting to whoever is
+issuing the key. It fills `post_author` on the posts this key creates and does
+nothing else: the key does not authenticate as that user, and a request
+presenting it still has no WordPress identity. Without it `post_author` is `0`,
+which is a post no author filter finds and a byline themes print empty or fatal
+on.
+
+A key issued by an earlier version of this plugin carries no byline and goes on
+publishing exactly as it did, with no author. The key list marks those rows
+*none — re-issue to set one*; re-issuing is the only way to give one a byline,
+since the old key's secret cannot be recovered to edit in place.
+
 **Revoking** is the *Revoke* button beside the key. It takes effect on the next
 request; the row stays, marked revoked, so there is a record that this tenant had
 a key and that it was withdrawn.
@@ -79,7 +92,9 @@ plugin needs, and all of which whoever holds the credential now has.
 A connector key is scoped to a **capability** and carries no WordPress identity
 at all: `wp_get_current_user()` is 0 for a request authenticated this way, so
 every other REST route on the site, core's included, still refuses it. The two
-routes below are therefore the whole of what the key can reach.
+routes below are therefore the whole of what the key can reach. The byline is
+not an exception to this — it is an id written into one field of the post, never
+a user the request becomes.
 
 There is no fallback: a WordPress administrator logged in with every capability
 WordPress has cannot call these routes either.
@@ -135,6 +150,12 @@ Requires a key carrying `content.publish`.
 ```
 
 `external_id` is accepted as the 0.1.0 spelling of `piece_id`.
+
+The post is created with the byline the presenting key names; the request body
+does not choose an author, so a key cannot publish under a byline the site did
+not grant it. Nothing else in the connector sets an author: there is one route
+that creates posts, and a `piece_id` already on a post is answered with that
+post rather than rewritten.
 
 **`declared` is required, and the plugin verifies it rather than detecting it.**
 `multilingual` says whether this tenant is a multilingual client; `languages`
@@ -299,8 +320,10 @@ current state from the refusal instead of sending again.
 POST /wp-json/cadence/v1/translation-group
 ```
 
-Requires `edit_post` on every post the request names, asked per post rather than
-the blanket `edit_posts`, which a contributor holds.
+Requires a key carrying `translation.link`. Once the key answers,
+`CadenceRestRoute::names_posts()` refuses a body naming no posts, or one whose
+shape it cannot read — an empty request authorises nothing, so there is nothing
+there to say yes to.
 
 ```json
 {

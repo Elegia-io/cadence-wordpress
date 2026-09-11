@@ -65,7 +65,12 @@ add_action('rest_api_init', static function (): void {
                 // the proof `/content/replace` demands -- is a second
                 // question, asked of the same presented key.
                 static fn (string $capability): bool =>
-                    CadenceKey::authorises($request->get_header(CadenceKey::HEADER), $capability)
+                    CadenceKey::authorises($request->get_header(CadenceKey::HEADER), $capability),
+                // The byline this key names, and nothing else: it fills
+                // `post_author` on the insert. The request remains
+                // unauthenticated as far as WordPress is concerned -- two
+                // things the same header decides, and neither is a login.
+                CadenceKey::author_for($request->get_header(CadenceKey::HEADER))
             );
             $answer = CadenceRestRoute::respond($result);
             return new WP_REST_Response($answer['body'], $answer['status']);

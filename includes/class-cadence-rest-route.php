@@ -14,74 +14,26 @@ if (!defined('ABSPATH')) {
 final class CadenceRestRoute {
 
     /**
-     * MAY THIS CALLER LINK THESE POSTS?
+     * DOES THIS BODY NAME POSTS AT ALL, in the shape it claims to?
      *
-     * Per post, never blanket. `edit_posts` (plural) is "may edit posts of this
-     * type at all" and is held by a contributor; `edit_post` (singular, a meta
-     * capability) is "may edit THIS one" and is the only question whose answer
-     * matches what the request will actually change.
+     * What is LEFT of the old per-post `current_user_can('edit_post', $id)`
+     * check, and deliberately so: a request authenticated by a Cadence key
+     * carries no WordPress user, so a per-user capability question has nobody
+     * to ask about and every answer would be "no". The authorisation now lives
+     * in the key's own capability set (`CadenceKey::authorises`), and this is
+     * the shape check that used to travel with it -- kept because a body this
+     * cannot read must be refused before the handler reads it, and because the
+     * ids it extracts are compared by test against the ids the handler writes.
      *
-     * The body is read in full before any question is asked, so a body this
-     * cannot read produces no questions at all: `current_user_can('edit_post',
-     * $id)` on a value PHP coerced is a question about a different post than
-     * the one named, and its answer would be believed.
-     *
-     * @param array    $body The decoded request body.
-     * @param callable $can  `fn(string $cap, mixed $id): bool`, i.e. current_user_can.
+     * Widening recorded rather than hidden: `translation.link` authorises
+     * linking ANY post on the site, where `edit_post` authorised named ones.
+     * Narrowing a key to a post type or a section is tracked upstream.
      */
-    public static function permitted(array $body, callable $can): bool {
+    public static function names_posts(array $body): bool {
         $ids = self::post_ids($body);
-        // No posts named is not "all of them are permitted". An empty request
-        // authorises nothing, so there is nothing here to say yes to.
-        if ($ids === null || $ids === []) {
-            return false;
-        }
-        $permitted = true;
-        foreach ($ids as $id) {
-            // Not short-circuited: every named post is asked about, so the set
-            // this authorised is the set the handler goes on to write.
-            if (!$can('edit_post', $id)) {
-                $permitted = false;
-            }
-        }
-        return $permitted;
-    }
-
-    /**
-     * MAY THIS CALLER PUT THIS CONTENT ON THE SITE?
-     *
-     * Asked of the post TYPE's own capabilities, which WordPress derives from
-     * the type's registration and which are not the same for every type. A
-     * plugin hard-coding `edit_posts` would let anybody who may draft a blog
-     * post write into a type whose entire purpose was that they may not.
-     *
-     * Publishing is a second question, not a louder version of the first: the
-     * contributor role exists precisely to separate "may write this" from "may
-     * put it in front of the public".
-     *
-     * @param array    $body The decoded request body.
-     * @param callable $can  `fn(string $cap, mixed $id = null): bool`, i.e. current_user_can.
-     */
-    public static function may_publish(array $body, callable $can): bool {
-        $type   = $body['post_type'] ?? null;
-        $status = $body['status'] ?? null;
-        if (!is_string($type) || !is_string($status)) {
-            return false;
-        }
-        // Null for a type this site has not registered. Reading `->cap` off it
-        // is a fatal in PHP 8 -- inside a permission callback, that is a 500 on
-        // a route whose answer was always going to be "no".
-        $object = get_post_type_object($type);
-        if ($object === null || !isset($object->cap)) {
-            return false;
-        }
-        if (!$can($object->cap->create_posts, null)) {
-            return false;
-        }
-        if ($status === 'publish' && !$can($object->cap->publish_posts, null)) {
-            return false;
-        }
-        return true;
+        // No posts named is not "all of them". An empty request authorises
+        // nothing, so there is nothing here to say yes to.
+        return $ids !== null && $ids !== [];
     }
 
     /**
@@ -102,6 +54,20 @@ final class CadenceRestRoute {
                 if (array_key_exists($k, $result)) {
                     $body[$k] = $result[$k];
                 }
+            }
+            // WHAT THE CALL ACTUALLY DID, when the handler can say. Merged
+            // last, so `post_id` is the report's string form -- one field, one
+            // type, rather than an int and a string under the same name in two
+            // routes' answers.
+            //
+            // `ok` and `created` STAY. `ok` is the only field the refusal body
+            // shares, so dropping it would leave a caller inferring success
+            // from an HTTP status; and `created` is the fact that selects 201
+            // from 200, which `placed` cannot carry -- a piece that was already
+            // there is placed and was not created, and an idempotent retry has
+            // to be able to say so.
+            if (isset($result['report']) && is_array($result['report'])) {
+                $body = array_merge($body, $result['report']);
             }
             // 201 only for something that came into existence. An idempotent
             // repeat is a 200: the caller asked for a post to exist, it does,
@@ -138,6 +104,8 @@ final class CadenceRestRoute {
         'contradictory_instructions' => 400,
         'no_group_named'             => 400,
         'bad_request'                => 400,
+        'capability_mismatch'        => 409,
+        'unsupported_language'       => 409,
         'group_unknown'              => 409,
         'already_grouped'            => 409,
         'group_disagreement'         => 409,
@@ -148,9 +116,13 @@ final class CadenceRestRoute {
     /**
      * The post ids in the body, or null if the body is not the shape it claims.
      *
+     * Public so the set this extracts can be compared BY TEST against the set
+     * `CadenceLinkRequest` goes on to write. The two read the same body
+     * independently, and nothing but that comparison stops them drifting.
+     *
      * @return list<int>|null
      */
-    private static function post_ids(array $body): ?array {
+    public static function post_ids(array $body): ?array {
         // A body naming neither is not malformed -- it simply names no posts,
         // and is refused by the caller for that. Kept distinct from null so
         // that refusal has something to be reachable through.

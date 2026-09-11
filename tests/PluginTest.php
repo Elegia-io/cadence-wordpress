@@ -45,32 +45,39 @@ final class PluginTest extends TestCase {
     }
 
     /**
-     * THE CONTENT ROUTE HAS ITS OWN PERMISSION CALLBACK, and it is not the
-     * linker's. The two authorise different things -- one asks about specific
-     * posts that exist, the other about a post type nothing has created yet --
-     * so wiring either to the other guards a route with a question about
-     * something else entirely, and both would look registered and fine.
+     * THE CONTENT ROUTE IS AUTHORISED BY A KEY SCOPED TO PUBLISHING, and the
+     * linker's key does not open it.
+     *
+     * The two capabilities are separate for the reason the whole scheme exists:
+     * a credential is worth what its widest grant is worth, and a key held by a
+     * pipeline that only ever publishes should not also be able to rearrange
+     * the site's translation groups.
      */
-    public function test_the_content_route_authorises_by_post_type(): void {
+    public function test_the_content_route_takes_only_a_publishing_key(): void {
         $permit = $this->routes['/content']['permission_callback'];
         $this->assertIsCallable($permit);
-        $this->assertFalse($permit(new WP_REST_Request(null)));
+        $body = ['piece_id' => 'x', 'post_type' => 'page', 'status' => 'draft'];
 
-        WpStub::$capabilities = ['create_pages' => [null]];
-        $this->assertTrue($permit(new WP_REST_Request(
-            ['external_id' => 'x', 'post_type' => 'page', 'status' => 'draft'])));
-        $this->assertFalse($permit(new WP_REST_Request(
-            ['external_id' => 'x', 'post_type' => 'page', 'status' => 'publish'])),
-            'drafting rights allowed a publish');
-        $this->assertFalse($permit(new WP_REST_Request(
-            ['external_id' => 'x', 'post_type' => 'post', 'status' => 'draft'])),
-            'the cap for one post type allowed another');
+        $this->assertFalse($permit(new WP_REST_Request($body)), 'no key at all was let through');
+
+        $linker = CadenceKey::issue('tenant-a', ['translation.link']);
+        $this->assertFalse($permit(new WP_REST_Request($body, $this->key($linker))),
+            'a key for linking translations was allowed to publish content');
+
+        $publisher = CadenceKey::issue('tenant-b', ['content.publish']);
+        $this->assertTrue($permit(new WP_REST_Request($body, $this->key($publisher))));
+    }
+
+    /** The header, spelled as it travels on the wire. */
+    private function key(array $issued): array {
+        return [strtolower(CadenceKey::HEADER) => $issued['secret']];
     }
 
     public function test_the_content_route_creates_once_and_answers_201_then_200(): void {
         $call = $this->routes['/content']['callback'];
-        $body = ['external_id' => 'p-1', 'post_type' => 'post', 'status' => 'draft',
-                 'title' => 'T', 'content' => 'C'];
+        $body = ['piece_id' => 'p-1', 'post_type' => 'post', 'status' => 'draft',
+                 'title' => 'T', 'content' => 'C', 'language' => 'en',
+                 'declared' => ['multilingual' => true, 'languages' => ['en']]];
 
         $made = $call(new WP_REST_Request($body));
         $this->assertSame(201, $made->get_status());
@@ -81,6 +88,36 @@ final class PluginTest extends TestCase {
         $this->assertFalse($again->get_data()['created']);
         $this->assertSame($made->get_data()['post_id'], $again->get_data()['post_id']);
         $this->assertCount(1, WpStub::$inserted);
+    }
+
+    /**
+     * THE SIX FIELDS REACH THE WIRE.
+     *
+     * Asserted at the ROUTE, not at the handler: the handler can report
+     * perfectly into a response body that drops it, and every test of the
+     * handler still passes. What the caller's verifier parses is what comes
+     * back from here.
+     */
+    public function test_the_content_routes_answer_carries_the_report(): void {
+        WpStub::$active_languages = ['en' => [], 'de' => []];
+        $response = ($this->routes['/content']['callback'])(new WP_REST_Request([
+            'piece_id' => 'p-2', 'post_type' => 'post', 'status' => 'draft',
+            'title' => 'T', 'content' => 'C', 'language' => 'en',
+            'declared' => ['multilingual' => true, 'languages' => ['en', 'it']],
+        ]));
+        $body = $response->get_data();
+        $this->assertSame(201, $response->get_status());
+        foreach (['piece_id', 'post_id', 'placed', 'linked', 'refused', 'observed_unsupported'] as $field) {
+            $this->assertArrayHasKey($field, $body, $field);
+        }
+        $this->assertSame('p-2', $body['piece_id']);
+        $this->assertIsInt($body['post_id']);
+        $this->assertSame(['en'], $body['placed']);
+        $this->assertSame(['it'], $body['observed_unsupported']);
+        // `ok` and `created` kept: the refusal body shares `ok`, and `created`
+        // is what selects 201 from 200.
+        $this->assertTrue($body['ok']);
+        $this->assertTrue($body['created']);
     }
 
     public function test_the_content_route_refuses_a_body_it_cannot_read(): void {
@@ -106,18 +143,40 @@ final class PluginTest extends TestCase {
     }
 
     /**
-     * AND IT PERMITS WHEN WORDPRESS SAYS YES -- otherwise the assertions above
-     * hold for a callback wired to nothing at all.
+     * AND A WORDPRESS ADMINISTRATOR IS NOT A WAY IN.
+     *
+     * This is the change, not a detail of it: the route no longer asks
+     * `current_user_can`, so a site owner logged in with every capability
+     * WordPress has still cannot reach it, and neither can anything holding a
+     * stolen application password. There is one way in, and it is a key issued
+     * for this capability.
      */
-    public function test_the_permission_callback_permits_an_editor(): void {
-        WpStub::$capabilities = ['edit_post' => [1, 2]];
+    public function test_a_wordpress_user_with_every_capability_is_still_refused(): void {
+        WpStub::$capabilities = ['edit_post' => [1, 2], 'create_posts' => [null],
+                                 'publish_posts' => [null], 'manage_options' => [null]];
+        $body = ['source' => ['post_id' => 1], 'translations' => [['post_id' => 2]]];
+        $this->assertFalse(($this->route[2]['permission_callback'])(new WP_REST_Request($body)));
+        $this->assertFalse(($this->routes['/content']['permission_callback'])(new WP_REST_Request(
+            ['piece_id' => 'x', 'post_type' => 'post', 'status' => 'publish'])));
+    }
+
+    /**
+     * AND IT PERMITS A KEY ISSUED FOR LINKING -- otherwise the assertions above
+     * hold for a callback wired to nothing at all.
+     *
+     * The body shape is still checked here: a key authorises the capability,
+     * not a body, and one that cannot be read names no posts to link.
+     */
+    public function test_the_permission_callback_permits_a_linking_key(): void {
         $permit = $this->route[2]['permission_callback'];
+        $header = $this->key(CadenceKey::issue('tenant-a', ['translation.link']));
         $this->assertTrue($permit(new WP_REST_Request([
             'source' => ['post_id' => 1], 'translations' => [['post_id' => 2]],
-        ])));
+        ], $header)));
         $this->assertFalse($permit(new WP_REST_Request([
-            'source' => ['post_id' => 1], 'translations' => [['post_id' => 3]],
-        ])));
+            'source' => ['post_id' => 1], 'translations' => [['post_id' => '2']],
+        ], $header)), 'a body naming no readable post id was authorised');
+        $this->assertFalse($permit(new WP_REST_Request([], $header)));
     }
 
     public function test_a_refused_plan_comes_back_as_the_refusals_own_status(): void {

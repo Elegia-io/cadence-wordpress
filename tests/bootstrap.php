@@ -65,6 +65,12 @@ final class WpStub {
 
     public static int $next_post_id = 100;
 
+    /** @var array<string, array> WPML's active-language map, code => details */
+    public static array $active_languages = ['en' => ['code' => 'en'], 'de' => ['code' => 'de']];
+
+    /** @var array<string, mixed> the site's options table, in the two calls anything here makes */
+    public static array $options = [];
+
     /** @var list<string> the post types this site has registered */
     public static array $post_types = ['post', 'page'];
 
@@ -82,6 +88,8 @@ final class WpStub {
         self::$insert_returns_zero = false;
         self::$next_post_id = 100;
         self::$post_types = ['post', 'page'];
+        self::$active_languages = ['en' => ['code' => 'en'], 'de' => ['code' => 'de']];
+        self::$options = [];
     }
 
     public static function add_post(int $id, string $post_type = 'page',
@@ -111,6 +119,12 @@ function apply_filters(string $hook, $value, ...$args) {
     // code that reads the answer without asking whether anyone answered.
     if (!WpStub::$wpml_reads || WpStub::$wpml_declines) {
         return $value;
+    }
+    if ($hook === 'wpml_active_languages') {
+        // WPML's own map: language code => details. A site whose hooks are
+        // present but which has configured no languages answers with an empty
+        // map, which is NOT the same as "every language is fine".
+        return WpStub::$active_languages;
     }
     if ($hook === 'wpml_element_language_details') {
         $arg = $args[0] ?? [];
@@ -261,6 +275,15 @@ function get_posts(array $args = []): array {
     return $found;
 }
 
+function get_option(string $name, $default = false) {
+    return array_key_exists($name, WpStub::$options) ? WpStub::$options[$name] : $default;
+}
+
+function update_option(string $name, $value, $autoload = null): bool {
+    WpStub::$options[$name] = $value;
+    return true;
+}
+
 function esc_html(string $s): string { return $s; }
 function __(string $s, string $d = ''): string { return $s; }
 
@@ -305,12 +328,25 @@ final class WP_REST_Response {
     public function get_status(): int { return $this->status; }
 }
 
-/** Only `get_json_params`, which is all the route asks of a request. */
+/**
+ * `get_json_params` and `get_header`, which is all the routes ask of a request.
+ * The header matters now: it is where the connector's own key is presented, and
+ * WordPress returns null rather than '' for a header that was not sent.
+ */
 final class WP_REST_Request {
-    public function __construct(private $json) {}
+    /** @param array<string, string> $headers */
+    public function __construct(private $json, private array $headers = []) {}
     public function get_json_params() { return $this->json; }
+    public function get_header(string $name) {
+        // WordPress normalises header names; so does this, so a test naming the
+        // header as it travels on the wire asks the same question the route does.
+        return $this->headers[strtolower($name)] ?? null;
+    }
 }
 
+require_once __DIR__ . '/../includes/class-cadence-key.php';
+require_once __DIR__ . '/../includes/class-cadence-language-declaration.php';
 require_once __DIR__ . '/../includes/class-cadence-link-request.php';
 require_once __DIR__ . '/../includes/class-cadence-rest-route.php';
 require_once __DIR__ . '/../includes/class-cadence-content-request.php';
+require_once __DIR__ . '/../includes/class-cadence-admin.php';

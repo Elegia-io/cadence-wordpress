@@ -21,9 +21,14 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+require_once __DIR__ . '/includes/class-cadence-key.php';
+require_once __DIR__ . '/includes/class-cadence-language-declaration.php';
 require_once __DIR__ . '/includes/class-cadence-link-request.php';
 require_once __DIR__ . '/includes/class-cadence-content-request.php';
 require_once __DIR__ . '/includes/class-cadence-rest-route.php';
+require_once __DIR__ . '/includes/class-cadence-admin.php';
+
+CadenceAdmin::boot();
 
 add_action('rest_api_init', static function (): void {
     register_rest_route('cadence/v1', '/translation-group', [
@@ -34,14 +39,16 @@ add_action('rest_api_init', static function (): void {
             return new WP_REST_Response($answer['body'], $answer['status']);
         },
         // NEVER `__return_true`. WordPress accepts it, logs a notice nobody
-        // reads, and serves the route to the entire internet. The callback
-        // below asks about each post the request names, so a route registered
-        // without it is not a weaker version of this -- it is no check at all.
+        // reads, and serves the route to the entire internet.
+        //
+        // AND NEVER `current_user_can` EITHER, which is the change here: a
+        // WordPress credential is scoped to a USER, so one that may create a
+        // draft may also edit every published post, read every draft and
+        // enumerate users. The key below is scoped to a CAPABILITY and confers
+        // no WordPress identity at all.
         'permission_callback' => static function ($request): bool {
-            return CadenceRestRoute::permitted(
-                (array) $request->get_json_params(),
-                'current_user_can'
-            );
+            return CadenceKey::authorises($request->get_header(CadenceKey::HEADER), 'translation.link')
+                && CadenceRestRoute::names_posts((array) $request->get_json_params());
         },
     ]);
 
@@ -53,10 +60,7 @@ add_action('rest_api_init', static function (): void {
             return new WP_REST_Response($answer['body'], $answer['status']);
         },
         'permission_callback' => static function ($request): bool {
-            return CadenceRestRoute::may_publish(
-                (array) $request->get_json_params(),
-                'current_user_can'
-            );
+            return CadenceKey::authorises($request->get_header(CadenceKey::HEADER), 'content.publish');
         },
     ]);
 });

@@ -48,22 +48,36 @@ final class CadenceContentRequest {
      * linker's is: so the REST layer can be tested for covering all of them
      * rather than for covering the ones its own tests happened to name.
      */
-    public const REFUSAL_CODES = ['bad_request', 'insert_failed'];
+    public const REFUSAL_CODES = ['bad_request', 'capability_mismatch',
+                                 'unsupported_language', 'insert_failed'];
 
-    /** @return array{ok: bool, created?: bool, post_id?: int, code?: string, reason?: string} */
+    /**
+     * @return array{ok: bool, created?: bool, post_id?: int, report?: array,
+     *               code?: string, reason?: string}
+     */
     public static function run(array $body): array {
         $fields = self::validate($body);
         if (is_string($fields)) {
             return ['ok' => false, 'code' => 'bad_request', 'reason' => $fields];
         }
 
-        $existing = self::find_by_external_id($fields['external_id']);
+        // BEFORE ANYTHING IS WRITTEN. A declaration that disagrees with the
+        // site is not a detail to report alongside a post that already exists:
+        // the post is the thing that must not appear.
+        $languages = CadenceLanguageDeclaration::verify($body['declared'] ?? null, $fields['language']);
+        if ($languages['ok'] !== true) {
+            return ['ok' => false, 'code' => $languages['code'], 'reason' => $languages['reason']];
+        }
+        $unsupported = $languages['unsupported'];
+
+        $existing = self::find_by_external_id($fields['piece_id']);
         if ($existing !== null) {
             // NEITHER A SECOND POST NOR A REWRITE OF THE FIRST. The identifier
             // means "this piece"; a body that differs under it means the caller
             // believes it is publishing something new, and the live article is
             // not this code's to overwrite on that belief.
-            return ['ok' => true, 'created' => false, 'post_id' => $existing];
+            return ['ok' => true, 'created' => false, 'post_id' => $existing,
+                    'report' => self::report($fields, $existing, $unsupported)];
         }
 
         $id = wp_insert_post([
@@ -75,7 +89,7 @@ final class CadenceContentRequest {
             // afterwards leaves a window in which the post exists without it,
             // and a retry landing in that window is exactly the duplicate this
             // class exists to prevent.
-            'meta_input'   => [self::META => $fields['external_id']],
+            'meta_input'   => [self::META => $fields['piece_id']],
         ], true);
 
         // WP_Error, or 0, and neither is an exception. Read as an id, `0` is
@@ -90,22 +104,66 @@ final class CadenceContentRequest {
                     'reason' => 'WordPress returned no post id and no error'];
         }
 
-        return ['ok' => true, 'created' => true, 'post_id' => $id];
+        return ['ok' => true, 'created' => true, 'post_id' => $id,
+                'report' => self::report($fields, $id, $unsupported)];
+    }
+
+    /**
+     * WHAT THIS CALL ACTUALLY DID, in the six fields the caller's verifier
+     * reads. `{ok, created, post_id}` answers "did a row appear"; these answer
+     * "is the thing I asked for now true", and the two differ in exactly the
+     * cases worth auditing.
+     *
+     * `post_id` is the INTEGER WordPress gave it, not a string of it. The
+     * caller's verifier checks the type before it checks anything else, so a
+     * stringified id fails earlier and less legibly than a wrong one -- and
+     * this is the one field in the reply that WordPress, not Cadence, names.
+     *
+     * `linked` is empty here and always will be: this route places a piece,
+     * and associating translations is `/translation-group`'s write. Reporting
+     * a link this route did not make is the `200 {"written": 2}` on a site
+     * with no WPML, one boundary further out.
+     *
+     * @param array{piece_id: string, language: string} $fields
+     * @param list<string> $unsupported
+     */
+    private static function report(array $fields, int $post_id, array $unsupported): array {
+        return [
+            'piece_id' => $fields['piece_id'],
+            'post_id'  => $post_id,
+            'placed'   => [$fields['language']],
+            'linked'   => [],
+            // Per language, with the reason attached, so an operator reading
+            // one row does not have to hold the request beside it. Disjoint
+            // from `placed` by construction: a language that could not be
+            // served never reached the insert.
+            'refused'  => array_map(static fn (string $code): array => [$code, sprintf(
+                'this site has no active WPML language %s, so nothing was placed in it', $code
+            )], $unsupported),
+            'observed_unsupported' => $unsupported,
+        ];
     }
 
     /**
      * The body's own shape, checked without coercion.
      *
-     * @return array{external_id: string, post_type: string, status: string, title: string, content: string}|string
+     * @return array{piece_id: string, language: string, post_type: string, status: string, title: string, content: string}|string
      */
     private static function validate(array $body) {
-        foreach (['external_id', 'post_type', 'status', 'title', 'content'] as $key) {
+        // `external_id` is what 0.1.0 called it. Accepted, because a released
+        // connector is installed on sites this repository does not control and
+        // a rename is not worth a publish that stops working mid-upgrade; the
+        // answer says `piece_id` either way.
+        if (!isset($body['piece_id']) && isset($body['external_id'])) {
+            $body['piece_id'] = $body['external_id'];
+        }
+        foreach (['piece_id', 'language', 'post_type', 'status', 'title', 'content'] as $key) {
             if (!isset($body[$key]) || !is_string($body[$key])) {
                 return sprintf('%s must be present and a string', $key);
             }
         }
-        if (trim($body['external_id']) === '') {
-            return 'external_id must not be blank; it is what makes a retry safe';
+        if (trim($body['piece_id']) === '') {
+            return 'piece_id must not be blank; it is what makes a retry safe';
         }
         if (!in_array($body['status'], self::STATUSES, true)) {
             return sprintf('status must be one of %s', implode(', ', self::STATUSES));
@@ -117,7 +175,8 @@ final class CadenceContentRequest {
             return sprintf('this site has no post type %s', $body['post_type']);
         }
         return [
-            'external_id' => $body['external_id'],
+            'piece_id'    => $body['piece_id'],
+            'language'    => $body['language'],
             'post_type'   => $body['post_type'],
             'status'      => $body['status'],
             'title'       => $body['title'],
@@ -126,7 +185,7 @@ final class CadenceContentRequest {
     }
 
     /** The post already carrying this identifier, or null. */
-    private static function find_by_external_id(string $external_id): ?int {
+    private static function find_by_external_id(string $piece_id): ?int {
         $found = get_posts([
             'post_type'      => 'any',
             // Every status, deliberately. A piece whose post was moved to the
@@ -134,7 +193,7 @@ final class CadenceContentRequest {
             // publish it a second time -- resurrecting content somebody deleted.
             'post_status'    => 'any',
             'meta_key'       => self::META,
-            'meta_value'     => $external_id,
+            'meta_value'     => $piece_id,
             'fields'         => 'ids',
             'posts_per_page' => 1,
             'no_found_rows'  => true,

@@ -19,8 +19,10 @@ This plugin exposes an endpoint that writes that relationship through WPML's own
 
 - WordPress 6.4+
 - PHP 8.1+
-- WPML with the String Translation and Translation Management add-ons, for the
-  translation-linking endpoint. The publishing endpoint does not need WPML.
+- WPML with the String Translation and Translation Management add-ons, for a
+  multilingual client. Monolingual clients run the same plugin with no WPML;
+  there is no second build, and which one a site is must be **declared** in the
+  request rather than detected here.
 
 ## Installing
 
@@ -29,12 +31,49 @@ Download `cadence-connector.zip` from the
 In WordPress, go to **Plugins → Add New → Upload Plugin**, choose the zip, install
 it and activate.
 
-Both endpoints are then live under `/wp-json/cadence/v1/`. Nothing else is added:
-no settings page, no post types, no front-end output.
+Both endpoints are then live under `/wp-json/cadence/v1/`, and a settings screen
+appears at **Settings → Cadence Connector**. Nothing else is added: no post types,
+no front-end output.
 
-Callers authenticate as a WordPress user. Application Passwords (**Users → Profile
-→ Application Passwords**) are the usual choice for a pipeline, and the user needs
-the capabilities each endpoint asks for below.
+### Issuing a key
+
+Callers authenticate with a **connector key**, not as a WordPress user. On
+**Settings → Cadence Connector**, give the key a label naming the tenant it is
+for, tick the capabilities it needs, and press *Issue*. The key is shown once and
+never again; the site stores only a SHA-256 of it. Present it as a header:
+
+```
+X-Cadence-Key: <the key>
+```
+
+Two capabilities exist, and a key carries only the ones it was issued for:
+
+| Capability | Opens |
+|---|---|
+| `content.publish` | `POST /content` |
+| `translation.link` | `POST /translation-group` |
+
+**Revoking** is the *Revoke* button beside the key. It takes effect on the next
+request; the row stays, marked revoked, so there is a record that this tenant had
+a key and that it was withdrawn.
+
+Issue **one key per tenant**. A key shared between clients turns one compromised
+site into all of them, and revoking it for one revokes it for all.
+
+### Why not an application password
+
+A WordPress application password, and any WordPress account, is scoped to a
+**user**. A credential that can create a draft can also edit every published
+post, read every draft on the site and enumerate users — none of which this
+plugin needs, and all of which whoever holds the credential now has.
+
+A connector key is scoped to a **capability** and carries no WordPress identity
+at all: `wp_get_current_user()` is 0 for a request authenticated this way, so
+every other REST route on the site, core's included, still refuses it. The two
+routes below are therefore the whole of what the key can reach.
+
+There is no fallback: a WordPress administrator logged in with every capability
+WordPress has cannot call these routes either.
 
 ## The rule it is built around
 
@@ -71,22 +110,40 @@ says which pieces of content are translations of each other.
 POST /wp-json/cadence/v1/content
 ```
 
-Requires the post type's own `create_posts` capability, and `publish_posts` as
-well when `status` is `publish`. Both are asked of the type, because WordPress
-derives a type's capabilities from its registration and a custom type's are not
-`post`'s.
+Requires a key carrying `content.publish`.
 
 ```json
 {
-  "external_id": "piece-2026-08-31-en",
-  "post_type":   "post",
-  "status":      "draft",
-  "title":       "A title",
-  "content":     "<p>Body.</p>"
+  "piece_id":  "piece-2026-08-31-en",
+  "language":  "en",
+  "declared":  { "multilingual": true, "languages": ["en", "de", "it"] },
+  "post_type": "post",
+  "status":    "draft",
+  "title":     "A title",
+  "content":   "<p>Body.</p>"
 }
 ```
 
-**`external_id` is what makes a retry safe.** An HTTP pipeline retries, and a
+`external_id` is accepted as the 0.1.0 spelling of `piece_id`.
+
+**`declared` is required, and the plugin verifies it rather than detecting it.**
+`multilingual` says whether this tenant is a multilingual client; `languages`
+says which languages the run covers. The plugin reports what the site actually
+has, and a disagreement is refused with `capability_mismatch`, naming which side
+disagreed — "WPML was removed from this site" and "the tenant record is wrong"
+are different incidents.
+
+The alternative is what this refuses to do: probe for WPML, find it absent,
+publish one language and report success. A multilingual client's run then ships
+a single language and nothing anywhere says so.
+
+A declared language this site cannot serve does **not** fail the request: the
+piece is placed and the language is reported in `observed_unsupported`, with its
+reason in `refused`. When it is *this piece's own* `language` that the site
+cannot serve there is nothing to place, and the request is refused with
+`unsupported_language`.
+
+**`piece_id` is what makes a retry safe.** An HTTP pipeline retries, and a
 request that timed out *after* WordPress committed the insert is
 indistinguishable, to the caller, from one that never ran. Retried without an
 identifier, it puts the same article on the site twice, published and visible to
@@ -97,6 +154,35 @@ post, and nothing is created.
 |---|---|---|
 | `201` | created | `created: true`, with `post_id` |
 | `200` | it already existed | `created: false`, same `post_id` |
+
+A successful answer reports **what the call did**, not merely that a row
+appeared:
+
+```json
+{
+  "ok": true,
+  "created": true,
+  "piece_id": "piece-2026-08-31-en",
+  "post_id": 412,
+  "placed": ["en"],
+  "linked": [],
+  "refused": [["it", "this site has no active WPML language it, so nothing was placed in it"]],
+  "observed_unsupported": ["it"]
+}
+```
+
+| Field | |
+|---|---|
+| `piece_id` | echoed back, so a reply can be bound to a request |
+| `post_id` | the integer WordPress assigned; the caller type-checks it before verifying anything else |
+| `placed` | the languages the piece landed in |
+| `linked` | the languages associated as translations. Always empty here: linking is the other endpoint's write |
+| `refused` | `[language, reason]` pairs — this connector's own refusals, not transport failures |
+| `observed_unsupported` | requested languages this site cannot serve |
+
+`placed` and `observed_unsupported` never overlap. `ok` and `created` are kept:
+`ok` is the only field a refusal shares, and `created` is what separates a
+creation from an idempotent repeat, which `placed` cannot say.
 
 A repeat under an identifier that is already used is not an update. A different
 body under the same identifier means the caller believes it is publishing
@@ -156,6 +242,8 @@ the reason is prose and changes freely.
 | `group_disagreement` | 409 | the site's group for a post is not the one named |
 | `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks |
 | `bad_request` | 400 | the content body is not the shape it claims |
+| `capability_mismatch` | 409 | the declaration and the site disagree about WPML |
+| `unsupported_language` | 409 | this site has no active WPML language for the piece itself |
 | `insert_failed` | 500 | WordPress refused the insert, or returned no id |
 
 ## Development

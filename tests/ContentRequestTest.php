@@ -23,11 +23,20 @@ final class ContentRequestTest extends TestCase {
 
     private function body(array $over = []): array {
         return array_merge([
-            'external_id' => 'piece-2026-08-31-en',
-            'post_type'   => 'post',
-            'status'      => 'draft',
-            'title'       => 'A title',
-            'content'     => '<p>Body.</p>',
+            'piece_id'  => 'piece-2026-08-31-en',
+            'language'  => 'en',
+            // DECLARED, NEVER DETECTED. No default here either: a body with no
+            // declaration is refused, and a helper that supplied one would make
+            // that refusal unreachable from this file.
+            // The stub site has the WPML hooks and serves `en`, so a
+            // monolingual declaration here would be the disagreement this
+            // connector refuses -- which LanguageDeclarationTest tests on
+            // purpose, and which is not what this file is about.
+            'declared'  => ['multilingual' => true, 'languages' => ['en']],
+            'post_type' => 'post',
+            'status'    => 'draft',
+            'title'     => 'A title',
+            'content'   => '<p>Body.</p>',
         ], $over);
     }
 
@@ -45,7 +54,7 @@ final class ContentRequestTest extends TestCase {
      * THE RETRY. Same body twice: one post, the same id, and the second answer
      * says plainly that it did not create anything.
      */
-    public function test_the_same_external_id_twice_creates_one_post(): void {
+    public function test_the_same_piece_id_twice_creates_one_post(): void {
         $first  = CadenceContentRequest::run($this->body());
         $second = CadenceContentRequest::run($this->body());
         $this->assertTrue($second['ok'], $second['reason'] ?? '');
@@ -74,15 +83,15 @@ final class ContentRequestTest extends TestCase {
      * THE ID IS SCOPED TO THIS PLUGIN'S OWN META KEY, and matched exactly. A
      * lookup that matched a prefix would let `piece-1` answer for `piece-10`.
      */
-    public function test_a_different_external_id_creates_a_second_post(): void {
-        CadenceContentRequest::run($this->body(['external_id' => 'piece-1']));
-        $r = CadenceContentRequest::run($this->body(['external_id' => 'piece-10']));
+    public function test_a_different_piece_id_creates_a_second_post(): void {
+        CadenceContentRequest::run($this->body(['piece_id' => 'piece-1']));
+        $r = CadenceContentRequest::run($this->body(['piece_id' => 'piece-10']));
         $this->assertTrue($r['created']);
         $this->assertCount(2, WpStub::$inserted);
     }
 
-    public function test_the_external_id_is_recorded_on_the_post_it_created(): void {
-        $r = CadenceContentRequest::run($this->body(['external_id' => 'piece-7']));
+    public function test_the_piece_id_is_recorded_on_the_post_it_created(): void {
+        $r = CadenceContentRequest::run($this->body(['piece_id' => 'piece-7']));
         $this->assertSame('piece-7', WpStub::$meta[$r['post_id']]['_cadence_external_id'] ?? null);
     }
 
@@ -127,13 +136,16 @@ final class ContentRequestTest extends TestCase {
 
     public function test_refuses_a_body_whose_shape_it_cannot_read(): void {
         foreach ([
-            'no external_id'      => ['external_id' => null],
-            'external_id is int'  => ['external_id' => 7],
-            'external_id is blank'=> ['external_id' => '   '],
+            'no piece_id'         => ['piece_id' => null],
+            'piece_id is int'     => ['piece_id' => 7],
+            'piece_id is blank'   => ['piece_id' => '   '],
             'title is an array'   => ['title' => ['a']],
             'content is an int'   => ['content' => 3],
             'post_type is an int' => ['post_type' => 1],
             'status is an array'  => ['status' => ['draft']],
+            'no language'         => ['language' => null],
+            'language is an int'  => ['language' => 7],
+            'no declaration'      => ['declared' => null],
         ] as $why => $over) {
             WpStub::reset();
             WpStub::$capabilities = ['publish_posts' => [null], 'edit_posts' => [null]];
@@ -182,7 +194,7 @@ final class ContentRequestTest extends TestCase {
      * leave to a comment, so the mechanism is asserted instead.
      */
     public function test_the_identifier_travels_in_the_insert_call(): void {
-        CadenceContentRequest::run($this->body(['external_id' => 'piece-9']));
+        CadenceContentRequest::run($this->body(['piece_id' => 'piece-9']));
         $this->assertSame('piece-9',
             WpStub::$inserted[0]['meta_input'][CadenceContentRequest::META] ?? null);
     }
@@ -233,5 +245,99 @@ final class ContentRequestTest extends TestCase {
         $r = CadenceContentRequest::run($this->body());
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertTrue($r['created']);
+    }
+
+    /**
+     * WHAT THE CALL DID, in the six fields the caller's verifier reads.
+     *
+     * `{ok, created, post_id}` answers "did a row appear". These answer "is the
+     * thing I asked for now true", and the two differ in exactly the cases
+     * worth auditing -- which is why the verifier on the other side of the wire
+     * had nothing to parse until now.
+     */
+    public function test_a_created_post_reports_what_it_placed(): void {
+        $r = CadenceContentRequest::run($this->body(['piece_id' => 'p-1']));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame([
+            'piece_id'             => 'p-1',
+            'post_id'              => $r['post_id'],
+            'placed'               => ['en'],
+            'linked'               => [],
+            'refused'              => [],
+            'observed_unsupported' => [],
+        ], $r['report']);
+        // AN INTEGER, which is what WordPress named it. The caller's verifier
+        // type-checks this before it verifies anything, so a stringified id
+        // fails earlier and less legibly than a wrong one.
+        $this->assertIsInt($r['report']['post_id']);
+    }
+
+    /** The idempotent repeat reports the same placement, and `created` false. */
+    public function test_an_idempotent_repeat_reports_the_post_that_is_already_there(): void {
+        $first  = CadenceContentRequest::run($this->body());
+        $second = CadenceContentRequest::run($this->body());
+        $this->assertFalse($second['created']);
+        $this->assertSame($first['report'], $second['report']);
+        $this->assertSame(['en'], $second['report']['placed'],
+            'a piece that is on the site was reported as not placed');
+    }
+
+    /**
+     * PARTIAL LANGUAGE SUPPORT IS SAID OUT LOUD. The run asks for three
+     * languages, the site serves two: the piece is placed, and the language
+     * nobody can serve is named with its reason rather than dropped.
+     *
+     * Without this the client discovers it on their own site.
+     */
+    public function test_a_language_the_site_cannot_serve_is_reported_not_dropped(): void {
+        WpStub::$active_languages = ['en' => [], 'de' => []];
+        $r = CadenceContentRequest::run($this->body([
+            'declared' => ['multilingual' => true, 'languages' => ['en', 'de', 'it']],
+        ]));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame(['en'], $r['report']['placed']);
+        $this->assertSame(['it'], $r['report']['observed_unsupported']);
+        $this->assertCount(1, $r['report']['refused']);
+        $this->assertSame('it', $r['report']['refused'][0][0]);
+        $this->assertNotSame('', $r['report']['refused'][0][1]);
+        // DISJOINT. A report that both places and disclaims a language is one
+        // the verifier on the other side refuses outright.
+        $this->assertSame([], array_intersect($r['report']['placed'], $r['report']['observed_unsupported']));
+    }
+
+    /** `linked` is empty and says so: linking is the other route's write. */
+    public function test_this_route_never_reports_a_link_it_did_not_make(): void {
+        $r = CadenceContentRequest::run($this->body());
+        $this->assertSame([], $r['report']['linked']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /** A refusal reports no placement at all, and writes nothing. */
+    public function test_a_declaration_that_disagrees_with_the_site_places_nothing(): void {
+        WpStub::$wpml_reads  = false;
+        WpStub::$wpml_writes = false;
+        $r = CadenceContentRequest::run($this->body([
+            'declared' => ['multilingual' => true, 'languages' => ['en']],
+        ]));
+        $this->assertFalse($r['ok']);
+        $this->assertSame('capability_mismatch', $r['code']);
+        $this->assertArrayNotHasKey('report', $r);
+        $this->assertSame([], WpStub::$inserted);
+    }
+
+    /**
+     * `external_id` IS WHAT 0.1.0 CALLED IT, and 0.1.0 is installed on sites
+     * this repository does not control. Accepted, and answered as `piece_id`.
+     */
+    public function test_the_released_field_name_still_identifies_a_piece(): void {
+        $body = $this->body();
+        $body['external_id'] = $body['piece_id'];
+        unset($body['piece_id']);
+
+        $first = CadenceContentRequest::run($body);
+        $this->assertTrue($first['created']);
+        $this->assertSame('piece-2026-08-31-en', $first['report']['piece_id']);
+        $this->assertFalse(CadenceContentRequest::run($this->body())['created'],
+            'the same piece under the two spellings became two posts');
     }
 }

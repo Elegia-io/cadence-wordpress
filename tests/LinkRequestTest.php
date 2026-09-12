@@ -261,6 +261,16 @@ final class LinkRequestTest extends TestCase {
                 $this->twoPosts(9);
                 return $this->plan(['trid' => 5, 'create_group' => false]);
             },
+            'source_group_unset' => function () {
+                $this->twoPosts(null);
+                WpStub::$wpml_write_detaches = [1];
+                return $this->plan(['trid' => null, 'create_group' => true]);
+            },
+            'source_group_unreadable' => function () {
+                $this->twoPosts(null);
+                WpStub::$wpml_write_unreadable = [1];
+                return $this->plan(['trid' => null, 'create_group' => true]);
+            },
             'wpml_unavailable' => function () {
                 $this->twoPosts(null);
                 WpStub::$wpml_reads = false;
@@ -269,19 +279,26 @@ final class LinkRequestTest extends TestCase {
             },
         ];
 
+        // EVERY REFUSAL WRITES NOTHING, EXCEPT THE TWO THAT CANNOT. The create
+        // path has no group id until its own first write, so its two refusals
+        // are only reachable with the source already written. Naming them here
+        // is what makes a THIRD refusal that writes a failure of this test
+        // rather than a number somebody adjusted.
+        $wrote_the_source = ['source_group_unset' => 1, 'source_group_unreadable' => 1];
+
         $seen = [];
         foreach ($causes as $expected => $arrange) {
             WpStub::reset();
             $r = CadenceLinkRequest::run($arrange());
             $this->assertFalse($r['ok'], $expected . ' was supposed to be refused');
-            $this->assertSame([], WpStub::$writes, $expected);
+            $this->assertCount($wrote_the_source[$expected] ?? 0, WpStub::$writes, $expected);
             $this->assertSame($expected, $r['code'] ?? null, $expected);
             $seen[] = $r['code'];
         }
-        // Seven causes, seven codes: a mapping that collapsed two of them would
+        // Nine causes, nine codes: a mapping that collapsed two of them would
         // still pass every assertion above if both expectations were changed
         // together, and the caller could no longer tell them apart.
-        $this->assertCount(7, array_unique($seen));
+        $this->assertCount(9, array_unique($seen));
 
         // AND THE PUBLISHED LIST IS THAT LIST. `REFUSAL_CODES` is what the REST
         // layer maps to HTTP statuses; if a seventh refusal is added here and
@@ -436,21 +453,111 @@ final class LinkRequestTest extends TestCase {
         $this->assertSame([], $r['report']['linked']);
     }
 
+    // ---- the create path --------------------------------------------------
+    //
+    // This route used to write a null trid for EVERY element, and WPML's own
+    // documentation says a falsy trid creates a new trid for THAT element: the
+    // site ended with one group per post, nothing was linked, and `written: 2`
+    // said the same thing it says now. These pin the ordering that fixes it and
+    // the two ways it can stop half-way. Every one of them runs against the
+    // stub, which models WPML's DOCUMENTATION -- including the undocumented
+    // part, that a read in the same request sees the trid the write invented.
+    // None of it is an observation of WPML 4.x.
+
     /**
-     * `create_group` writes a null trid for every element, and WPML's own
-     * documentation says a falsy trid creates a NEW trid for THAT element. So
-     * the site ends with two groups of one and nothing is linked -- which the
-     * report says and `written: 2` does not. Tracked as Elegia-io/cadence#1310;
-     * this test pins the REPORTING, not the linking, and is expected to change
-     * when the write does.
+     * THE GROUP IS LEARNED FROM THE FIRST WRITE, NOT NAMED BY THE PLAN. The
+     * source goes first with no trid, because nothing else can bring the group
+     * into existence; then the id WPML chose is read back out of the site and
+     * every translation is written under THAT. The assertion that matters is
+     * the last one: both posts end up in one group, which is the thing a group
+     * of one per post looks identical to in `written`.
      */
-    public function test_the_create_group_path_reports_the_links_it_did_not_make(): void {
+    public function test_the_create_path_learns_its_group_from_its_own_first_write(): void {
         $this->twoPosts(null);
         $r = CadenceLinkRequest::run($this->plan(
             ['trid' => null, 'create_group' => true, 'piece_id' => 'piece-1']));
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertSame(2, $r['written']);
+        $this->assertCount(2, WpStub::$writes);
+
+        // The source first, with no trid -- there was no id to send.
+        $this->assertSame(1, WpStub::$writes[0]['element_id']);
+        $this->assertNull(WpStub::$writes[0]['trid']);
+
+        // The translation second, under the id the site now holds for the
+        // source. Compared against the site rather than against 900: the
+        // literal is the stub's counter, and what this pins is that the two
+        // values are the same one.
+        $group = WpStub::$posts[1]['trid'];
+        $this->assertNotNull($group);
+        $this->assertSame(2, WpStub::$writes[1]['element_id']);
+        $this->assertSame($group, WpStub::$writes[1]['trid']);
+
+        $this->assertSame($group, WpStub::$posts[2]['trid']);
+        $this->assertSame(['de'], $r['report']['linked']);
+    }
+
+    /**
+     * THE WRITE LANDED AND CREATED NO GROUP, so there is nothing for the
+     * translations to join and they are not written. The refusal carries the
+     * count of what it already did, and the report says `linked: []` -- a bare
+     * `ok: false` would tell the caller's ledger that a run which changed the
+     * site changed nothing.
+     *
+     * Nothing was destroyed: the create path refuses unless every post is in no
+     * group, so the source had no relations to lose and post 2 is untouched.
+     */
+    public function test_a_source_left_in_no_group_by_its_own_write_stops_before_the_translations(): void {
+        $this->twoPosts(null);
+        WpStub::$wpml_write_detaches = [1];
+        $r = CadenceLinkRequest::run($this->plan(
+            ['trid' => null, 'create_group' => true, 'piece_id' => 'piece-1']));
+        $this->assertFalse($r['ok']);
+        $this->assertSame('source_group_unset', $r['code']);
+        $this->assertSame(1, $r['written']);
+        $this->assertCount(1, WpStub::$writes);
+        $this->assertSame(1, WpStub::$writes[0]['element_id']);
+        $this->assertNull(WpStub::$posts[2]['trid']);
         $this->assertSame([], $r['report']['linked']);
+        // ONE REFUSAL, ONE CLAIM: this reason says the site answered and the
+        // answer was "no group". It must not also allege an unreadable read,
+        // which is the other branch and did not fire.
+        $this->assertStringContainsString('puts it in no group', $r['reason']);
+        $this->assertStringNotContainsString('no usable', $r['reason']);
+    }
+
+    /**
+     * THE SOURCE'S GROUP CANNOT BE READ BACK AT ALL, which is not the same as
+     * "no group" and is the one state that must never be written over. Same
+     * half-applied shape, different claim.
+     */
+    public function test_a_source_whose_group_cannot_be_read_back_stops_before_the_translations(): void {
+        $this->twoPosts(null);
+        WpStub::$wpml_write_unreadable = [1];
+        $r = CadenceLinkRequest::run($this->plan(
+            ['trid' => null, 'create_group' => true, 'piece_id' => 'piece-1']));
+        $this->assertFalse($r['ok']);
+        $this->assertSame('source_group_unreadable', $r['code']);
+        $this->assertSame(1, $r['written']);
+        $this->assertCount(1, WpStub::$writes);
+        $this->assertNull(WpStub::$posts[2]['trid']);
+        $this->assertSame([], $r['report']['linked']);
+        $this->assertStringContainsString('no usable language details', $r['reason']);
+        $this->assertStringNotContainsString('puts it in no group', $r['reason']);
+    }
+
+    /**
+     * A half-applied create with no piece named carries the count and no
+     * report, for the reason the success path does: there is nothing for a
+     * ledger to file a report under.
+     */
+    public function test_a_half_applied_create_naming_no_piece_still_carries_its_count(): void {
+        $this->twoPosts(null);
+        WpStub::$wpml_write_detaches = [1];
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
+        $this->assertSame(['ok' => false, 'code' => 'source_group_unset',
+                           'reason' => $r['reason'], 'written' => 1], $r);
+        $this->assertArrayNotHasKey('report', $r);
     }
 
     /**

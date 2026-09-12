@@ -80,11 +80,26 @@ final class CadenceRestRoute {
         }
 
         $code = $result['code'] ?? null;
-        return ['status' => self::STATUS[$code] ?? 500, 'body' => array_filter([
+        $body = array_filter([
             'ok'     => false,
             'code'   => $code,
             'reason' => $result['reason'] ?? null,
-        ], static fn ($v) => $v !== null)];
+        ], static fn ($v) => $v !== null);
+        // A REFUSAL THAT WROTE SOMETHING SAYS SO ON THE WIRE. Almost every
+        // refusal in this plugin wrote nothing, and for those there is nothing
+        // here to carry; the linking route's create path has exactly one point
+        // past which it can refuse with the source already written, and a body
+        // that dropped the count and the report would tell the caller's ledger
+        // that a run which changed the site changed nothing. Conditional on the
+        // key being present rather than on the code, so the two stay one fact:
+        // whoever stops setting `written` stops sending it.
+        if (array_key_exists('written', $result)) {
+            $body['written'] = $result['written'];
+        }
+        if (isset($result['report']) && is_array($result['report'])) {
+            $body = array_merge($body, $result['report']);
+        }
+        return ['status' => self::STATUS[$code] ?? 500, 'body' => $body];
     }
 
     /**
@@ -102,6 +117,14 @@ final class CadenceRestRoute {
      * 409 -- the request disagrees with this site; re-read and it may not.
      * 503 -- the site cannot do this at all; nothing about the request is wrong.
      * 500 -- this server tried and failed.
+     *
+     * `source_group_unset` and `source_group_unreadable` are 500s and NOT 409s,
+     * though a re-read is the caller's next step for both. A 409 invites the
+     * same request again, and the likeliest cause of either is that WPML on this
+     * site does not answer a language-details read with the trid a write in the
+     * same request just invented -- in which case every create fails the same
+     * way and a retrying caller loops. "This server tried and failed" is also
+     * simply what happened: it wrote the source and could not finish.
      */
     public const STATUS = [
         'bad_plan'                   => 400,
@@ -114,6 +137,8 @@ final class CadenceRestRoute {
         'group_unknown'              => 409,
         'already_grouped'            => 409,
         'group_disagreement'         => 409,
+        'source_group_unset'         => 500,
+        'source_group_unreadable'    => 500,
         'post_missing'               => 409,
         'identifier_mismatch'        => 409,
         'revision_mismatch'          => 409,

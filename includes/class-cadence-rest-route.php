@@ -22,7 +22,7 @@ final class CadenceRestRoute {
      * which reads the header directly and fails the moment a release bumps one
      * without the other, so drift is caught rather than merely discouraged.
      */
-    public const VERSION = '0.4.0';
+    public const VERSION = '0.5.0';
 
     /**
      * THE REPLY'S OWN SHAPE, as a number the spine can compare with `<=`

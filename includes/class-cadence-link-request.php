@@ -84,7 +84,7 @@ final class CadenceLinkRequest {
         'source_group_unreadable',
         'wpml_unavailable',
         'post_out_of_scope',
-        'post_other_key',
+        'link_post_type_out_of_scope',
     ];
 
     /** A bare lowercase WPML language code: `de`, `pt-br`, `zh-hant-hk`. */
@@ -108,6 +108,14 @@ final class CadenceLinkRequest {
      * both.
      *
      * @param array $plan the JSON body, already decoded
+     * @param list<string>|null $post_types the post types the presenting key
+     *                    reaches, or null for a key issued before the field
+     *                    existed -- which links in any type, exactly as it did
+     *                    before this plugin was updated under it. REQUIRED and
+     *                    without a default, unlike `$key_id` below: null here
+     *                    is the WIDE case, so a call site that forgot it would
+     *                    read as a key that named no type and the scope would
+     *                    quietly stop applying at this route again.
      * @param string|null $key_id the public id of the presenting key. Null is
      *                    a caller this route cannot name, and it reaches only
      *                    the posts that carry no key stamp -- every post that
@@ -117,7 +125,7 @@ final class CadenceLinkRequest {
      * @return array{ok: bool, code?: string, reason?: string, written?: int,
      *               report?: array}
      */
-    public static function run(array $plan, ?string $key_id = null): array {
+    public static function run(array $plan, ?array $post_types, ?string $key_id = null): array {
         // BEFORE ANYTHING ELSE, INCLUDING THE PLAN'S OWN SHAPE: a server that
         // cannot perform this request at all has no standing to tell the caller
         // its request is malformed.
@@ -167,8 +175,15 @@ final class CadenceLinkRequest {
         // WHAT IT NARROWS. `translation.link` used to authorise linking ANY
         // post on the site, because the per-post `current_user_can('edit_post')`
         // it replaced had no user to ask about. It now reaches only the posts
-        // this plugin created, and of those only the ones THIS key created --
-        // two predicates, refused separately, because they are two facts.
+        // this plugin created, and of those only the ones THIS key created.
+        //
+        // ONE REFUSAL OVER BOTH, and that is the correction rather than the
+        // original design: they were refused separately, as two facts, until
+        // the PAIR of codes turned out to be a provenance oracle -- any id on
+        // the site sorted into another tenant's Cadence posts or everything
+        // else, behind a credential this route verifies no signature for.
+        // `CadenceKey::reaches` asks the conjunction, so there is one branch
+        // and the refusal still names what fired. Do not re-split them.
         //
         // AFTER EVERY `bad_plan` AND BEFORE EVERY OTHER CODE. A body this
         // cannot read is refused on its shape whichever posts it names, so
@@ -184,38 +199,122 @@ final class CadenceLinkRequest {
         // group it names, and whether the site agrees -- are interpreted only
         // over posts this key may act on.
         //
-        // TWO QUESTIONS, TWO CODES, AND NEITHER SENTENCE COVERS THE OTHER. A
-        // post nobody here published and a post a DIFFERENT key published are
-        // different facts about the caller's entitlement, and a single refusal
-        // spanning both would assert whichever one did not happen. Each branch
-        // below says only what its own predicate answered.
+        // ONE QUESTION, ONE CODE, AND THE MERGE IS THE POINT. This asks
+        // whether the presenting key REACHES the post, which is a single fact
+        // about this caller's entitlement, and the refusal asserts exactly that
+        // and nothing finer.
+        //
+        // IT USED TO BE TWO. `post_out_of_scope` said "not a piece this
+        // connector published" -- absent and not-ours together, which
+        // `get_post_meta` cannot tell apart anyway -- and `post_other_key` said
+        // "ours, but another key's". The second code therefore partitioned the
+        // id space into "another tenant's Cadence post" and everything else,
+        // and a key holding `translation.link` could walk it one 403 at a time.
+        // What that discloses is PROVENANCE -- which of two tenants on one site
+        // published a given post -- and per-key scope was added to protect
+        // precisely that. This route verifies no attestation, so the walk needs
+        // only a leaked connector key.
+        //
+        // AND IT IS NOT ONE SENTENCE OVER TWO DENY CLASSES, which is the defect
+        // the rest of this vocabulary avoids. There is one predicate here,
+        // `CadenceKey::reaches`, and one branch; the sentence names the branch
+        // that fired and asserts no access that never happened. Merging the
+        // MESSAGES while keeping two predicates would have been the defect;
+        // merging the QUESTION is what removes the oracle.
+        //
+        // WHAT A LEGITIMATE CALLER LOSES: it can no longer read "republish this
+        // through /content" against "present the key that owns it" off the
+        // code. It keeps the id it sent, the fact that this credential does not
+        // reach it, and the operator's own record of what it published. The
+        // one case that genuinely differs -- a rotated key over its own older
+        // pieces -- is answered by the admin screen, on the site, by someone
+        // entitled to both.
+        //
+        // WHAT IS STILL WIDE, deliberately, and measured rather than hidden: a
+        // post carrying no key stamp is admitted to ANY key that reaches it,
+        // because every piece published before the stamp existed carries none
+        // and refusing them would break every link over content already live.
+        // See `CadenceKey::created_by`. That set never grows, and
+        // `LinkRequestTest::test_a_second_keys_reach_over_pre_stamp_posts_is_a_measured_gap`
+        // asserts the gap rather than asserting it away.
         foreach ($posts as $p) {
-            if (!CadenceKey::scope_admits($p['post_id'])) {
-                // The id and the claim, and nothing else. Not the identifier
-                // the site stores for its own posts, not a title, not a status
-                // -- the same line `identifier_mismatch` draws one route over,
-                // for the same reason: a refusal that spelled out what the site
-                // holds would hand it to any caller holding a key.
+            if (!CadenceKey::reaches($p['post_id'], $key_id)) {
+                // The id and the claim, and nothing else. Not whether the site
+                // has such a post, not whether this connector published it, not
+                // the key id it carries, not its identifier, title, type or
+                // status -- the same line `identifier_mismatch` draws one route
+                // over, for the same reason: a refusal that spelled out what
+                // the site holds would hand it to any caller holding a key.
                 return ['ok' => false, 'code' => 'post_out_of_scope', 'reason' => sprintf(
-                    'post %d is not a piece this connector published, and a key is scoped '
-                    . 'to this connector\'s own posts; nothing was linked',
+                    'post %d is not one this key may link; nothing was linked',
                     $p['post_id'])];
             }
-            // AND IT IS THIS KEY'S OWN PIECE, not merely one of Cadence's.
-            // `scope_admits` is the whole connector's scope, which on a site
-            // holding two keys -- two brands, or an agency serving two tenants
-            // -- is wider than the credential asking. A post carrying no key
-            // stamp predates the stamp and is admitted: see
-            // `CadenceKey::created_by` for why refusing those would be the
-            // worse outcome.
-            if (!CadenceKey::created_by($p['post_id'], $key_id)) {
-                // The id and the claim. NOT the key id the post carries, which
-                // is another tenant's identifier and is not this caller's to
-                // read off a refusal.
-                return ['ok' => false, 'code' => 'post_other_key', 'reason' => sprintf(
-                    'post %d was published through a different connector key, and a key is '
-                    . 'scoped to its own pieces; nothing was linked',
-                    $p['post_id'])];
+            // AND THE POST IS IN A TYPE THIS KEY STILL REACHES.
+            //
+            // WHY THE LINKING ROUTE NEEDS IT AT ALL, given that it writes no
+            // text. The two predicates above stop at the same place the
+            // replace route's do: `created_by` admits every post made before
+            // the key stamp existed, and over that set two keys on one site do
+            // not separate. A key scoped to `post` could therefore attach an
+            // unstamped `page` -- another tenant's, or one an operator has
+            // since put out of this key's reach -- into a translation group,
+            // and WPML's own action DESTROYS the relations a post already had
+            // when it is handed a group that is not its own. The act is
+            // narrower than a rewrite; the damage it can do to a relation a
+            // human made by hand is not.
+            //
+            // ITS OWN CODE, NOT `existing_post_type_out_of_scope`. That one is
+            // asked of a PIECE the caller named by identifier, on the two
+            // routes that create or overwrite text, and its sentence ends
+            // "nothing was written". This is asked of a POST the caller named
+            // by id, and ends "nothing was linked". A caller matching on the
+            // code to decide what did not happen would otherwise be told about
+            // an act it never asked for -- the same reason `replace_other_key`
+            // is not `post_other_key` over the one predicate they share.
+            //
+            // LAST OF THE THREE, AND THE ORDER IS THE GUARD. The linking route
+            // is asked about a bare post ID -- it holds no identifier for the
+            // post the way `/content/replace` does, so it has no
+            // `identifier_mismatch` to hide behind and this is the ONLY check
+            // here that can answer a question about the post's own type. Run
+            // first, it would answer "is post N inside this key's types" for
+            // every post id on the site, which is the post's type by another
+            // name and a type oracle over posts the caller may not touch at
+            // all. Run last, it is reachable only for a post that already
+            // passed the entitlement check -- one this key published, or an
+            // unstamped one it inherits -- so the only type it can be made to
+            // speak about is a post the caller already reaches. (ONE check,
+            // not two: `reaches` is the conjunction of the two predicates,
+            // merged because the pair of codes was an oracle.)
+            //
+            // THE POSITION IS PINNED, not merely argued here: move this block
+            // above the reach check and
+            // `LinkRequestTest::test_the_type_scope_cannot_be_asked_about_a_post_this_key_does_not_reach`
+            // fails, because two posts outside the key's reach stop answering
+            // with the same refusal.
+            //
+            // `null` names no type and means ANY, so a key issued before the
+            // field existed links what it always linked.
+            // AN ABSENT POST IS NOT A TYPE QUESTION. `get_post_type()` answers
+            // `false` for an id with no row, and `false` is in no key's type
+            // list -- so a stamped post that has since been deleted answered
+            // "this key does not reach that type" and sent an operator to widen
+            // a key over a post that is simply gone. `validate_against_site`
+            // below says `does not exist`, which is the true sentence, and it
+            // is what a key naming no types has always got for the same input.
+            // Nothing leaks by letting it through: reaching the type check at
+            // all means the entitlement check already said yes.
+            $type = get_post_type($p['post_id']);
+            if ($post_types !== null && $type !== false
+                    && !in_array($type, $post_types, true)) {
+                // The id the caller sent and the key's OWN scope, which is the
+                // caller's to know -- and never the type the post is in, which
+                // is the site's. That is the same line the two refusals above
+                // draw, and the reason this one may name a list at all.
+                return ['ok' => false, 'code' => 'link_post_type_out_of_scope', 'reason' => sprintf(
+                    'post %d is of a type this key does not reach; this key is scoped to '
+                    . '%s, and nothing was linked',
+                    $p['post_id'], implode(', ', $post_types))];
             }
         }
 

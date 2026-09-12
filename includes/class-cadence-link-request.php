@@ -175,8 +175,15 @@ final class CadenceLinkRequest {
         // WHAT IT NARROWS. `translation.link` used to authorise linking ANY
         // post on the site, because the per-post `current_user_can('edit_post')`
         // it replaced had no user to ask about. It now reaches only the posts
-        // this plugin created, and of those only the ones THIS key created --
-        // two predicates, refused separately, because they are two facts.
+        // this plugin created, and of those only the ones THIS key created.
+        //
+        // ONE REFUSAL OVER BOTH, and that is the correction rather than the
+        // original design: they were refused separately, as two facts, until
+        // the PAIR of codes turned out to be a provenance oracle -- any id on
+        // the site sorted into another tenant's Cadence posts or everything
+        // else, behind a credential this route verifies no signature for.
+        // `CadenceKey::reaches` asks the conjunction, so there is one branch
+        // and the refusal still names what fired. Do not re-split them.
         //
         // AFTER EVERY `bad_plan` AND BEFORE EVERY OTHER CODE. A body this
         // cannot read is refused on its shape whichever posts it names, so
@@ -274,19 +281,32 @@ final class CadenceLinkRequest {
             // every post id on the site, which is the post's type by another
             // name and a type oracle over posts the caller may not touch at
             // all. Run last, it is reachable only for a post that already
-            // passed both entitlement checks -- one this key published, or an
+            // passed the entitlement check -- one this key published, or an
             // unstamped one it inherits -- so the only type it can be made to
-            // speak about is a post the caller already reaches.
+            // speak about is a post the caller already reaches. (ONE check,
+            // not two: `reaches` is the conjunction of the two predicates,
+            // merged because the pair of codes was an oracle.)
             //
             // THE POSITION IS PINNED, not merely argued here: move this block
-            // above either check and
+            // above the reach check and
             // `LinkRequestTest::test_the_type_scope_cannot_be_asked_about_a_post_this_key_does_not_reach`
             // fails, because two posts outside the key's reach stop answering
             // with the same refusal.
             //
             // `null` names no type and means ANY, so a key issued before the
             // field existed links what it always linked.
-            if ($post_types !== null && !in_array(get_post_type($p['post_id']), $post_types, true)) {
+            // AN ABSENT POST IS NOT A TYPE QUESTION. `get_post_type()` answers
+            // `false` for an id with no row, and `false` is in no key's type
+            // list -- so a stamped post that has since been deleted answered
+            // "this key does not reach that type" and sent an operator to widen
+            // a key over a post that is simply gone. `validate_against_site`
+            // below says `does not exist`, which is the true sentence, and it
+            // is what a key naming no types has always got for the same input.
+            // Nothing leaks by letting it through: reaching the type check at
+            // all means the entitlement check already said yes.
+            $type = get_post_type($p['post_id']);
+            if ($post_types !== null && $type !== false
+                    && !in_array($type, $post_types, true)) {
                 // The id the caller sent and the key's OWN scope, which is the
                 // caller's to know -- and never the type the post is in, which
                 // is the site's. That is the same line the two refusals above

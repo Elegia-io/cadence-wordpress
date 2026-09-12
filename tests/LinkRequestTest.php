@@ -903,6 +903,41 @@ final class LinkRequestTest extends TestCase {
      * altogether would pass the pin above, and a plan naming an id this site
      * has no post for would be written rather than refused.
      */
+    /**
+     * AND A TYPED KEY GETS THE SAME SENTENCE, which it did not until 2026-09-12.
+     *
+     * `get_post_type()` answers `false` for an id with no row, and `false` is in no
+     * key's type list -- so a stamped post since deleted was refused
+     * `link_post_type_out_of_scope` to a key scoped to `post`, and `bad_plan ... does
+     * not exist` to a key scoped to nothing. Same input, two different sentences, and
+     * the first one told an operator to widen a key over a post that is gone.
+     *
+     * Nothing leaked: reaching the type check means the entitlement check already said
+     * yes. It was the wrong repair, which on a route whose refusals are the whole
+     * operator interface is the defect worth fixing. Found by cross-model review.
+     */
+    public function test_an_absent_post_is_not_reported_as_a_type_this_key_cannot_reach(): void {
+        WpStub::add_post(2, 'page', 'de', null);
+        $this->ours(2);
+        WpStub::$meta[7][CadenceContentRequest::META] = 'piece-7';
+        $plan = $this->plan(['trid' => null, 'create_group' => true]);
+        $plan['source']['post_id'] = 7;
+
+        // `page`, because post 2 IS a page and must pass its own type check -- the
+        // post under test is the absent one, and a fixture where another post fires
+        // first would prove nothing about it.
+        $typed = CadenceLinkRequest::run($plan, ['page']);
+        $untyped = CadenceLinkRequest::run($plan, null);
+
+        $this->assertSame('bad_plan', $typed['code'], $typed['reason'] ?? '');
+        $this->assertStringContainsString('does not exist', $typed['reason']);
+        // The two keys differ only in their type list, and the post is absent for
+        // both: one input, one answer.
+        $this->assertSame($untyped['code'], $typed['code']);
+        $this->assertSame($untyped['reason'], $typed['reason']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
     public function test_a_post_this_key_reaches_is_still_told_the_site_has_no_such_post(): void {
         WpStub::add_post(2, 'page', 'de', null);
         $this->ours(2);
@@ -989,10 +1024,23 @@ final class LinkRequestTest extends TestCase {
      * rather than asserting it away, so the day it is closed this fails and
      * someone reads the denominator below before deciding.
      *
-     * THE DENOMINATOR. Of the three predicates the connector scopes a key by --
-     * `scope_admits`, `created_by`, and the key's post-type list -- two
-     * separate two keys over a stamped post and NONE separates them over an
-     * unstamped one on this route: `translation.link` carries no type list.
+     * THE DENOMINATOR, corrected 2026-09-12 after the merge that falsified it.
+     * Of the three predicates the connector scopes a key by -- `scope_admits`,
+     * `created_by`, and the key's post-type list -- the first two separate two
+     * keys over a stamped post and NEITHER separates them over an unstamped
+     * one. The third does, now: this route gained the key's post-type list in
+     * the same batch, so an unstamped `page` is refused to a key scoped to
+     * `post`. This test drives the widest case (`$post_types = null`), which is
+     * the one with nothing left to separate the keys.
+     *
+     * So the gap is narrower than its first statement claimed, and it is still
+     * a gap: two keys sharing a post type still reach each other's pre-stamp
+     * pieces, and a key naming no types reaches all of them. The residual the
+     * type list adds is a type-membership oracle over that same set -- "an
+     * unstamped post outside my types" is distinguishable from "absent or
+     * another key's" -- which is strictly narrower than what the gap already
+     * permits, since a caller that can LINK those posts can learn their types
+     * by linking them.
      * The set is every piece a site published before the stamp existed; it
      * never grows, because `/content` has stamped every insert since, and it
      * shrinks as those pieces are replaced. It is empty on a site that has only

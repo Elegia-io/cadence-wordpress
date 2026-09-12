@@ -23,14 +23,17 @@ use PHPUnit\Framework\TestCase;
  */
 final class ReplaceRequestTest extends TestCase {
 
+    /** The helper's "sign this body with the suite's key" sentinel, distinct from any header. */
+    private const SIGN = "\0sign";
+
     protected function setUp(): void {
         WpStub::reset();
     }
 
     /** Publish a piece the way the pipeline does, and hand back what it was told. */
-    private function publish(array $over = [], ?string $key_id = null,
+    private function publish(array $over = [], ?string $key_id = CadenceAttest::KEY_ID,
                              ?array $post_types = null): array {
-        $r = CadenceContentRequest::run(array_merge([
+        $body = array_merge([
             'piece_id' => 'piece-1',
             'language'    => 'en',
             // The stub site has the WPML hooks and serves `en` (see
@@ -42,7 +45,8 @@ final class ReplaceRequestTest extends TestCase {
             'status'      => 'publish',
             'title'       => 'The original',
             'content'     => '<p>Original body.</p>',
-        ], $over),
+        ], $over);
+        $r = CadenceContentRequest::run($body,
             // A KEY HOLDING `content.replace`, throughout this file. What is
             // under test here is the rewrite itself -- the disclosure gate
             // that withholds the revision from a key that could never act on
@@ -59,7 +63,8 @@ final class ReplaceRequestTest extends TestCase {
             // as the identifier, so a test that wants a post belonging to a
             // named key gets one the way the pipeline makes it rather than by
             // writing the meta row by hand.
-            $key_id);
+            $key_id,
+            CadenceAttest::header('/content', CadenceAttest::fields('/content', $body), $key_id));
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         return $r;
     }
@@ -74,8 +79,14 @@ final class ReplaceRequestTest extends TestCase {
      * meaningful against a post that carries a stamp, which `publish` does not
      * write. The tests that are about the scope pass both explicitly.
      */
-    private function replace(array $body, ?array $post_types = null, ?string $key_id = null): array {
-        return CadenceReplaceRequest::run($body, $post_types, $key_id);
+    private function replace(array $body, ?array $post_types = null,
+                             ?string $key_id = CadenceAttest::KEY_ID,
+                             $attestation = self::SIGN): array {
+        return CadenceReplaceRequest::run($body, $post_types, $key_id,
+            $attestation === self::SIGN
+                ? CadenceAttest::header('/content/replace',
+                    CadenceAttest::fields('/content/replace', $body), $key_id)
+                : $attestation);
     }
 
     /** The statements `$wpdb` was given, in order. */
@@ -131,7 +142,7 @@ final class ReplaceRequestTest extends TestCase {
      */
     public function test_the_revision_is_not_recorded_on_the_post(): void {
         $published = $this->publish();
-        $this->assertSame([CadenceContentRequest::META],
+        $this->assertSame([CadenceContentRequest::META, CadenceContentRequest::KEY_META],
             array_keys(WpStub::$meta[$published['post_id']]),
             'a stored revision cannot notice the hand edit it exists to notice');
     }
@@ -426,7 +437,17 @@ final class ReplaceRequestTest extends TestCase {
             $this->assertSame($expected, $r['code'] ?? null, $expected);
             $seen[] = $r['code'];
         }
-        $this->assertCount(8, array_unique($seen));
+        // AND THE ONE THAT IS A PROPERTY OF THE HEADER RATHER THAN OF THE BODY
+        // OR THE KEY. Sent with no attestation at all, against a key that does
+        // not carry the unsigned-publish exemption.
+        WpStub::reset();
+        $r = $this->replace($this->body($this->publish()), null, CadenceAttest::KEY_ID, null);
+        $this->assertFalse($r['ok'], 'an unattested rewrite was accepted');
+        $this->assertSame([], WpStub::$updated);
+        $this->assertSame(CadenceAttestation::CODE, $r['code'] ?? null);
+        $seen[] = $r['code'];
+
+        $this->assertCount(9, array_unique($seen));
 
         // AND THE PUBLISHED LIST IS THAT LIST, so the coverage test over in
         // RestRouteTest has something real to be measured against: a code added
@@ -740,6 +761,12 @@ final class ReplaceRequestTest extends TestCase {
      */
     public function test_a_piece_that_predates_the_key_stamp_is_rewritten_by_any_key(): void {
         $published = $this->publish();
+        // A POST FROM BEFORE THE STAMP EXISTED, made the way one on a client's
+        // site actually is: published through this route and then stripped of
+        // the meta the old plugin never wrote. Publishing with no key id would
+        // be the shorter spelling and is no longer a thing this route does --
+        // a request naming no key is refused before it inserts anything.
+        unset(WpStub::$meta[$published['post_id']][CadenceContentRequest::KEY_META]);
         $this->assertArrayNotHasKey(CadenceContentRequest::KEY_META,
             WpStub::$meta[$published['post_id']], 'this post was stamped, so it proves nothing');
 
@@ -749,17 +776,26 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     /**
-     * AND NO IDENTITY IS NOT A WILDCARD. A stamped post asked about by a caller
-     * this route cannot name -- nothing presented, or a key that did not
-     * authenticate -- is refused. The compatibility path is a property of the
-     * POST, never of the caller.
+     * AND NO IDENTITY IS NOT A WILDCARD -- now refused one layer earlier.
+     *
+     * A caller this route cannot name used to reach `created_by` and be
+     * refused `replace_other_key` there. It no longer gets that far: the
+     * attestation is stored per connector key, so a request naming none has no
+     * record holding a public key and is refused `no_public_key` BEFORE this
+     * site is asked who owns the post. Which is the stronger property -- the
+     * old refusal disclosed that the post existed and was somebody's, and this
+     * one discloses nothing at all.
+     *
+     * THE OWNERSHIP REFUSAL ITSELF IS STILL PINNED, by the test above this one
+     * that presents a real second key.
      */
     public function test_a_stamped_piece_is_not_rewritten_by_a_caller_with_no_identity(): void {
         $published = $this->publish([], 'key-a');
         $r = $this->replace($this->body($published), null, null);
 
         $this->assertFalse($r['ok'], 'an unnamed caller rewrote a stamped post');
-        $this->assertSame('replace_other_key', $r['code']);
+        $this->assertSame('attestation_unverified', $r['code']);
+        $this->assertStringContainsString('carries no attestation public key at all', $r['reason']);
         $this->assertSame([], WpStub::$updated);
     }
 

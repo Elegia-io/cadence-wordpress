@@ -3,7 +3,7 @@
  * Plugin Name:       Cadence Connector
  * Plugin URI:        https://github.com/Elegia-io/cadence-wordpress
  * Description:       Lets an external content pipeline publish posts into WordPress, replace the ones it published, and link them into WPML translation groups, refusing any request that disagrees with the site's own state.
- * Version:           0.5.0
+ * Version:           0.6.0
  * Requires at least: 6.4
  * Requires PHP:      8.1
  * Author:            Elegia
@@ -22,6 +22,7 @@ if (!defined('ABSPATH')) {
 }
 
 require_once __DIR__ . '/includes/class-cadence-key.php';
+require_once __DIR__ . '/includes/class-cadence-attestation.php';
 require_once __DIR__ . '/includes/class-cadence-language-declaration.php';
 require_once __DIR__ . '/includes/class-cadence-link-request.php';
 require_once __DIR__ . '/includes/class-cadence-revision.php';
@@ -91,7 +92,14 @@ add_action('rest_api_init', static function (): void {
                 // whether the post is this key's, and it scopes the lookup that
                 // decides whether anything is created -- so one tenant's
                 // `piece_id` never resolves to another tenant's post.
-                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER))
+                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER)),
+                // AND THE SIGNATURE OVER THE BODY, which is a different
+                // question from the key: the key says this caller may publish
+                // here, and this says the body is the one that caller composed.
+                // Passed as a REQUIRED argument with no default, so a call site
+                // that forgot it is a PHP error rather than a request that
+                // reads as unsigned.
+                $request->get_header(CadenceAttestation::HEADER)
             );
             $answer = CadenceRestRoute::respond($result);
             return new WP_REST_Response($answer['body'], $answer['status']);
@@ -126,7 +134,11 @@ add_action('rest_api_init', static function (): void {
                 // the key that made it rather than against this connector as a
                 // whole. The public id and never the secret: it is compared
                 // against what `/content` stamped on the post.
-                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER))
+                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER)),
+                // The signature over the rewrite's own bytes -- a different
+                // material from `/content`'s, over a field set that names WHICH
+                // post and WHICH text is being overwritten.
+                $request->get_header(CadenceAttestation::HEADER)
             );
             $answer = CadenceRestRoute::respond($result);
             return new WP_REST_Response($answer['body'], $answer['status']);

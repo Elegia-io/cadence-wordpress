@@ -115,7 +115,8 @@ final class PluginTest extends TestCase {
         $this->assertIsCallable($permit);
         $body = ['piece_id' => 'x', 'post_type' => 'page', 'status' => 'draft'];
 
-        $this->assertFalse($permit(new WP_REST_Request($body)), 'no key at all was let through');
+        $this->assertFalse($permit(new WP_REST_Request($body, WP_REST_Request::NO_KEY)),
+            'no key at all was let through');
 
         $linker = CadenceKey::issue('tenant-a', ['translation.link'], 7);
         $this->assertFalse($permit(new WP_REST_Request($body, $this->key($linker))),
@@ -148,6 +149,14 @@ final class PluginTest extends TestCase {
 
     /** The header, spelled as it travels on the wire. */
     private function key(array $issued): array {
+        // WITH THE UNSIGNED-PUBLISH EXEMPTION, because this file is about the
+        // routing -- which callback, which capability, which status -- and a
+        // key freshly issued by `CadenceKey::issue` carries no attestation
+        // public key, so every request through it would be refused
+        // `no_public_key` before reaching the thing under test. The tests that
+        // are about the signature are in `AttestationTest`, and the ones here
+        // that send a header pass it explicitly beside this.
+        CadenceKey::set_unsigned_ok($issued['id'], true, 1);
         return [strtolower(CadenceKey::HEADER) => $issued['secret']];
     }
 
@@ -233,11 +242,13 @@ final class PluginTest extends TestCase {
         WpStub::$capabilities = ['edit_post' => [1, 2], 'create_posts' => [null],
                                  'publish_posts' => [null], 'manage_options' => [null]];
         $body = ['source' => ['post_id' => 1], 'translations' => [['post_id' => 2]]];
-        $this->assertFalse(($this->route[2]['permission_callback'])(new WP_REST_Request($body)));
+        $this->assertFalse(($this->route[2]['permission_callback'])(
+            new WP_REST_Request($body, WP_REST_Request::NO_KEY)));
         $this->assertFalse(($this->routes['/content']['permission_callback'])(new WP_REST_Request(
-            ['piece_id' => 'x', 'post_type' => 'post', 'status' => 'publish'])));
+            ['piece_id' => 'x', 'post_type' => 'post', 'status' => 'publish'],
+            WP_REST_Request::NO_KEY)));
         $this->assertFalse(($this->routes['/content/replace']['permission_callback'])(new WP_REST_Request(
-            ['post_id' => 1])),
+            ['post_id' => 1], WP_REST_Request::NO_KEY)),
             'a WordPress user with every capability rewrote a post through a route that asks no user at all');
     }
 

@@ -262,4 +262,155 @@ final class AdminTest extends TestCase {
         $this->assertStringContainsString('any type', $shown);
         $this->assertStringContainsString('page', $shown);
     }
+
+    /** A key on the site, and the screen's HTML. */
+    private function render(): string {
+        $this->grantManageOptions();
+        ob_start();
+        try {
+            CadenceAdmin::screen();
+        } finally {
+            $html = (string) ob_get_clean();
+        }
+        return $html;
+    }
+
+    private function post(array $fields): string {
+        $this->grantManageOptions();
+        $_POST = $fields;
+        try {
+            CadenceAdmin::handle();
+            $this->fail('handle() did not reach the redirect');
+        } catch (CadenceTestRedirected $e) {
+            // The `error` this screen prints, read off the redirect it is
+            // carried on -- the only channel a refused write has.
+            parse_str((string) parse_url($e->getMessage(), PHP_URL_QUERY), $query);
+            return (string) ($query['error'] ?? '');
+        }
+        return '';
+    }
+
+    /**
+     * THE VERIFYING KEY IS PASTED BY HAND, AND THERE IS NO OTHER WAY IN.
+     *
+     * No upload route and no API write channel, deliberately: whoever can set
+     * the verifying key can sign anything as this tenant, so a grant that
+     * could set it would be the boundary this feature draws. Asserted over the
+     * ROUTE TABLE and the key class rather than over the screen -- "the screen
+     * has a form" is satisfied by a screen that also has a REST endpoint.
+     */
+    public function test_no_route_and_no_rest_handler_can_write_a_verifying_key(): void {
+        $sources = '';
+        foreach (['cadence-connector.php', 'includes/class-cadence-content-request.php',
+                  'includes/class-cadence-replace-request.php',
+                  'includes/class-cadence-link-request.php',
+                  'includes/class-cadence-rest-route.php'] as $file) {
+            $sources .= file_get_contents(__DIR__ . '/../' . $file);
+        }
+        $this->assertStringNotContainsString('add_verify_key', $sources,
+            'something outside the admin screen can write a verifying key');
+        $this->assertStringNotContainsString('set_unsigned_ok', $sources,
+            'something outside the admin screen can set the unsigned exemption');
+        // And the admin file DOES call both, so the assertions above are not
+        // passing because the methods were renamed out from under them.
+        $admin = file_get_contents(__DIR__ . '/../includes/class-cadence-admin.php');
+        $this->assertStringContainsString('CadenceKey::add_verify_key', $admin);
+        $this->assertStringContainsString('CadenceKey::set_unsigned_ok', $admin);
+    }
+
+    /** THE SCREEN OFFERS THE PASTE, beside the key it belongs to. */
+    public function test_the_screen_offers_a_field_for_a_public_key(): void {
+        $key = CadenceKey::issue('tenant-a', ['content.publish'], 7);
+        $html = $this->render();
+
+        $this->assertStringContainsString('name="public_key"', $html);
+        $this->assertStringContainsString('name="kid"', $html);
+        $this->assertStringContainsString('value="attest"', $html);
+        $this->assertStringContainsString($key['id'], $html);
+        // A key with none says so, rather than showing a blank cell that reads
+        // as "fine".
+        $this->assertStringContainsString('every signed publish is refused', $html);
+    }
+
+    /** A PASTED KEY LANDS ON THAT KEY, AND ONLY THAT KEY. */
+    public function test_pasting_a_public_key_stores_it_on_the_named_key(): void {
+        $a = CadenceKey::issue('tenant-a', ['content.publish'], 7);
+        $b = CadenceKey::issue('tenant-b', ['content.publish'], 7);
+        $pk = base64_encode(random_bytes(32));
+
+        $this->post(['do' => 'attest', 'id' => $a['id'], 'kid' => 'abcdef0123456789',
+                     'public_key' => $pk]);
+
+        $this->assertSame([['kid' => 'abcdef0123456789', 'pk' => $pk,
+                            'added' => CadenceKey::verify_keys($a['id'])[0]['added']]],
+                          CadenceKey::verify_keys($a['id']));
+        $this->assertSame([], CadenceKey::verify_keys($b['id']),
+            'a paste reached a key it did not name');
+    }
+
+    /** A REFUSED PASTE COMES BACK AS THE ERROR THIS SCREEN PRINTS. */
+    public function test_a_bad_public_key_is_refused_and_stores_nothing(): void {
+        $key = CadenceKey::issue('tenant-a', ['content.publish'], 7);
+        $error = $this->post(['do' => 'attest', 'id' => $key['id'], 'kid' => 'abcdef0123456789',
+                              'public_key' => base64_encode(random_bytes(31))]);
+
+        $this->assertSame([], CadenceKey::verify_keys($key['id']));
+        $this->assertStringContainsString('decodes to 31', $error);
+    }
+
+    /** AND A PASTED KEY CAN BE TAKEN OFF, or a rotation happens once. */
+    public function test_a_public_key_can_be_removed(): void {
+        $key = CadenceKey::issue('tenant-a', ['content.publish'], 7);
+        $this->post(['do' => 'attest', 'id' => $key['id'], 'kid' => 'abcdef0123456789',
+                     'public_key' => base64_encode(random_bytes(32))]);
+        $this->assertCount(1, CadenceKey::verify_keys($key['id']));
+
+        $this->post(['do' => 'attest_remove', 'id' => $key['id'], 'kid' => 'abcdef0123456789']);
+        $this->assertSame([], CadenceKey::verify_keys($key['id']));
+    }
+
+    /**
+     * THE WARNING IS THERE WHILE THE EXEMPTION IS, NAMES THE KEY, AND IS GONE
+     * WHEN IT IS OFF.
+     *
+     * The absence is half the assertion: a notice that is always printed is
+     * furniture, and an operator stops reading it before the day it matters.
+     */
+    public function test_the_unsigned_warning_names_the_key_and_only_while_it_is_set(): void {
+        $key = CadenceKey::issue('tenant-a', ['content.publish'], 7);
+
+        $this->assertStringNotContainsString('notice-warning', $this->render(),
+            'the screen warned about an exemption nobody set');
+
+        $this->post(['do' => 'unsigned_on', 'id' => $key['id']]);
+        $html = $this->render();
+        $this->assertStringContainsString('notice-warning', $html);
+        // NAMED, and by the two things that identify it on this screen.
+        $this->assertStringContainsString('tenant-a', $html);
+        $this->assertStringContainsString($key['id'], $html);
+        $this->assertStringContainsString('publishes WITHOUT a signature', $html);
+        // AND IT SAYS WHAT IS STILL REFUSED, so nobody reads the exemption as
+        // "verification is off".
+        $this->assertStringContainsString('BAD signature is still refused', $html);
+
+        $this->post(['do' => 'unsigned_off', 'id' => $key['id']]);
+        $this->assertStringNotContainsString('notice-warning', $this->render(),
+            'the warning outlived the exemption it warns about');
+    }
+
+    /** SETTING IT RECORDS WHEN, AND WHICH USER DID IT. */
+    public function test_setting_the_exemption_records_its_provenance(): void {
+        $key = CadenceKey::issue('tenant-a', ['content.publish'], 7);
+
+        // The form posts a DIFFERENT user id, and it is ignored.
+        $this->post(['do' => 'unsigned_on', 'id' => $key['id'], 'by_user' => '1']);
+
+        $flag = CadenceKey::unsigned_ok($key['id']);
+        $this->assertIsArray($flag);
+        $this->assertGreaterThan(0, $flag['set_at']);
+        // THE SESSION'S USER AND NEVER THE FORM'S. A provenance field a form
+        // can choose is a provenance field an operator can disown.
+        $this->assertSame(get_current_user_id(), $flag['by_user']);
+        $this->assertNotSame(1, $flag['by_user']);
+    }
 }

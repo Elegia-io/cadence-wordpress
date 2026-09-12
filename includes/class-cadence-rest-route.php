@@ -22,7 +22,7 @@ final class CadenceRestRoute {
      * which reads the header directly and fails the moment a release bumps one
      * without the other, so drift is caught rather than merely discouraged.
      */
-    public const VERSION = '0.5.0';
+    public const VERSION = '0.6.0';
 
     /**
      * THE REPLY'S OWN SHAPE, as a number the spine can compare with `<=`
@@ -36,7 +36,7 @@ final class CadenceRestRoute {
      * a table of ranges it has to keep in step with this file by hand -- a
      * second implementation of the very mapping this constant exists to avoid.
      */
-    public const REPLY_SCHEMA = 1;
+    public const REPLY_SCHEMA = 2;
 
     /**
      * DOES THIS BODY NAME POSTS AT ALL, in the shape it claims to?
@@ -94,7 +94,8 @@ final class CadenceRestRoute {
             // accident -- and does not fail to reach it silently either, since
             // `test_a_rewrite_answers_200_and_carries_the_new_revision` asks
             // for the one a replacement cannot be made without.
-            foreach (['written', 'post_id', 'created', 'revision'] as $k) {
+            foreach (['written', 'post_id', 'created', 'revision',
+                      'attestation', 'attestation_kid'] as $k) {
                 if (array_key_exists($k, $result)) {
                     $body[$k] = $result[$k];
                 }
@@ -138,6 +139,17 @@ final class CadenceRestRoute {
         // whoever stops setting `written` stops sending it.
         if (array_key_exists('written', $result)) {
             $body['written'] = $result['written'];
+        }
+        // WHICH OF THE FIVE ATTESTATION BRANCHES FIRED, on the wire rather than only
+        // inside this plugin. `attestation_unverified` is one code over five different
+        // repairs -- nobody pasted a key, a rotation is half done, the header was
+        // stripped in transit, it was unreadable, it did not verify -- and the caller
+        // decides what to tell an operator from the reply alone. `verify()` has always
+        // returned the branch; it stopped at the route, so every refusal reached the
+        // spine as a branch it could not name. Conditional on the key, like `written`
+        // above, so whoever stops setting it stops sending it.
+        if (array_key_exists('attestation_branch', $result)) {
+            $body['attestation_branch'] = $result['attestation_branch'];
         }
         if (isset($result['report']) && is_array($result['report'])) {
             $body = array_merge($body, $result['report']);
@@ -210,6 +222,14 @@ final class CadenceRestRoute {
         'replace_other_key'          => 403,
         'post_type_out_of_scope'     => 403,
         'existing_post_type_out_of_scope' => 403,
+        // ONE CODE OVER FIVE BRANCHES, and 403 for the same reason the four
+        // above it are: the body is well formed and the site is fine. What is
+        // wrong is that nothing here can show this body came from the tenant
+        // who holds the signing key. WHICH of the five fired is in the
+        // `reason`, never in the code -- a caller's handling of all five is
+        // identical (stop, and put a human on it), and five codes would invite
+        // one that retried on `mismatch`.
+        'attestation_unverified'     => 403,
         'capability_mismatch'        => 409,
         'unsupported_language'       => 409,
         'group_unknown'              => 409,

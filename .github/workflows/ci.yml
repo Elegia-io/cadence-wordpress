@@ -16,10 +16,13 @@
 #   the version ./run-tests.sh uses locally.
 name: CI
 
+# PULL REQUESTS ONLY. A push to `main` is the merge of a pull request this workflow
+# already ran on, so the second run re-linted and re-tested a tree nobody had
+# changed: 14 pull_request runs beside 12 push runs in one month, for one answer.
+# `workflow_dispatch` stays as the way to re-run `main` deliberately.
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read

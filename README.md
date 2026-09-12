@@ -49,6 +49,41 @@ SHA-256 of it. Present it as a header:
 X-Cadence-Key: <the key>
 ```
 
+### Signing what you send
+
+A connector key is a bearer credential: it says a caller is *entitled* to
+publish here, not that *this body* is the one that caller composed. Anything
+that ever reads one — a proxy, a log, a mirror — can replay a publish or edit
+the text inside it. So `/content` and `/content/replace` also verify an
+Ed25519 signature over the bytes of the request:
+
+```
+X-Cadence-Attestation: v1 <16 lowercase hex key id> <86 characters of unpadded base64url>
+```
+
+The signature is over a SHA-256 of a canonical rendering of the fields the
+route signs — for `/content` that is `piece_id`, `language`, `post_type`,
+`status`, `title` and `content`, in that order; for `/content/replace`,
+`piece_id`, `post_id`, `revision`, `title` and `content`. The route's own path
+is inside it, so a signature captured off a publish cannot verify a rewrite.
+
+**Paste the public half by hand**, on *Settings → Cadence Connector*, beside the
+key it belongs to. There is no upload route and no API that can write it, and
+that is the point: whoever can set the verifying key can sign anything as that
+tenant. A key holds **two** at once so a rotation has an overlap window — paste
+the arriving key, watch replies name it, then remove the retiring one.
+
+Every reply says what happened, under `attestation`: `verified` (with
+`attestation_kid`, the key that actually verified it) or `exempt`. A reply with
+no `attestation` field at all is a connector older than this, which is a
+different fact from `exempt` and should not be folded into it.
+
+**Migrating a live site** without an outage: tick *Allow unsigned publishes from
+this key*. That exempts an **absent** header and nothing else — a request that
+carries a header which does not verify is still refused, on an exempt key
+exactly as on any other. Absence is a site that has not been upgraded yet; a bad
+signature is not. The screen warns, by name, for every key that carries it.
+
 Three capabilities exist, and a key carries only the ones it was issued for:
 
 | Capability | Opens | May act on |
@@ -533,6 +568,7 @@ the reason is prose and changes freely.
 | `capability_mismatch` | 409 | the declaration and the site disagree about WPML |
 | `unsupported_language` | 409 | this site has no active WPML language for the piece itself |
 | `insert_failed` | 500 | WordPress refused the insert, or returned no id |
+| `attestation_unverified` | 403 | nothing on this site can show the body came from the tenant who holds the signing key. Five different repairs share this code and the `reason` names which: `absent` (no header, and this key is not exempt), `malformed` (a header no Cadence spine composed), `unknown_kid` (a rotation half-done), `no_public_key` (nobody pasted one), `mismatch` (the body was changed after it was signed). **Nothing was written**, and the site was not read |
 | `bad_replacement` | 400 | the replacement body is not the shape it claims |
 | `post_missing` | 409 | this site has no readable post with that id |
 | `identifier_mismatch` | 409 | that post is a different piece, or none of this plugin's |
@@ -569,8 +605,8 @@ machine, only podman or docker.
 
 ### What CI enforces
 
-`.github/workflows/ci.yml` runs on every pull request and on every push to
-`main`: `php -l` over every tracked PHP file on **PHP 8.1**, the version the
+`.github/workflows/ci.yml` runs on every pull request (and on demand via
+`workflow_dispatch`): `php -l` over every tracked PHP file on **PHP 8.1**, the version the
 plugin header declares as its minimum, and the PHPUnit suite on PHP 8.3. Before
 that workflow existed this repository ran nothing — the suite above was a
 command someone chose to type (`Elegia-io/cadence`#1259).

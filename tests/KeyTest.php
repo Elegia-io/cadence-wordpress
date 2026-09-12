@@ -272,7 +272,11 @@ final class KeyTest extends TestCase {
             'piece_id' => 'piece-1', 'language' => 'en', 'post_type' => 'post',
             'status' => 'draft', 'title' => 'T', 'content' => 'C',
             'declared' => ['multilingual' => true, 'languages' => ['en']],
-        ], static fn (string $c): bool => false, null);
+        ], static fn (string $c): bool => false, null, null, CadenceAttest::KEY_ID,
+            CadenceAttest::header('/content', CadenceAttest::fields('/content', [
+                'piece_id' => 'piece-1', 'language' => 'en', 'post_type' => 'post',
+                'status' => 'draft', 'title' => 'T', 'content' => 'C',
+            ]), CadenceAttest::KEY_ID));
 
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertTrue(CadenceKey::scope_admits($r['post_id']),
@@ -442,7 +446,11 @@ final class KeyTest extends TestCase {
             'status' => 'draft', 'title' => 'T', 'content' => 'C',
             'declared' => ['multilingual' => true, 'languages' => ['en']],
         ], static fn (string $c): bool => false,
-            CadenceKey::publish_types_for($key['secret']));
+            CadenceKey::publish_types_for($key['secret']), null, $key['id'],
+            CadenceAttest::header('/content', CadenceAttest::fields('/content', [
+                'piece_id' => 'piece-1', 'language' => 'en', 'post_type' => 'post',
+                'status' => 'draft', 'title' => 'T', 'content' => 'C',
+            ]), $key['id']));
 
         $this->assertFalse($r['ok'], 'a key scoped to nothing published anyway');
         $this->assertSame('post_type_out_of_scope', $r['code']);

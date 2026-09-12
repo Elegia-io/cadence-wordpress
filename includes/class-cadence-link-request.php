@@ -189,6 +189,14 @@ final class CadenceLinkRequest {
             }
         }
 
+        // NOW the site may be asked about these posts, because the key reaches
+        // every one of them. A refusal here is still `bad_plan`: the caller may
+        // act on the post and its plan describes it wrongly.
+        $site = self::validate_against_site($posts);
+        if ($site !== null) {
+            return ['ok' => false, 'code' => 'bad_plan', 'reason' => $site];
+        }
+
         $create = $plan['create_group'];
         $trid   = $plan['trid'];
 
@@ -406,6 +414,40 @@ final class CadenceLinkRequest {
      *
      * @return list<array>|string
      */
+    /**
+     * The checks that ask the SITE, run only over posts scope already admitted.
+     *
+     * Split out of `validate_shape` because that runs before the authorisation
+     * boundary and these two reads disclose, for any post id, whether it exists
+     * and what type it really is. Scope needs only the id -- `get_post_meta` on
+     * an id the site does not have answers `''`, so a missing post is refused as
+     * out of scope and stops being distinguishable from a post this connector
+     * did not publish, which is the right answer to give a caller that may not
+     * touch either.
+     *
+     * Returns a string on refusal, exactly as `validate_shape` does, so the
+     * caller's `bad_plan` mapping is unchanged for a caller whose posts it may
+     * act on: a Cadence post named with the wrong `element_type` is still a bad
+     * plan, and is still told so.
+     */
+    private static function validate_against_site(array $posts) {
+        foreach ($posts as $index => $p) {
+            $where = $index === 0 ? 'source' : "translation $index";
+            // The post has to be one this site actually has, of the type the
+            // plan claims. A plan naming a post id that does not exist is not a
+            // link to write; it is a caller talking about a different site.
+            $post_type = get_post_type($p['post_id']);
+            if ($post_type === false || get_post_status($p['post_id']) === false) {
+                return "$where names post {$p['post_id']}, which does not exist on this site";
+            }
+            if ('post_' . $post_type !== $p['element_type']) {
+                return sprintf('%s names post %d, whose type is `%s` and not `%s`',
+                    $where, $p['post_id'], $post_type, $p['element_type']);
+            }
+        }
+        return null;
+    }
+
     private static function validate_shape(array $plan) {
         foreach (['trid', 'create_group', 'source', 'translations'] as $key) {
             if (!array_key_exists($key, $plan)) {
@@ -457,17 +499,15 @@ final class CadenceLinkRequest {
             }
             $p['source_language_code'] = $src;
 
-            // The post has to be one this site actually has, of the type the
-            // plan claims. A plan naming a post id that does not exist is not a
-            // link to write; it is a caller talking about a different site.
-            $post_type = get_post_type($p['post_id']);
-            if ($post_type === false || get_post_status($p['post_id']) === false) {
-                return "$where names post {$p['post_id']}, which does not exist on this site";
-            }
-            if ('post_' . $post_type !== $p['element_type']) {
-                return sprintf('%s names post %d, whose type is `%s` and not `%s`',
-                    $where, $p['post_id'], $post_type, $p['element_type']);
-            }
+            // WHETHER THE POST EXISTS, AND WHAT TYPE IT IS, ARE ASKED OF THE
+            // SITE -- so they are NOT asked here. `validate_shape` runs before
+            // the scope loop, and two site reads in it answered, for any post
+            // id on the site, whether that post exists and what its real type
+            // is: `names post 7, which does not exist on this site` against
+            // `names post 7, whose type is 'page' and not 'post_zzz'` is an
+            // enumeration oracle for every post on a client's WordPress,
+            // reachable with a `translation.link` key alone. Moved to
+            // `validate_against_site`, which runs AFTER scope.
             $posts[] = $p;
         }
 

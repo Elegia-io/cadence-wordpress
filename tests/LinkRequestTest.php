@@ -175,8 +175,58 @@ final class LinkRequestTest extends TestCase {
     public function test_a_post_of_the_wrong_type_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'post', 'de', 5);   // plan says post_page
+        // `ours()` IS LOAD-BEARING HERE, and it was missing. The type check now
+        // runs after the scope loop, so without it this plan is refused
+        // `post_out_of_scope` and the assertions below pass over a refusal that
+        // has nothing to do with the type -- the test would go on passing while
+        // the thing it names stopped being checked.
+        $this->ours(1, 2);
         $r = CadenceLinkRequest::run($this->plan());
         $this->assertFalse($r['ok']);
+        $this->assertSame('bad_plan', $r['code']);
+        $this->assertStringContainsString('whose type is', $r['reason']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * AN OUT-OF-SCOPE POST IS NOT TOLD WHETHER IT EXISTS, OR WHAT IT IS.
+     *
+     * The two site reads that answer those questions used to sit in
+     * `validate_shape`, which runs BEFORE the scope loop. So a `translation.link`
+     * key could walk post ids and read the answers off the refusal: `names post
+     * 7, which does not exist on this site` against `names post 7, whose type is
+     * `page` and not `post_zzz`` distinguishes a missing id from a page from a
+     * post, for every id on a client's WordPress. That is an enumeration oracle
+     * behind a credential whose whole point is that it reaches only the posts
+     * this connector published.
+     *
+     * All three cases now answer the SAME refusal, and the reason names the id
+     * the caller already sent and nothing else.
+     */
+    public function test_an_out_of_scope_post_learns_nothing_about_the_site(): void {
+        WpStub::add_post(1, 'page', 'en', null);     // a human's page, real
+        WpStub::add_post(2, 'post', 'de', null);     // a human's post, real
+        // Post 9 is not on the site at all; the plan below names 1 and 2, so
+        // this asserts the two SHAPES that used to differ: wrong type, and
+        // absent. Neither is ours.
+        $r = CadenceLinkRequest::run($this->plan());
+        $this->assertFalse($r['ok']);
+        $this->assertSame('post_out_of_scope', $r['code']);
+        foreach (['does not exist', 'whose type is', 'page', 'post_post', 'post_page'] as $leak) {
+            $this->assertStringNotContainsString($leak, $r['reason'], $leak);
+        }
+        $this->assertSame([], WpStub::$writes);
+
+        // AND A POST THAT IS NOT THERE AT ALL IS THE SAME ANSWER. `get_post_meta`
+        // on an id the site does not have answers `''`, so absence and
+        // not-ours are one refusal rather than two distinguishable ones.
+        WpStub::$writes = [];
+        $plan = $this->plan();
+        $plan['source']['post_id'] = 9;
+        $r = CadenceLinkRequest::run($plan);
+        $this->assertFalse($r['ok']);
+        $this->assertSame('post_out_of_scope', $r['code']);
+        $this->assertStringNotContainsString('does not exist', $r['reason']);
         $this->assertSame([], WpStub::$writes);
     }
 

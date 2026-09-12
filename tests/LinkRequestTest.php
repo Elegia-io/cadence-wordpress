@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * The refusals, and their twins.
@@ -84,6 +85,7 @@ final class LinkRequestTest extends TestCase {
         }
     }
 
+    #[Group('wpml')]
     public function test_a_well_formed_plan_over_agreeing_posts_writes_both(): void {
         $this->twoPosts(5);
         $r = $this->link($this->plan(), null);
@@ -91,6 +93,7 @@ final class LinkRequestTest extends TestCase {
         $this->assertCount(2, WpStub::$writes);
     }
 
+    #[Group('wpml')]
     public function test_a_plan_naming_a_post_that_does_not_exist_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', 5);   // post 2 absent
         $r = $this->link($this->plan(), null);
@@ -103,6 +106,7 @@ final class LinkRequestTest extends TestCase {
      * the plan on another machine, from a read that has since gone stale or was
      * never taken. This code is the one running where the truth is.
      */
+    #[Group('wpml')]
     public function test_a_plan_disagreeing_with_the_sites_own_group_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'page', 'de', 9);   // the site says 9, the plan says 5
@@ -113,6 +117,7 @@ final class LinkRequestTest extends TestCase {
         $this->assertSame([], WpStub::$writes);
     }
 
+    #[Group('wpml')]
     public function test_creating_a_group_requires_every_post_to_be_in_none(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', 7);   // already grouped
@@ -122,6 +127,7 @@ final class LinkRequestTest extends TestCase {
         $this->assertSame([], WpStub::$writes);
     }
 
+    #[Group('wpml')]
     public function test_creating_a_group_when_both_are_ungrouped_is_allowed(): void {
         $this->twoPosts(null);
         $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
@@ -135,6 +141,7 @@ final class LinkRequestTest extends TestCase {
      * create a group. A caller that sends both has a bug, and this refuses
      * rather than picking.
      */
+    #[Group('wpml')]
     public function test_create_group_together_with_a_trid_writes_nothing(): void {
         $this->twoPosts(null);
         $r = $this->link($this->plan(['trid' => 5, 'create_group' => true]), null);
@@ -142,6 +149,7 @@ final class LinkRequestTest extends TestCase {
         $this->assertSame([], WpStub::$writes);
     }
 
+    #[Group('wpml')]
     public function test_a_plan_with_no_translations_writes_nothing(): void {
         $this->twoPosts(5);
         $r = $this->link($this->plan(['translations' => []]), null);
@@ -149,6 +157,7 @@ final class LinkRequestTest extends TestCase {
         $this->assertSame([], WpStub::$writes);
     }
 
+    #[Group('wpml')]
     public function test_two_posts_claiming_one_language_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'page', 'de', 5);
@@ -163,6 +172,7 @@ final class LinkRequestTest extends TestCase {
         $this->assertSame([], WpStub::$writes);
     }
 
+    #[Group('wpml')]
     public function test_the_source_appearing_among_its_own_translations_writes_nothing(): void {
         $this->twoPosts(5);
         $r = $this->link($this->plan(['translations' => [
@@ -179,6 +189,7 @@ final class LinkRequestTest extends TestCase {
      * a guarantee it cannot check.
      */
     #[DataProvider('badScalars')]
+    #[Group('wpml')]
     public function test_a_malformed_field_writes_nothing(array $over): void {
         $this->twoPosts(5);
         $r = $this->link($this->plan($over), null);
@@ -206,6 +217,7 @@ final class LinkRequestTest extends TestCase {
         ];
     }
 
+    #[Group('wpml')]
     public function test_a_post_of_the_wrong_type_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'post', 'de', 5);   // plan says post_page
@@ -237,6 +249,7 @@ final class LinkRequestTest extends TestCase {
      * All three cases now answer the SAME refusal, and the reason names the id
      * the caller already sent and nothing else.
      */
+    #[Group('wpml')]
     public function test_an_out_of_scope_post_learns_nothing_about_the_site(): void {
         WpStub::add_post(1, 'page', 'en', null);     // a human's page, real
         WpStub::add_post(2, 'post', 'de', null);     // a human's post, real
@@ -271,6 +284,7 @@ final class LinkRequestTest extends TestCase {
      * link was removed in wp-admin, and the plan is now a claim about a past
      * that no longer exists.
      */
+    #[Group('wpml')]
     public function test_a_plan_claiming_a_group_the_site_does_not_have_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'page', 'de', null);   // WPML: in no group
@@ -291,6 +305,7 @@ final class LinkRequestTest extends TestCase {
      * stubs. Real posts reach it — one predating WPML's configuration, or of a
      * type WPML is not set to translate.
      */
+    #[Group('wpml')]
     public function test_a_post_wpml_has_no_answer_for_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null, false);   // WP yes, WPML no
@@ -301,6 +316,7 @@ final class LinkRequestTest extends TestCase {
         $this->assertSame([], WpStub::$writes);
     }
 
+    #[Group('wpml')]
     public function test_the_same_shape_with_wpml_answering_creates_the_group(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);          // the only difference
@@ -315,6 +331,7 @@ final class LinkRequestTest extends TestCase {
      * `['ok' => false]` unconditionally would pass all of them -- and this
      * repo has an incident for exactly that shape.
      */
+    #[Group('wpml')]
     public function test_the_happy_path_is_reachable_at_all(): void {
         $this->twoPosts(5);
         $r = $this->link($this->plan(), null);
@@ -335,6 +352,7 @@ final class LinkRequestTest extends TestCase {
      * plan, and a program deciding that from prose is matching on spellings
      * this file is free to change. So the decision travels as a code.
      */
+    #[Group('wpml')]
     public function test_each_refusal_carries_its_own_code(): void {
         $causes = [
             'bad_plan' => function () {
@@ -506,6 +524,7 @@ final class LinkRequestTest extends TestCase {
      * material to verify against: the ordering question is answered by the form
      * rather than by which check happened to run first.
      */
+    #[Group('wpml')]
     public function test_verification_runs_before_the_plans_own_shape_check(): void {
         $this->twoPosts(5);
         $plan = $this->plan(['translations' => [
@@ -583,6 +602,7 @@ final class LinkRequestTest extends TestCase {
      * trusted the wire would refuse every honest request as `mismatch`, which
      * blames a tenant's signing key for a proxy.
      */
+    #[Group('wpml')]
     public function test_the_same_plan_in_a_different_wire_order_still_verifies(): void {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'page', 'de', 5);
@@ -616,6 +636,7 @@ final class LinkRequestTest extends TestCase {
      * refused on an exempt key exactly as it is anywhere else: a bad signature is
      * not a migration and there is no reading of it under which it becomes one.
      */
+    #[Group('wpml')]
     public function test_the_unsigned_exemption_covers_an_absent_header_and_never_a_bad_one(): void {
         $this->twoPosts(5);
         $key = CadenceAttest::exempt_key();
@@ -649,6 +670,7 @@ final class LinkRequestTest extends TestCase {
      * A refusal here costs a human an install. A false success tells the
      * caller the site is linked, and the caller stops.
      */
+    #[Group('wpml')]
     public function test_a_site_without_wpml_refuses_rather_than_reporting_a_write(): void {
         $this->twoPosts(null);
         WpStub::$wpml_reads = false;
@@ -666,6 +688,7 @@ final class LinkRequestTest extends TestCase {
      * still go nowhere -- which is the only configuration where the count
      * returned is both non-zero and entirely fictional.
      */
+    #[Group('wpml')]
     public function test_wpml_that_answers_reads_but_performs_no_writes_is_refused(): void {
         $this->twoPosts(null);
         WpStub::$wpml_writes = false;
@@ -682,6 +705,7 @@ final class LinkRequestTest extends TestCase {
      * caller its posts are in an unreadable state when the truth is that
      * nothing here reads.
      */
+    #[Group('wpml')]
     public function test_wpml_that_writes_but_answers_no_reads_is_refused_as_unavailable(): void {
         $this->twoPosts(null);
         WpStub::$wpml_reads = false;
@@ -701,6 +725,7 @@ final class LinkRequestTest extends TestCase {
      * `false` (nothing usable) and never `null` (known, and in no group),
      * because the second reading is the one that goes on to write.
      */
+    #[Group('wpml')]
     public function test_a_filter_that_declines_to_answer_writes_nothing(): void {
         $this->twoPosts(null);
         WpStub::$wpml_declines = true;
@@ -710,6 +735,7 @@ final class LinkRequestTest extends TestCase {
         $this->assertSame([], WpStub::$writes);
     }
 
+    #[Group('wpml')]
     public function test_a_written_plan_carries_no_code(): void {
         $this->twoPosts(5);
         $r = $this->link($this->plan(), null);
@@ -724,6 +750,7 @@ final class LinkRequestTest extends TestCase {
     // linked something. These pin the field that answers it, and -- more --
     // pin that it is READ BACK rather than copied out of the plan.
 
+    #[Group('wpml')]
     public function test_a_plan_naming_its_piece_reports_what_the_site_now_says(): void {
         $this->twoPosts(5);
         $r = $this->link($this->plan(['piece_id' => 'piece-1']), null);
@@ -750,6 +777,7 @@ final class LinkRequestTest extends TestCase {
      * from the plan reports `de`, beside a `written: 3` that agrees with it.
      * One read back reports `fr` alone.
      */
+    #[Group('wpml')]
     public function test_a_write_that_did_not_land_is_not_reported_as_linked(): void {
         $this->twoPosts(5);
         WpStub::add_post(3, 'page', 'fr', 5);
@@ -771,6 +799,7 @@ final class LinkRequestTest extends TestCase {
      * `false` is not, and neither of them is a group: a report that treated
      * either as one would claim the write landed because the call was made.
      */
+    #[Group('wpml')]
     public function test_a_source_the_site_puts_in_no_group_links_nothing(): void {
         $this->twoPosts(5);
         WpStub::$wpml_write_detaches = [1];
@@ -798,6 +827,7 @@ final class LinkRequestTest extends TestCase {
      * the last one: both posts end up in one group, which is the thing a group
      * of one per post looks identical to in `written`.
      */
+    #[Group('wpml')]
     public function test_the_create_path_learns_its_group_from_its_own_first_write(): void {
         $this->twoPosts(null);
         $r = $this->link($this->plan(
@@ -833,6 +863,7 @@ final class LinkRequestTest extends TestCase {
      * Nothing was destroyed: the create path refuses unless every post is in no
      * group, so the source had no relations to lose and post 2 is untouched.
      */
+    #[Group('wpml')]
     public function test_a_source_left_in_no_group_by_its_own_write_stops_before_the_translations(): void {
         $this->twoPosts(null);
         WpStub::$wpml_write_detaches = [1];
@@ -857,6 +888,7 @@ final class LinkRequestTest extends TestCase {
      * "no group" and is the one state that must never be written over. Same
      * half-applied shape, different claim.
      */
+    #[Group('wpml')]
     public function test_a_source_whose_group_cannot_be_read_back_stops_before_the_translations(): void {
         $this->twoPosts(null);
         WpStub::$wpml_write_unreadable = [1];
@@ -877,6 +909,7 @@ final class LinkRequestTest extends TestCase {
      * report, for the reason the success path does: there is nothing for a
      * ledger to file a report under.
      */
+    #[Group('wpml')]
     public function test_a_half_applied_create_naming_no_piece_still_carries_its_count(): void {
         $this->twoPosts(null);
         WpStub::$wpml_write_detaches = [1];
@@ -891,6 +924,7 @@ final class LinkRequestTest extends TestCase {
      * is filed under the piece; with no piece there is nothing for a ledger to
      * join it to, and an answer carrying half a report would be read as one.
      */
+    #[Group('wpml')]
     public function test_a_plan_naming_no_piece_carries_no_report(): void {
         $this->twoPosts(5);
         $r = $this->link($this->plan(), null);
@@ -910,6 +944,7 @@ final class LinkRequestTest extends TestCase {
      * BEFORE the write, like every other refusal in this file.
      */
     #[DataProvider('unusablePieceIds')]
+    #[Group('wpml')]
     public function test_an_unusable_piece_id_writes_nothing($piece_id): void {
         $this->twoPosts(5);
         $r = $this->link($this->plan(['piece_id' => $piece_id]), null);
@@ -944,6 +979,7 @@ final class LinkRequestTest extends TestCase {
      * The refusal is over the TRANSLATION here and the source is one of ours,
      * so a check that asked only about the source would pass this.
      */
+    #[Group('wpml')]
     public function test_a_plan_naming_a_post_this_connector_never_published_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
@@ -967,6 +1003,7 @@ final class LinkRequestTest extends TestCase {
      * Without it the test above passes on a `scope_admits` that returns false
      * unconditionally, which is a route that links nothing at all.
      */
+    #[Group('wpml')]
     public function test_the_same_plan_over_this_connectors_own_posts_is_written(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
@@ -986,6 +1023,7 @@ final class LinkRequestTest extends TestCase {
      * site's own page to a group as its source, which is the destructive write
      * with the roles swapped.
      */
+    #[Group('wpml')]
     public function test_a_source_this_connector_never_published_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
@@ -1010,6 +1048,7 @@ final class LinkRequestTest extends TestCase {
      * or a zero some other plugin wrote there.
      */
     #[DataProvider('unreadableIdentifiers')]
+    #[Group('wpml')]
     public function test_an_identifier_this_cannot_read_is_out_of_scope($stored): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
@@ -1043,6 +1082,7 @@ final class LinkRequestTest extends TestCase {
      * no attestation. `CadenceKey::reaches` asks the conjunction now, so the
      * branch that fired is "this key does not reach post 2" and nothing finer.
      */
+    #[Group('wpml')]
     public function test_a_plan_naming_a_post_a_different_key_published_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
@@ -1087,6 +1127,7 @@ final class LinkRequestTest extends TestCase {
      * away, so a refusal that named a trid, a key id or a second post id would
      * not survive either.
      */
+    #[Group('wpml')]
     public function test_the_three_cases_a_link_key_may_not_separate_answer_alike(): void {
         $reasons = [];
         $codes   = [];
@@ -1140,6 +1181,7 @@ final class LinkRequestTest extends TestCase {
      * yes. It was the wrong repair, which on a route whose refusals are the whole
      * operator interface is the defect worth fixing. Found by cross-model review.
      */
+    #[Group('wpml')]
     public function test_an_absent_post_is_not_reported_as_a_type_this_key_cannot_reach(): void {
         WpStub::add_post(2, 'page', 'de', null);
         $this->ours(2);
@@ -1162,6 +1204,7 @@ final class LinkRequestTest extends TestCase {
         $this->assertSame([], WpStub::$writes);
     }
 
+    #[Group('wpml')]
     public function test_a_post_this_key_reaches_is_still_told_the_site_has_no_such_post(): void {
         WpStub::add_post(2, 'page', 'de', null);
         $this->ours(2);
@@ -1184,6 +1227,7 @@ final class LinkRequestTest extends TestCase {
      * would let a key attach another tenant's piece to a group as its source --
      * the destructive write with the roles swapped.
      */
+    #[Group('wpml')]
     public function test_a_source_a_different_key_published_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
@@ -1204,6 +1248,7 @@ final class LinkRequestTest extends TestCase {
      * Without it the two tests above pass on a `created_by` that returns false
      * unconditionally, which is a route that links nothing at all.
      */
+    #[Group('wpml')]
     public function test_the_same_plan_over_this_keys_own_posts_is_written(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
@@ -1227,6 +1272,7 @@ final class LinkRequestTest extends TestCase {
      * this closes. The posts here are exactly what the 0.3.0 connector left
      * behind: an identifier and no identity.
      */
+    #[Group('wpml')]
     public function test_a_plan_over_posts_that_predate_the_key_stamp_is_still_written(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
@@ -1275,6 +1321,7 @@ final class LinkRequestTest extends TestCase {
      * breaks the working case to narrow a case the release bar does not yet
      * have, which is one site per client holding one key.
      */
+    #[Group('wpml')]
     public function test_a_second_keys_reach_over_pre_stamp_posts_is_a_measured_gap(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
@@ -1318,6 +1365,7 @@ final class LinkRequestTest extends TestCase {
      * status: the caller is not trusted with the site's copy, which is the line
      * the report one file over draws for the same reason.
      */
+    #[Group('wpml')]
     public function test_the_scope_refusal_names_the_post_and_leaks_nothing_about_it(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
@@ -1348,6 +1396,7 @@ final class LinkRequestTest extends TestCase {
      * group written over posts that already had one DESTROYS the relations
      * they had -- including ones a human made by hand in wp-admin.
      */
+    #[Group('wpml')]
     public function test_a_page_is_not_linked_by_a_key_scoped_to_posts(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
@@ -1370,6 +1419,7 @@ final class LinkRequestTest extends TestCase {
      * looked at one end would let a key attach a type it does not reach as the
      * group's source, which is the same write with the roles swapped.
      */
+    #[Group('wpml')]
     public function test_a_source_outside_the_keys_types_is_not_linked(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'post', 'de', null);
@@ -1390,6 +1440,7 @@ final class LinkRequestTest extends TestCase {
      * Without it every test above passes on a route that refuses every link,
      * which is a scope that has stopped being a scope.
      */
+    #[Group('wpml')]
     public function test_a_link_over_posts_of_a_type_the_key_names_still_succeeds(): void {
         WpStub::add_post(1, 'post', 'en', null);
         WpStub::add_post(2, 'post', 'de', null);
@@ -1420,6 +1471,7 @@ final class LinkRequestTest extends TestCase {
      * turned their working links into 403s would be an upgrade that breaks the
      * working case. Null names no type and means ANY.
      */
+    #[Group('wpml')]
     public function test_a_key_that_names_no_type_links_any_type(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
@@ -1450,6 +1502,7 @@ final class LinkRequestTest extends TestCase {
      * replace route shipped the same ordering argued in a comment and caught
      * only by a reviewer.
      */
+    #[Group('wpml')]
     public function test_the_type_scope_cannot_be_asked_about_a_post_this_key_does_not_reach(): void {
         // NOT A PIECE THIS CONNECTOR PUBLISHED -- post 2 carries no identifier.
         $outside = [];
@@ -1504,6 +1557,7 @@ final class LinkRequestTest extends TestCase {
      * not over the word `post`, which this refusal's own sentence contains
      * whatever it discloses.
      */
+    #[Group('wpml')]
     public function test_the_type_refusal_names_the_keys_scope_and_not_the_posts_type(): void {
         WpStub::add_post(1, 'attachment', 'en', null);
         WpStub::add_post(2, 'attachment', 'de', null);

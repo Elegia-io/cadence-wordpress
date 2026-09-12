@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -24,6 +25,7 @@ final class LanguageDeclarationTest extends TestCase {
         WpStub::$wpml_writes = false;
     }
 
+    #[Group('wpml')]
     public function test_a_monolingual_declaration_on_a_site_without_wpml_is_accepted(): void {
         $this->monolingual_site();
         $r = CadenceLanguageDeclaration::verify(['multilingual' => false, 'languages' => ['en']], 'en');
@@ -35,6 +37,7 @@ final class LanguageDeclarationTest extends TestCase {
      * THE EXPENSIVE ONE. Declared multilingual, site has no WPML. Detection
      * would publish monolingual and call it success; this refuses.
      */
+    #[Group('wpml')]
     public function test_declared_multilingual_on_a_site_without_wpml_refuses(): void {
         $this->monolingual_site();
         $r = CadenceLanguageDeclaration::verify(['multilingual' => true, 'languages' => ['en', 'de']], 'en');
@@ -45,6 +48,7 @@ final class LanguageDeclarationTest extends TestCase {
     }
 
     /** And the other direction, which is a stale record rather than a stale site. */
+    #[Group('wpml')]
     public function test_declared_monolingual_on_a_multilingual_site_refuses(): void {
         $r = CadenceLanguageDeclaration::verify(['multilingual' => false, 'languages' => ['en']], 'en');
         $this->assertFalse($r['ok']);
@@ -54,6 +58,7 @@ final class LanguageDeclarationTest extends TestCase {
     }
 
     /** A language the site does not serve is REPORTED, never quietly dropped. */
+    #[Group('wpml')]
     public function test_a_declared_language_the_site_does_not_serve_is_reported(): void {
         WpStub::$active_languages = ['en' => [], 'de' => []];
         $r = CadenceLanguageDeclaration::verify(
@@ -63,6 +68,7 @@ final class LanguageDeclarationTest extends TestCase {
     }
 
     /** And when it is THIS piece's own language, there is nothing to place. */
+    #[Group('wpml')]
     public function test_the_pieces_own_language_being_unserved_refuses(): void {
         WpStub::$active_languages = ['en' => []];
         $r = CadenceLanguageDeclaration::verify(
@@ -76,6 +82,7 @@ final class LanguageDeclarationTest extends TestCase {
      * WPML PRESENT AND CONFIGURED WITH NOTHING is not "every language is fine".
      * The hooks answer, the map is empty, and an empty answer is an answer.
      */
+    #[Group('wpml')]
     public function test_wpml_with_no_active_languages_serves_none_of_them(): void {
         WpStub::$active_languages = [];
         $r = CadenceLanguageDeclaration::verify(['multilingual' => true, 'languages' => ['en']], 'en');
@@ -84,6 +91,7 @@ final class LanguageDeclarationTest extends TestCase {
     }
 
     /** A declaration that is missing, or not a declaration, is not a default. */
+    #[Group('wpml')]
     public function test_an_absent_or_malformed_declaration_is_refused_rather_than_assumed(): void {
         foreach ([
             null,
@@ -112,6 +120,7 @@ final class LanguageDeclarationTest extends TestCase {
     }
 
     /** A monolingual tenant naming two languages contradicts itself. */
+    #[Group('wpml')]
     public function test_a_monolingual_declaration_naming_two_languages_is_refused(): void {
         $this->monolingual_site();
         $r = CadenceLanguageDeclaration::verify(['multilingual' => false, 'languages' => ['en', 'de']], 'en');

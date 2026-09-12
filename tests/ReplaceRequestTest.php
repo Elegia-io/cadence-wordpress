@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -111,6 +112,7 @@ final class ReplaceRequestTest extends TestCase {
      * first replacement, and the endpoint below is unreachable in practice
      * however well it is tested here.
      */
+    #[Group('wpml')]
     public function test_publishing_answers_with_the_revision_the_site_now_holds(): void {
         $r = $this->publish();
         $this->assertIsString($r['revision'] ?? null);
@@ -124,6 +126,7 @@ final class ReplaceRequestTest extends TestCase {
      * and the revision it comes back with is that post's, so a caller whose
      * body no longer matches the site can see it in the answer.
      */
+    #[Group('wpml')]
     public function test_a_repeat_answers_with_the_revision_the_post_actually_has(): void {
         $first = $this->publish();
         WpStub::$posts[$first['post_id']]['post_content'] = '<p>A human rewrote this.</p>';
@@ -140,6 +143,7 @@ final class ReplaceRequestTest extends TestCase {
      * plugin and by nothing else, so it agrees with the site exactly until a
      * human edits the post -- the single moment it needed to disagree.
      */
+    #[Group('wpml')]
     public function test_the_revision_is_not_recorded_on_the_post(): void {
         $published = $this->publish();
         $this->assertSame([CadenceContentRequest::META, CadenceContentRequest::KEY_META],
@@ -147,6 +151,7 @@ final class ReplaceRequestTest extends TestCase {
             'a stored revision cannot notice the hand edit it exists to notice');
     }
 
+    #[Group('wpml')]
     public function test_a_replacement_naming_the_current_revision_rewrites_the_post(): void {
         $published = $this->publish();
         $r = $this->replace($this->body($published));
@@ -172,6 +177,7 @@ final class ReplaceRequestTest extends TestCase {
      * stays, and the refusal names both revisions so the caller can see which
      * of the two it was wrong about.
      */
+    #[Group('wpml')]
     public function test_a_post_a_human_edited_since_is_not_overwritten(): void {
         $published = $this->publish();
         $edited = '<p>Original body, corrected by hand.</p>';
@@ -192,6 +198,7 @@ final class ReplaceRequestTest extends TestCase {
      * THE TWIN: the same request against a post nobody touched is written.
      * Without it the refusal above holds for a `run` that refuses everything.
      */
+    #[Group('wpml')]
     public function test_the_same_replacement_against_an_untouched_post_is_written(): void {
         $published = $this->publish();
         $r = $this->replace($this->body($published));
@@ -206,6 +213,7 @@ final class ReplaceRequestTest extends TestCase {
      * names the revision the site holds, which is the one the first attempt
      * answered with: a caller comparing them can tell that its write landed.
      */
+    #[Group('wpml')]
     public function test_replaying_a_replacement_that_already_landed_is_refused(): void {
         $published = $this->publish();
         $first = $this->replace($this->body($published));
@@ -223,6 +231,7 @@ final class ReplaceRequestTest extends TestCase {
      * created in its place: this endpoint replaces, and a caller that wanted
      * something to exist has an endpoint for that.
      */
+    #[Group('wpml')]
     public function test_a_replacement_for_a_post_this_site_does_not_have_is_refused(): void {
         $published = $this->publish();
         $r = $this->replace($this->body($published, ['post_id' => 4242]));
@@ -242,6 +251,7 @@ final class ReplaceRequestTest extends TestCase {
      * The two posts here carry the SAME words, so the revision agrees and only
      * the identifier disagrees: a version that dropped this check would write.
      */
+    #[Group('wpml')]
     public function test_a_replacement_naming_a_post_that_is_a_different_piece_is_refused(): void {
         $one = $this->publish();
         $two = $this->publish(['piece_id' => 'piece-2']);
@@ -298,6 +308,7 @@ final class ReplaceRequestTest extends TestCase {
      * something a human had taken down, is the same destruction one field
      * across -- and it would be reported as a successful rewrite.
      */
+    #[Group('wpml')]
     public function test_a_replacement_does_not_change_whether_the_post_is_published(): void {
         $published = $this->publish(['status' => 'draft']);
         $r = $this->replace($this->body($published));
@@ -309,6 +320,7 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     /** And the piece keeps the identifier it is known by. */
+    #[Group('wpml')]
     public function test_the_piece_keeps_its_identifier(): void {
         $published = $this->publish();
         $this->replace($this->body($published));
@@ -324,6 +336,7 @@ final class ReplaceRequestTest extends TestCase {
      * assumed, because an alias nothing exercises is a line of code claiming a
      * compatibility nobody has seen work.
      */
+    #[Group('wpml')]
     public function test_the_released_field_name_still_says_which_piece(): void {
         $published = $this->publish();
         $body = $this->body($published);
@@ -334,6 +347,7 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertTrue($r['ok'], 'the 0.1.0 spelling no longer identifies a piece');
     }
 
+    #[Group('wpml')]
     public function test_refuses_a_body_whose_shape_it_cannot_read(): void {
         $published = $this->publish();
         foreach ([
@@ -363,6 +377,7 @@ final class ReplaceRequestTest extends TestCase {
      * WORDPRESS FAILING IS NOT WORDPRESS SUCCEEDING, on this path as on the
      * insert. `wp_update_post` returns a WP_Error rather than throwing.
      */
+    #[Group('wpml')]
     public function test_an_update_that_fails_is_reported_as_a_failure(): void {
         $published = $this->publish();
         WpStub::$update_fails = 'database is on fire';
@@ -380,6 +395,7 @@ final class ReplaceRequestTest extends TestCase {
      * plugin this one does not control produces. Read as an id it is falsy,
      * and falsy is what "no post" looks like everywhere else.
      */
+    #[Group('wpml')]
     public function test_a_zero_with_no_error_is_reported_as_a_failure(): void {
         $published = $this->publish();
         WpStub::$update_returns_zero = true;
@@ -397,6 +413,7 @@ final class ReplaceRequestTest extends TestCase {
      * is a program deciding whether to re-read this site or to stop and fix
      * itself, and it decides from the code.
      */
+    #[Group('wpml')]
     public function test_each_refusal_carries_its_own_code(): void {
         $causes = [
             'bad_replacement' => fn (array $p): array => $this->body($p, ['revision' => 7]),
@@ -489,6 +506,7 @@ final class ReplaceRequestTest extends TestCase {
      * The text has to be read where the write happens: from the row, under the
      * lock the write is then made inside.
      */
+    #[Group('wpml')]
     public function test_an_edit_that_landed_after_the_cached_read_is_not_overwritten(): void {
         $published = $this->publish();
         $id = $published['post_id'];
@@ -510,6 +528,7 @@ final class ReplaceRequestTest extends TestCase {
      * copy is written -- so the refusal above is about the disagreement and
      * not about the override being set at all.
      */
+    #[Group('wpml')]
     public function test_a_row_that_agrees_with_the_cached_read_is_still_written(): void {
         $published = $this->publish();
         WpStub::$row_override[$published['post_id']] =
@@ -526,6 +545,7 @@ final class ReplaceRequestTest extends TestCase {
      * replacement overwrites, so both have to be read from the row: a version
      * reading only the content from there would pass this.
      */
+    #[Group('wpml')]
     public function test_a_title_edited_after_the_cached_read_is_not_overwritten(): void {
         $published = $this->publish();
         WpStub::$row_override[$published['post_id']] = ['post_title' => 'Retitled by hand'];
@@ -543,6 +563,7 @@ final class ReplaceRequestTest extends TestCase {
      * get through. A `SELECT` without `FOR UPDATE` reads the same bytes and
      * holds nothing, so the sequence is asserted, not just the values.
      */
+    #[Group('wpml')]
     public function test_the_text_is_read_under_a_lock_the_write_happens_inside(): void {
         $published = $this->publish();
         $r = $this->replace($this->body($published));
@@ -566,6 +587,7 @@ final class ReplaceRequestTest extends TestCase {
      * rather than committed. A refusal that returned without either would hold
      * the row until the process ended, and every other writer would wait.
      */
+    #[Group('wpml')]
     public function test_a_refusal_taken_under_the_lock_rolls_back_and_releases(): void {
         $published = $this->publish();
         WpStub::$row_override[$published['post_id']] = ['post_content' => 'edited by hand'];
@@ -583,6 +605,7 @@ final class ReplaceRequestTest extends TestCase {
      * post this site does not have, or naming a different piece, is decided
      * without holding a row anybody else may be waiting for.
      */
+    #[Group('wpml')]
     public function test_a_refusal_decided_before_the_lock_opens_no_transaction(): void {
         $published = $this->publish();
         foreach ([
@@ -604,6 +627,7 @@ final class ReplaceRequestTest extends TestCase {
      * error says which way that resolves -- a refused rewrite costs the caller
      * a re-read, an applied one costs a human work they cannot get back.
      */
+    #[Group('wpml')]
     public function test_a_site_that_cannot_open_a_transaction_is_refused_rather_than_written(): void {
         $published = $this->publish();
         $GLOBALS['wpdb']->fails_on = 'START TRANSACTION';
@@ -622,6 +646,7 @@ final class ReplaceRequestTest extends TestCase {
      * it a moment ago; something removed it in between, and this endpoint does
      * not create.
      */
+    #[Group('wpml')]
     public function test_a_row_that_is_gone_by_the_time_it_is_locked_is_refused(): void {
         $published = $this->publish();
         WpStub::$rows_gone = [$published['post_id']];
@@ -641,6 +666,7 @@ final class ReplaceRequestTest extends TestCase {
      * inside an open transaction leaves every other writer of that row waiting
      * on a request that is already over.
      */
+    #[Group('wpml')]
     public function test_a_write_that_throws_releases_the_row(): void {
         $published = $this->publish();
         WpStub::$update_throws = 'a save_post hook exploded';
@@ -666,6 +692,7 @@ final class ReplaceRequestTest extends TestCase {
      * it has nothing to do with, and a replace overwrites a published title
      * and body.
      */
+    #[Group('wpml')]
     public function test_a_post_another_key_published_is_not_rewritten(): void {
         $published = $this->publish([], 'key-a');
         $r = $this->replace($this->body($published), null, 'key-b');
@@ -681,6 +708,7 @@ final class ReplaceRequestTest extends TestCase {
      * credential has no reason to make every other writer of that post wait on
      * a request that already decided to do nothing.
      */
+    #[Group('wpml')]
     public function test_the_identity_refusal_opens_no_transaction(): void {
         $this->replace($this->body($this->publish([], 'key-a')), null, 'key-b');
         $this->assertSame([], $this->statements(), 'the row was held for a refusal decided off it');
@@ -701,6 +729,7 @@ final class ReplaceRequestTest extends TestCase {
      * a check that both merely CONTAIN the same clause passes while one of
      * them appends the fact that separates them.
      */
+    #[Group('wpml')]
     public function test_the_identity_refusal_cannot_tell_the_two_targets_apart(): void {
         $reasons = [];
         foreach (['piece-1' => 'names the identifier the post carries',
@@ -723,6 +752,7 @@ final class ReplaceRequestTest extends TestCase {
      * values this test put on the site, so a refusal that started quoting any
      * of them fails here rather than being read past.
      */
+    #[Group('wpml')]
     public function test_the_identity_refusal_names_nothing_the_caller_did_not_send(): void {
         $published = $this->publish(['title' => 'A secret headline',
                                      'content' => '<p>A secret body.</p>',
@@ -744,6 +774,7 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     /** THE ACCEPT-PROOF: a key rewrites the piece it published itself. */
+    #[Group('wpml')]
     public function test_a_key_rewrites_its_own_piece(): void {
         $published = $this->publish([], 'key-a');
         $r = $this->replace($this->body($published), null, 'key-a');
@@ -759,6 +790,7 @@ final class ReplaceRequestTest extends TestCase {
      * the moment the plugin updated under it, for a holder who can neither see
      * the stamp nor add it.
      */
+    #[Group('wpml')]
     public function test_a_piece_that_predates_the_key_stamp_is_rewritten_by_any_key(): void {
         $published = $this->publish();
         // A POST FROM BEFORE THE STAMP EXISTED, made the way one on a client's
@@ -789,6 +821,7 @@ final class ReplaceRequestTest extends TestCase {
      * THE OWNERSHIP REFUSAL ITSELF IS STILL PINNED, by the test above this one
      * that presents a real second key.
      */
+    #[Group('wpml')]
     public function test_a_stamped_piece_is_not_rewritten_by_a_caller_with_no_identity(): void {
         $published = $this->publish([], 'key-a');
         $r = $this->replace($this->body($published), null, null);
@@ -808,6 +841,7 @@ final class ReplaceRequestTest extends TestCase {
      * already made, rather than only stopping `/content` telling it their
      * revisions.
      */
+    #[Group('wpml')]
     public function test_a_piece_in_a_type_this_key_does_not_reach_is_not_rewritten(): void {
         // The piece is a PAGE and the key does not name `page`, so the two
         // type names are different strings and the pair of assertions below
@@ -835,6 +869,7 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     /** THE ACCEPT-PROOFS EITHER SIDE OF IT: the named type, and no type named. */
+    #[Group('wpml')]
     public function test_a_piece_in_a_type_the_key_names_is_rewritten(): void {
         $published = $this->publish([], 'key-a');
         $r = $this->replace($this->body($published), ['post'], 'key-a');
@@ -842,6 +877,7 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertSame('The rewrite', WpStub::$posts[$published['post_id']]['post_title']);
     }
 
+    #[Group('wpml')]
     public function test_a_key_that_names_no_type_rewrites_in_any_type(): void {
         $published = $this->publish([], 'key-a');
         $r = $this->replace($this->body($published), null, 'key-a');

@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -266,6 +267,7 @@ final class KeyTest extends TestCase {
      * a post this pipeline just published is outside the scope of the key that
      * will link it a moment later.
      */
+    #[Group('wpml')]
     public function test_a_post_the_content_route_just_created_is_in_scope(): void {
         WpStub::reset();
         $r = CadenceContentRequest::run([

@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -72,6 +73,7 @@ final class PluginTest extends TestCase {
      * produces -- it is refused with the status that tells the caller to
      * re-read the site rather than to keep sending.
      */
+    #[Group('wpml')]
     public function test_the_replace_route_rewrites_once_and_refuses_the_replay(): void {
         $made = ($this->routes['/content']['callback'])(new WP_REST_Request([
             'piece_id' => 'p-1', 'post_type' => 'post', 'status' => 'draft',
@@ -133,6 +135,7 @@ final class PluginTest extends TestCase {
      * an argument the route never passes it, and every handler test still
      * passes while every post the connector creates has no author.
      */
+    #[Group('wpml')]
     public function test_the_content_route_gives_the_post_the_keys_byline(): void {
         WpStub::$users = [7 => 'A Real Person', 9 => 'Another Person'];
         $key = CadenceKey::issue('tenant-b', ['content.publish'], 9);
@@ -160,6 +163,7 @@ final class PluginTest extends TestCase {
         return [strtolower(CadenceKey::HEADER) => $issued['secret']];
     }
 
+    #[Group('wpml')]
     public function test_the_content_route_creates_once_and_answers_201_then_200(): void {
         $call = $this->routes['/content']['callback'];
         $body = ['piece_id' => 'p-1', 'post_type' => 'post', 'status' => 'draft',
@@ -185,6 +189,7 @@ final class PluginTest extends TestCase {
      * handler still passes. What the caller's verifier parses is what comes
      * back from here.
      */
+    #[Group('wpml')]
     public function test_the_content_routes_answer_carries_the_report(): void {
         WpStub::$active_languages = ['en' => [], 'de' => []];
         $response = ($this->routes['/content']['callback'])(new WP_REST_Request([
@@ -271,6 +276,7 @@ final class PluginTest extends TestCase {
         $this->assertFalse($permit(new WP_REST_Request([], $header)));
     }
 
+    #[Group('wpml')]
     public function test_a_refused_plan_comes_back_as_the_refusals_own_status(): void {
         WpStub::add_post(1, 'page', 'en', 9);
         WpStub::add_post(2, 'page', 'de', 9);
@@ -288,6 +294,7 @@ final class PluginTest extends TestCase {
         $this->assertSame([], WpStub::$writes);
     }
 
+    #[Group('wpml')]
     public function test_a_written_plan_comes_back_200(): void {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'page', 'de', 5);
@@ -364,6 +371,7 @@ final class PluginTest extends TestCase {
      * the order a publish run asks them, which is what makes this a proof that
      * the ordinary request passes rather than that the fixture does.
      */
+    #[Group('wpml')]
     public function test_publishing_two_languages_then_linking_them_still_succeeds(): void {
         $publish = $this->routes['/content']['callback'];
         $ids = [];
@@ -399,6 +407,7 @@ final class PluginTest extends TestCase {
      * `translation.link` authorised linking any post on the site, and the site
      * ITSELF is what a wrong group destroys the translation relations of.
      */
+    #[Group('wpml')]
     public function test_a_linking_key_cannot_reach_a_post_this_connector_never_published(): void {
         WpStub::add_post(41, 'page', 'en', null);
         WpStub::add_post(42, 'page', 'de', null);
@@ -433,6 +442,7 @@ final class PluginTest extends TestCase {
      * header, and read the code off the REST response body rather than off the
      * handler's return.
      */
+    #[Group('wpml')]
     public function test_the_linking_route_applies_the_keys_publish_scope(): void {
         $call = $this->route[2]['callback'];
         $header = $this->key(CadenceKey::issue('tenant-a', ['translation.link'], 7, ['post']));
@@ -487,6 +497,7 @@ final class PluginTest extends TestCase {
      * Both halves here -- the refusal and the ordinary publish that must still
      * work -- go through the registered callback with a real key in a header.
      */
+    #[Group('wpml')]
     public function test_the_content_route_applies_the_keys_publish_scope(): void {
         $call = $this->routes['/content']['callback'];
         $header = $this->key(CadenceKey::issue('tenant-a', ['content.publish'], 7, ['post']));
@@ -512,6 +523,7 @@ final class PluginTest extends TestCase {
      * repository does not control, and the upgrade must not turn a working
      * publish into a 403 over a field the key's holder cannot see.
      */
+    #[Group('wpml')]
     public function test_the_content_route_lets_an_unscoped_key_publish_into_any_type(): void {
         $header = $this->key(CadenceKey::issue('tenant-a', ['content.publish'], 7));
         $made = ($this->routes['/content']['callback'])(new WP_REST_Request([
@@ -534,6 +546,7 @@ final class PluginTest extends TestCase {
      * pipelines actually run -- which is what makes this a boundary rather than
      * a field.
      */
+    #[Group('wpml')]
     public function test_one_tenants_key_cannot_link_another_tenants_posts(): void {
         $a = $this->key(CadenceKey::issue('tenant-a', ['content.publish', 'translation.link'], 7));
         $b = $this->key(CadenceKey::issue('tenant-b', ['content.publish', 'translation.link'], 7));
@@ -587,6 +600,7 @@ final class PluginTest extends TestCase {
      * OFF THE BODY AND NOT OFF `run`'s RETURN: what leaks is what reaches the
      * caller, and a field that never left the plugin proves nothing.
      */
+    #[Group('wpml')]
     public function test_a_second_tenant_cannot_tell_the_first_tenants_posts_from_absent_ones(): void {
         $a = $this->key(CadenceKey::issue('tenant-a', ['content.publish', 'translation.link'], 7));
         $b = $this->key(CadenceKey::issue('tenant-b', ['content.publish', 'translation.link'], 7));
@@ -656,6 +670,7 @@ final class PluginTest extends TestCase {
      * lookup perfectly while the route passes it no key id, and every handler
      * test would still pass.
      */
+    #[Group('wpml')]
     public function test_a_second_tenants_guessed_piece_id_reaches_neither_the_post_id_nor_the_revision(): void {
         $a = CadenceKey::issue('tenant-a', ['content.publish'], 7, ['page']);
         $b = CadenceKey::issue('tenant-b', ['content.publish', 'content.replace'], 7, ['post']);
@@ -721,6 +736,7 @@ final class PluginTest extends TestCase {
      * style: `CadenceReplaceRequest` can ask `created_by` perfectly while the
      * route passes it no key id, and every handler test would still pass.
      */
+    #[Group('wpml')]
     public function test_one_tenants_key_cannot_replace_another_tenants_post(): void {
         $a = CadenceKey::issue('tenant-a', ['content.publish', 'content.replace'], 7);
         $b = CadenceKey::issue('tenant-b', ['content.publish', 'content.replace'], 7);

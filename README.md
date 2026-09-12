@@ -28,10 +28,19 @@ This plugin exposes an endpoint that writes that relationship through WPML's own
 
 ## Installing
 
-Download `cadence-connector.zip` from the
-[latest release](https://github.com/Elegia-io/cadence-wordpress/releases/latest).
-In WordPress, go to **Plugins → Add New → Upload Plugin**, choose the zip, install
-it and activate.
+**This plugin is distributed through the WordPress.org plugin directory**, so a
+security fix reaches every install through WordPress's own update check and the
+per-plugin auto-update toggle, without anyone visiting the site. That decision,
+the code it means we never write, and its fallback are recorded in
+[DISTRIBUTION.md](DISTRIBUTION.md).
+
+**It has not been submitted yet.** Until it is listed, the path is the manual
+one: download `cadence-connector.zip` from the
+[latest release](https://github.com/Elegia-io/cadence-wordpress/releases/latest),
+go to **Plugins → Add New → Upload Plugin**, choose the zip, install it and
+activate. A site installed this way gets no update check; it is upgraded by
+uploading the next zip over it, or by reinstalling from the directory once the
+listing exists.
 
 All three endpoints are then live under `/wp-json/cadence/v1/`, and a settings
 screen appears at **Settings → Cadence Connector**. Nothing else is added: no
@@ -658,7 +667,10 @@ machine, only podman or docker.
 
 `.github/workflows/ci.yml` runs on every pull request (and on demand via
 `workflow_dispatch`): `php -l` over every tracked PHP file on **PHP 8.1**, the version the
-plugin header declares as its minimum, and the PHPUnit suite on PHP 8.3. Before
+plugin header declares as its minimum, the PHPUnit suite on PHP 8.3, and
+`check-readme-version.py`, which refuses a tree whose `readme.txt` `Stable tag`
+and plugin-header `Version` disagree — the pair WordPress.org builds a release
+from against the number every install reports. Before
 that workflow existed this repository ran nothing — the suite above was a
 command someone chose to type (`Elegia-io/cadence`#1259).
 

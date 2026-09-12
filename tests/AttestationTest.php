@@ -24,6 +24,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
 final class AttestationTest extends TestCase {
@@ -1103,6 +1104,7 @@ final class AttestationTest extends TestCase {
     }
 
     /** AND AN ATTESTED PUBLISH OF A GOOD BODY WRITES, AND SAYS SO ON THE WIRE. */
+    #[Group('wpml')]
     public function test_an_attested_publish_writes_and_reports_verified(): void {
         $body = ['piece_id' => 'p-1', 'language' => 'en', 'post_type' => 'post',
                  'status' => 'draft', 'title' => 'T', 'content' => 'C',
@@ -1124,6 +1126,7 @@ final class AttestationTest extends TestCase {
     }
 
     /** AN EXEMPT PUBLISH SAYS `exempt`, AND NAMES NO KID. */
+    #[Group('wpml')]
     public function test_an_exempt_publish_reports_exempt_with_no_kid(): void {
         CadenceKey::set_unsigned_ok(self::KEY, true, 1);
         $body = ['piece_id' => 'p-1', 'language' => 'en', 'post_type' => 'post',
@@ -1174,6 +1177,7 @@ final class AttestationTest extends TestCase {
      * field was silently absent while every other test passed. Asserted here
      * so the field has somewhere to be missing from.
      */
+    #[Group('wpml')]
     public function test_a_rewrite_reports_the_attestation_that_let_it_through(): void {
         $body = ['piece_id' => 'p-1', 'language' => 'en', 'post_type' => 'post',
                  'status' => 'draft', 'title' => 'T', 'content' => 'C',

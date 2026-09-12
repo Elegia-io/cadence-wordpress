@@ -59,12 +59,146 @@ final class ContentRequestTest extends TestCase {
      * @param list<string> $capabilities
      */
     private function publish(array $body, array $capabilities = ['content.replace'],
-                             ?int $author = null): array {
+                             ?int $author = null, ?array $post_types = null,
+                             ?string $key_id = null): array {
         return CadenceContentRequest::run(
             $body,
             static fn (string $capability): bool => in_array($capability, $capabilities, true),
-            $author
+            $author,
+            // NULL, WHICH IS THE KEY ISSUED BEFORE EITHER FIELD EXISTED: any
+            // post type, and no stamp on what it creates. Defaulted here so
+            // every test above goes on asserting what it always did, and the
+            // two narrowings below are reached only by naming them.
+            $post_types,
+            $key_id
         );
+    }
+
+    /**
+     * A PUBLISH INTO A TYPE THE KEY DOES NOT NAME IS REFUSED, AND NOTHING IS
+     * CREATED.
+     *
+     * `content.publish` used to reach every post type the site registers, and
+     * a key is worth what its widest grant is worth: a tenant's pipeline that
+     * publishes blog posts could create a shop product, a page, or an entry in
+     * whatever custom type another plugin on that site registers.
+     */
+    public function test_a_publish_into_a_type_the_key_does_not_name_is_refused(): void {
+        $r = $this->publish($this->body(['post_type' => 'page']), ['content.replace'], null, ['post']);
+
+        $this->assertFalse($r['ok'], 'a key scoped to post created a page');
+        $this->assertSame('post_type_out_of_scope', $r['code']);
+        $this->assertSame([], WpStub::$inserted, 'a refused publish inserted anyway');
+        // NOT A MALFORMED BODY. `page` is a type this site registers and the
+        // request is perfectly well formed; a caller told `bad_request` would
+        // re-read its own JSON forever over a scope its operator has to widen.
+        $this->assertNotSame('bad_request', $r['code']);
+    }
+
+    /**
+     * THE ACCEPT-PROOF: the ordinary publish into the key's declared type still
+     * succeeds.
+     *
+     * Without it the test above passes on a route that refuses every publish,
+     * which is a narrowing nobody can tell from a broken connector.
+     */
+    public function test_a_publish_into_the_type_the_key_names_still_succeeds(): void {
+        $r = $this->publish($this->body(['post_type' => 'post']), ['content.replace'], null, ['post']);
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertTrue($r['created']);
+        $this->assertSame('post', WpStub::$inserted[0]['post_type'] ?? null);
+    }
+
+    /**
+     * AND A KEY THAT NAMES NO TYPE PUBLISHES INTO ANY, which is the
+     * compatibility path for every key already issued on a client's site.
+     */
+    public function test_a_key_naming_no_post_type_publishes_into_any_registered_type(): void {
+        $r = $this->publish($this->body(['post_type' => 'page']));
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('page', WpStub::$inserted[0]['post_type'] ?? null);
+    }
+
+    /**
+     * THE REFUSAL IS NOT AN ENUMERATION ORACLE FOR THE SITE'S POST TYPES.
+     *
+     * Authorisation comes first: a key scoped to `post` gets the same answer
+     * for a type this site registers and one it does not, so a caller cannot
+     * ask "is `shop_order` registered here" one refusal at a time from behind a
+     * key entitled to neither. `post_type_exists` is a read of the client's
+     * site and it happens only after the key's own scope has admitted the type.
+     */
+    public function test_a_scoped_key_is_told_nothing_about_types_it_may_not_publish_into(): void {
+        $registered   = $this->publish($this->body(['post_type' => 'page']), ['content.replace'], null, ['post']);
+        WpStub::reset();
+        WpStub::$capabilities = ['publish_posts' => [null], 'edit_posts' => [null]];
+        $unregistered = $this->publish($this->body(['post_type' => 'shop_order']), ['content.replace'], null, ['post']);
+
+        $this->assertSame('post_type_out_of_scope', $registered['code']);
+        $this->assertSame('post_type_out_of_scope', $unregistered['code'],
+            'the refusal told a caller which post types this site registers');
+        // The reason names what the key reaches and what was asked for, and
+        // says nothing about what the site has.
+        $this->assertStringNotContainsString('this site', $unregistered['reason']);
+    }
+
+    /**
+     * THE TWIN THAT KEEPS THE ORDERING HONEST: an UNSCOPED key asking for a
+     * type this site does not register is still told so.
+     *
+     * Without it the check above is satisfied by never asking the site at all,
+     * which would answer `bad_request` to nobody and let a publish reach
+     * `wp_insert_post` with a type WordPress does not know.
+     */
+    public function test_an_unscoped_key_is_still_refused_a_type_this_site_does_not_register(): void {
+        $r = $this->publish($this->body(['post_type' => 'shop_order']));
+
+        $this->assertFalse($r['ok']);
+        $this->assertSame('bad_request', $r['code']);
+        $this->assertStringContainsString('shop_order', $r['reason']);
+        $this->assertSame([], WpStub::$inserted);
+    }
+
+    /**
+     * THE CREATING KEY'S ID IS STAMPED ON THE POST, in the same call that makes
+     * it.
+     *
+     * This is what lets `translation.link` later ask whether a post is THIS
+     * key's own rather than merely one of Cadence's. Written through
+     * `meta_input` beside the identifier and for the same reason: a stamp
+     * written afterwards leaves a window in which the post carries no identity.
+     */
+    public function test_the_created_post_carries_the_creating_keys_id(): void {
+        $r = $this->publish($this->body(), ['content.replace'], null, null, 'aaaa1111');
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('aaaa1111',
+            WpStub::$inserted[0]['meta_input'][CadenceContentRequest::KEY_META] ?? null);
+        $this->assertSame('aaaa1111',
+            WpStub::$meta[$r['post_id']][CadenceContentRequest::KEY_META] ?? null);
+        // The identifier is still there. The two travel together, and a stamp
+        // that displaced the value the whole duplicate defence reads would be
+        // invisible to every assertion about the stamp itself.
+        $this->assertSame($this->body()['piece_id'],
+            WpStub::$meta[$r['post_id']][CadenceContentRequest::META] ?? null);
+        // NEVER THE SECRET. What is stamped travels in every database dump the
+        // client's site produces.
+        $this->assertStringNotContainsString('.',
+            (string) WpStub::$meta[$r['post_id']][CadenceContentRequest::KEY_META]);
+    }
+
+    /**
+     * AND A CALLER THIS ROUTE CANNOT NAME STAMPS NOTHING, exactly as every
+     * insert did before the stamp existed.
+     */
+    public function test_a_publish_with_no_key_id_stamps_nothing(): void {
+        $r = $this->publish($this->body());
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertArrayNotHasKey(CadenceContentRequest::KEY_META,
+                                    WpStub::$inserted[0]['meta_input'] ?? []);
     }
 
     /**

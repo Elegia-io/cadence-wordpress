@@ -51,9 +51,10 @@ final class CadenceRestRoute {
      * ids it extracts are compared by test against the ids the handler writes.
      *
      * AND IT IS NOT THE AUTHORISATION EITHER, still. `translation.link` no
-     * longer reaches any post on the site -- `CadenceKey::scope_admits`, called
-     * from `CadenceLinkRequest::run`, refuses a post this plugin did not create
-     * -- but that check is deliberately NOT duplicated here: this callback can
+     * longer reaches any post on the site -- `CadenceKey::scope_admits` and
+     * `CadenceKey::created_by`, called from `CadenceLinkRequest::run`, refuse a
+     * post this plugin did not create and one a different key did
+     * -- but neither check is duplicated here: this callback can
      * only answer true or false, and WordPress turns false into its own
      * `rest_forbidden` with no code a caller can match on. The refusal that
      * carries `post_out_of_scope` is the one at the write.
@@ -169,6 +170,14 @@ final class CadenceRestRoute {
      * the request nor the site: it is that this credential does not reach that
      * post.
      *
+     * ALL THREE 403s ARE SEPARATE CODES FOR THE SAME REASON THEY ARE SEPARATE
+     * BRANCHES. `post_out_of_scope` is a post this connector never published,
+     * `post_other_key` one a different key published, and
+     * `post_type_out_of_scope` a post type this key may not create in. One code
+     * over all three would make a caller guess which of three unrelated fixes
+     * -- republish through this route, present the other tenant's key, re-issue
+     * this one with a wider scope -- its operator has to make.
+     *
      * `source_group_unset` and `source_group_unreadable` are 500s and NOT 409s,
      * though a re-read is the caller's next step for both. A 409 invites the
      * same request again, and the likeliest cause of either is that WPML on this
@@ -184,6 +193,8 @@ final class CadenceRestRoute {
         'bad_request'                => 400,
         'bad_replacement'            => 400,
         'post_out_of_scope'          => 403,
+        'post_other_key'             => 403,
+        'post_type_out_of_scope'     => 403,
         'capability_mismatch'        => 409,
         'unsupported_language'       => 409,
         'group_unknown'              => 409,

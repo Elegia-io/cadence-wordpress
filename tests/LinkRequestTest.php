@@ -355,7 +355,21 @@ final class LinkRequestTest extends TestCase {
                 $this->ours(1);
                 return $this->plan(['trid' => null, 'create_group' => true]);
             },
+            'post_other_key' => function () {
+                WpStub::add_post(1, 'page', 'en', null);
+                WpStub::add_post(2, 'page', 'de', null);
+                // BOTH are Cadence's, so `post_out_of_scope` does not fire and
+                // this code is reachable only through its own predicate. Post 2
+                // carries another key's stamp; the asking key is named below.
+                $this->ours(1, 2);
+                WpStub::$meta[2][CadenceContentRequest::KEY_META] = 'bbbb2222';
+                return $this->plan(['trid' => null, 'create_group' => true]);
+            },
         ];
+
+        // WHICH KEY IS ASKING, for the one cause that needs a caller with an
+        // identity. Every other cause is refused whoever asks.
+        $asking = ['post_other_key' => 'aaaa1111'];
 
         // EVERY REFUSAL WRITES NOTHING, EXCEPT THE TWO THAT CANNOT. The create
         // path has no group id until its own first write, so its two refusals
@@ -367,20 +381,22 @@ final class LinkRequestTest extends TestCase {
         $seen = [];
         foreach ($causes as $expected => $arrange) {
             WpStub::reset();
-            $r = CadenceLinkRequest::run($arrange());
+            $r = CadenceLinkRequest::run($arrange(), $asking[$expected] ?? null);
             $this->assertFalse($r['ok'], $expected . ' was supposed to be refused');
             $this->assertCount($wrote_the_source[$expected] ?? 0, WpStub::$writes, $expected);
             $this->assertSame($expected, $r['code'] ?? null, $expected);
             $seen[] = $r['code'];
         }
-        // Ten causes, ten codes: a mapping that collapsed two of them would
-        // still pass every assertion above if both expectations were changed
-        // together, and the caller could no longer tell them apart. The count
-        // is the union of two branches that each added to it -- eight after the
-        // scope narrowing, nine after the create path's two -- so it is
-        // asserted against `REFUSAL_CODES` rather than retyped from either.
-        $this->assertCount(10, array_unique($seen));
-        $this->assertSame(10, count(CadenceLinkRequest::REFUSAL_CODES));
+        // Eleven causes, eleven codes: a mapping that collapsed two of them
+        // would still pass every assertion above if both expectations were
+        // changed together, and the caller could no longer tell them apart. The
+        // count is the union of branches that each added to it -- eight after
+        // the scope narrowing, ten after the create path's two, eleven once the
+        // scope split into "not this connector's" and "not this key's" -- so it
+        // is asserted against `REFUSAL_CODES` rather than retyped from any of
+        // them.
+        $this->assertCount(11, array_unique($seen));
+        $this->assertSame(11, count(CadenceLinkRequest::REFUSAL_CODES));
 
         // AND THE PUBLISHED LIST IS THAT LIST. `REFUSAL_CODES` is what the REST
         // layer maps to HTTP statuses; if a further refusal is added here and
@@ -774,6 +790,101 @@ final class LinkRequestTest extends TestCase {
         $this->assertSame('post_out_of_scope', $r['code']);
         $this->assertSame([], WpStub::$writes);
         $this->assertFalse(CadenceKey::scope_admits(2));
+    }
+
+    /**
+     * A POST A DIFFERENT CONNECTOR KEY PUBLISHED IS NOT THIS KEY'S TO LINK.
+     *
+     * The scope used to be "a piece Cadence published", which on a site holding
+     * two keys -- two brands on one WordPress, an agency serving two of our
+     * tenants -- is the other tenant's pieces as well as this one's. WPML's
+     * action hands the group it is given, and a group written over posts that
+     * already had one DESTROYS the relations they had.
+     *
+     * The refusal is over the TRANSLATION and both posts are Cadence's, so a
+     * check that fell back to `post_out_of_scope` would be refusing the wrong
+     * fact and a check that asked only about the source would pass this.
+     */
+    public function test_a_plan_naming_a_post_a_different_key_published_writes_nothing(): void {
+        WpStub::add_post(1, 'page', 'en', null);
+        WpStub::add_post(2, 'page', 'de', null);
+        $this->ours(1, 2);
+        WpStub::$meta[1][CadenceContentRequest::KEY_META] = 'aaaa1111';
+        WpStub::$meta[2][CadenceContentRequest::KEY_META] = 'bbbb2222';
+
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), 'aaaa1111');
+
+        $this->assertFalse($r['ok'], "a second key's post was linked");
+        $this->assertSame('post_other_key', $r['code']);
+        $this->assertSame([], WpStub::$writes, 'a refused plan wrote anyway');
+        // THE REFUSAL NAMES THE BRANCH THAT FIRED. Post 2 IS a piece this
+        // connector published; a caller told `post_out_of_scope` would be told
+        // something untrue about it, and would republish a piece that is
+        // already on the site rather than present the key that owns it.
+        $this->assertNotSame('post_out_of_scope', $r['code']);
+        $this->assertStringNotContainsString('bbbb2222', $r['reason'],
+            "the refusal handed this caller another tenant's key id");
+    }
+
+    /**
+     * AND THE SOURCE IS ASKED TOO, not only the translations.
+     *
+     * The source is written like every other member, so a check that skipped it
+     * would let a key attach another tenant's piece to a group as its source --
+     * the destructive write with the roles swapped.
+     */
+    public function test_a_source_a_different_key_published_writes_nothing(): void {
+        WpStub::add_post(1, 'page', 'en', null);
+        WpStub::add_post(2, 'page', 'de', null);
+        $this->ours(1, 2);
+        WpStub::$meta[1][CadenceContentRequest::KEY_META] = 'bbbb2222';
+        WpStub::$meta[2][CadenceContentRequest::KEY_META] = 'aaaa1111';
+
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), 'aaaa1111');
+
+        $this->assertFalse($r['ok']);
+        $this->assertSame('post_other_key', $r['code']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * THE TWIN: the same plan over THIS key's own posts is written.
+     *
+     * Without it the two tests above pass on a `created_by` that returns false
+     * unconditionally, which is a route that links nothing at all.
+     */
+    public function test_the_same_plan_over_this_keys_own_posts_is_written(): void {
+        WpStub::add_post(1, 'page', 'en', null);
+        WpStub::add_post(2, 'page', 'de', null);
+        $this->ours(1, 2);
+        WpStub::$meta[1][CadenceContentRequest::KEY_META] = 'aaaa1111';
+        WpStub::$meta[2][CadenceContentRequest::KEY_META] = 'aaaa1111';
+
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), 'aaaa1111');
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertCount(2, WpStub::$writes);
+    }
+
+    /**
+     * AND A PLAN OVER POSTS THAT PREDATE THE STAMP IS STILL WRITTEN.
+     *
+     * THE COMPATIBILITY PATH, asserted at the route rather than left to the
+     * predicate's docblock. Every piece Cadence has already published on every
+     * client's site carries no key stamp; refusing those would break every
+     * link over content that is already live, which is worse than the widening
+     * this closes. The posts here are exactly what the 0.3.0 connector left
+     * behind: an identifier and no identity.
+     */
+    public function test_a_plan_over_posts_that_predate_the_key_stamp_is_still_written(): void {
+        WpStub::add_post(1, 'page', 'en', null);
+        WpStub::add_post(2, 'page', 'de', null);
+        $this->ours(1, 2);   // the identifier only -- no stamp, as 0.3.0 wrote them
+
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), 'aaaa1111');
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertCount(2, WpStub::$writes);
     }
 
     public static function unreadableIdentifiers(): array {

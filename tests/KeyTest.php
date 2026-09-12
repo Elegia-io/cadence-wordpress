@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -276,5 +277,134 @@ final class KeyTest extends TestCase {
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertTrue(CadenceKey::scope_admits($r['post_id']),
             'a post this connector had just created was outside the scope of a key that links it');
+    }
+
+    /**
+     * A POST A DIFFERENT KEY CREATED IS NOT THIS KEY'S TO ACT ON.
+     *
+     * `scope_admits` answers "did Cadence make this", which on a site holding
+     * two connector keys -- two brands on one WordPress, an agency serving two
+     * tenants -- admits the other tenant's pieces. A translation group written
+     * over them destroys the relations they had, so the second question has to
+     * be asked separately and this is it.
+     */
+    public function test_a_post_a_different_key_created_is_not_this_keys_own(): void {
+        WpStub::add_post(1, 'post');
+        WpStub::cadence_published(1, 'piece-a');
+        WpStub::$meta[1][CadenceContentRequest::KEY_META] = 'aaaa1111';
+
+        $this->assertTrue(CadenceKey::created_by(1, 'aaaa1111'));
+        $this->assertFalse(CadenceKey::created_by(1, 'bbbb2222'));
+        // AND NO IDENTITY IS NOT A WILDCARD. A caller this route cannot name
+        // reaches a stamped post never -- the direction matters, because the
+        // null case is the one every unauthenticated caller arrives in.
+        $this->assertFalse(CadenceKey::created_by(1, null));
+    }
+
+    /**
+     * THE NULL-IDENTITY PATH, WHICH IS WHY THIS CAN SHIP AT ALL.
+     *
+     * Every post Cadence has already created on every client's site carries no
+     * key stamp: the stamp did not exist when it was made. Refusing those would
+     * refuse every link over every piece already published -- an upgrade that
+     * breaks the working case, which is worse than the widening it closes. So
+     * an unstamped post stays reachable, and it is a documented branch rather
+     * than a falsy check: an absent row, a blank string and an array something
+     * else wrote all take it.
+     */
+    #[DataProvider('absentStamps')]
+    public function test_a_post_carrying_no_key_stamp_is_reachable_by_any_key($stamp): void {
+        WpStub::add_post(1, 'post');
+        WpStub::cadence_published(1, 'piece-a');
+        if ($stamp !== 'absent') {
+            WpStub::$meta[1][CadenceContentRequest::KEY_META] = $stamp;
+        }
+
+        $this->assertTrue(CadenceKey::created_by(1, 'aaaa1111'));
+        $this->assertTrue(CadenceKey::created_by(1, 'bbbb2222'));
+    }
+
+    public static function absentStamps(): array {
+        return [
+            'no meta row' => ['absent'],
+            'blank'       => [''],
+            'whitespace'  => ["  \t "],
+            'an array'    => [['aaaa1111']],
+            'null'        => [null],
+        ];
+    }
+
+    /** The id a presented key authenticates as -- and null for one that does not. */
+    public function test_the_key_id_is_readable_only_from_a_key_that_authenticates(): void {
+        $key = $this->issue(['content.publish']);
+        $this->assertSame($key['id'], CadenceKey::key_id_for($key['secret']));
+        // THE ID ALONE IS NOT AN IDENTITY. Spelling a real key's id in front
+        // of a dot is what a second tenant would try, and the hash comparison
+        // in `grant` is what refuses it -- without which the stamp comparison
+        // would be a boundary anyone could walk through by guessing an id that
+        // is printed on the admin screen.
+        $this->assertNull(CadenceKey::key_id_for($key['id'] . '.wrong-secret'));
+        $this->assertNull(CadenceKey::key_id_for(null));
+        CadenceKey::revoke($key['id']);
+        $this->assertNull(CadenceKey::key_id_for($key['secret']));
+    }
+
+    /**
+     * A KEY NAMES THE POST TYPES ITS `content.publish` MAY CREATE IN.
+     *
+     * The one scope that cannot be derived from the site: a post being created
+     * has no meta to ask about yet, so the types are declared on the key.
+     */
+    public function test_a_key_can_be_issued_scoped_to_post_types(): void {
+        $key = CadenceKey::issue('tenant-a', ['content.publish'], 7, ['post']);
+        $this->assertIsArray($key, is_string($key) ? $key : '');
+        $this->assertSame(['post'], CadenceKey::publish_types_for($key['secret']));
+        $this->assertSame(['post'], CadenceKey::all()[$key['id']]['post_types']);
+    }
+
+    /**
+     * A TYPO IS REFUSED WHEN THE KEY IS MADE, NOT WHEN A PUBLISH FAILS.
+     *
+     * `post_type_exists` is the site's own answer and this is the one moment a
+     * human is on the screen to read it. A key scoped to `artcle` would
+     * otherwise be stored, read on the admin screen as a key that works, and
+     * refuse every publish it is ever presented for -- with a 403 whose holder
+     * can see neither the field nor the typo in it.
+     */
+    public function test_a_key_naming_a_post_type_this_site_does_not_register_is_refused(): void {
+        $result = CadenceKey::issue('tenant-a', ['content.publish'], 7, ['artcle']);
+        $this->assertIsString($result);
+        $this->assertStringContainsString('artcle', $result);
+        $this->assertSame([], CadenceKey::all(), 'a key with an impossible scope was stored anyway');
+    }
+
+    /**
+     * AN EMPTY LIST IS REFUSED, and is not read as "any".
+     *
+     * The two are a keystroke apart on the screen and opposite in effect: a key
+     * scoped to nothing refuses every publish, and one scoped to any publishes
+     * into every type the site registers. Leaving the field blank is how an
+     * operator says "any", and it arrives here as null.
+     */
+    public function test_a_publish_scope_naming_no_type_is_refused(): void {
+        $this->assertIsString(CadenceKey::issue('tenant-a', ['content.publish'], 7, []));
+        $this->assertIsString(CadenceKey::issue('tenant-a', ['content.publish'], 7, ['  ']));
+        $this->assertSame([], CadenceKey::all());
+    }
+
+    /**
+     * A KEY ISSUED BEFORE THE FIELD EXISTED PUBLISHES INTO ANY TYPE.
+     *
+     * THE COMPATIBILITY PATH, and the reason the field is optional. Keys are
+     * live on sites this repository does not control; a new required field
+     * would turn a working publish into a 403 the moment the plugin updated,
+     * for a key whose holder can neither see the field nor fill it in. The
+     * record carries no `post_types` at all, which is what a key issued by 0.3.0
+     * looks like, and `publish_types_for` reads that absence as "any".
+     */
+    public function test_a_key_that_names_no_post_type_publishes_into_any(): void {
+        $key = $this->issue(['content.publish']);
+        $this->assertArrayNotHasKey('post_types', CadenceKey::all()[$key['id']]);
+        $this->assertNull(CadenceKey::publish_types_for($key['secret']));
     }
 }

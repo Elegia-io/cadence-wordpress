@@ -53,10 +53,25 @@ final class CadenceAdmin {
                 CadenceKey::CAPABILITIES,
                 array_map('sanitize_text_field', (array) ($post['caps'] ?? []))
             ));
+            // THE PUBLISH SCOPE, SPLIT AND HANDED OVER UNJUDGED. Blank is
+            // null -- "any registered type", the key this plugin issued before
+            // the field existed -- and anything else is the list as typed.
+            // Whether a name in it is a post type this site registers is
+            // `CadenceKey`'s question, asked of the site with
+            // `post_type_exists`; deciding it here would be a decision nothing
+            // runs a test against, and dropping an unknown name silently would
+            // issue a key narrower than the operator asked for without saying
+            // so. A typo comes back as the error this screen prints.
+            $typed = sanitize_text_field((string) ($post['post_types'] ?? ''));
+            $post_types = trim($typed) === ''
+                ? null
+                : array_values(array_filter(array_map('trim', explode(',', $typed)),
+                                            static fn (string $t): bool => $t !== ''));
             // The author goes through as it was posted. Whether it names a
             // user this site has is `CadenceKey`'s question, not this file's.
             $result = CadenceKey::issue(sanitize_text_field((string) ($post['label'] ?? '')), $capabilities,
-                                        sanitize_text_field((string) ($post['author'] ?? '')));
+                                        sanitize_text_field((string) ($post['author'] ?? '')),
+                                        $post_types);
             if (is_string($result)) {
                 $error = $result;
             } else {
@@ -88,11 +103,19 @@ final class CadenceAdmin {
             echo '<div class="notice notice-warning"><p>Copy this key now; it is not shown again.</p><p><code>'
                 . esc_html(sanitize_text_field(wp_unslash((string) $_GET['issued']))) . '</code></p></div>';
         }
-        echo '<table class="widefat"><thead><tr><th>Label</th><th>Id</th><th>Grants</th><th>Byline</th><th>State</th><th></th></tr></thead><tbody>';
+        echo '<table class="widefat"><thead><tr><th>Label</th><th>Id</th><th>Grants</th><th>Publishes in</th><th>Byline</th><th>State</th><th></th></tr></thead><tbody>';
         foreach (CadenceKey::all() as $id => $record) {
             echo '<tr><td>' . esc_html((string) $record['label']) . '</td>'
                 . '<td><code>' . esc_html($id) . '</code></td>'
                 . '<td>' . esc_html(implode(', ', $record['caps'])) . '</td>'
+                // A KEY THAT NAMES NO POST TYPE says so here, and the row reads
+                // as what it is: a key that may create in any type this site
+                // registers. Keys issued before the field existed are all of
+                // them, and re-issuing is the fix -- the same shape as the
+                // byline below.
+                . '<td>' . (isset($record['post_types'])
+                    ? esc_html(implode(', ', (array) $record['post_types']))
+                    : 'any type — re-issue to scope') . '</td>'
                 // A KEY ISSUED BEFORE KEYS CARRIED A BYLINE says so here.
                 // Posts it creates have no author, as they always have; this
                 // is the only place that fact is visible, and re-issuing the
@@ -121,6 +144,15 @@ final class CadenceAdmin {
         echo '<p>Byline author ';
         wp_dropdown_users(['name' => 'author', 'selected' => get_current_user_id()]);
         echo '</p>';
+        // THE POST TYPES `content.publish` MAY CREATE IN. Free text and not a
+        // list of checkboxes: a site's post types are registered by its own
+        // plugins and a type this screen did not know to offer is exactly the
+        // custom type a tenant's pipeline publishes into. What a checkbox list
+        // buys -- no typos -- `CadenceKey::issue` buys instead by asking the
+        // site, at the one moment a human is here to read the answer.
+        echo '<p><label>Publishes in <input name="post_types" placeholder="post, page">'
+            . '</label><br><em>Comma-separated post types. Leave blank for any type '
+            . 'this site registers.</em></p>';
         foreach (CadenceKey::CAPABILITIES as $capability) {
             echo '<p><label><input type="checkbox" name="caps[]" value="' . esc_attr($capability) . '"> '
                 . esc_html($capability) . '</label></p>';

@@ -409,4 +409,98 @@ final class PluginTest extends TestCase {
         $this->assertFalse($response->get_data()['ok']);
         $this->assertSame([], WpStub::$writes, 'a post outside the scope was linked anyway');
     }
+
+    /**
+     * THE ROUTE APPLIES THE PRESENTING KEY'S PUBLISH SCOPE.
+     *
+     * Asserted at the route, not at the handler: the handler can refuse
+     * perfectly on an argument the route never passes it, and every handler
+     * test still passes while a key scoped to `post` goes on creating pages.
+     * Both halves here -- the refusal and the ordinary publish that must still
+     * work -- go through the registered callback with a real key in a header.
+     */
+    public function test_the_content_route_applies_the_keys_publish_scope(): void {
+        $call = $this->routes['/content']['callback'];
+        $header = $this->key(CadenceKey::issue('tenant-a', ['content.publish'], 7, ['post']));
+        $body = ['piece_id' => 'p-1', 'status' => 'draft', 'title' => 'T', 'content' => 'C',
+                 'language' => 'en', 'declared' => ['multilingual' => true, 'languages' => ['en']]];
+
+        $refused = $call(new WP_REST_Request($body + ['post_type' => 'page'], $header));
+        $this->assertSame(403, $refused->get_status());
+        $this->assertSame('post_type_out_of_scope', $refused->get_data()['code']);
+        $this->assertSame([], WpStub::$inserted, 'a key scoped to post created a page');
+
+        // THE ACCEPT-PROOF. A narrowing with only a refusal test is one nobody
+        // can tell from a connector that publishes nothing.
+        $made = $call(new WP_REST_Request($body + ['post_type' => 'post'], $header));
+        $this->assertSame(201, $made->get_status(), (string) ($made->get_data()['reason'] ?? ''));
+        $this->assertCount(1, WpStub::$inserted);
+    }
+
+    /**
+     * AND A KEY THAT NAMES NO POST TYPE STILL PUBLISHES INTO ANY.
+     *
+     * The compatibility path, at the route: keys are live on sites this
+     * repository does not control, and the upgrade must not turn a working
+     * publish into a 403 over a field the key's holder cannot see.
+     */
+    public function test_the_content_route_lets_an_unscoped_key_publish_into_any_type(): void {
+        $header = $this->key(CadenceKey::issue('tenant-a', ['content.publish'], 7));
+        $made = ($this->routes['/content']['callback'])(new WP_REST_Request([
+            'piece_id' => 'p-1', 'post_type' => 'page', 'status' => 'draft', 'title' => 'T',
+            'content' => 'C', 'language' => 'en',
+            'declared' => ['multilingual' => true, 'languages' => ['en']]], $header));
+
+        $this->assertSame(201, $made->get_status(), (string) ($made->get_data()['reason'] ?? ''));
+        $this->assertSame('page', WpStub::$inserted[0]['post_type'] ?? null);
+    }
+
+    /**
+     * TWO KEYS ON ONE SITE DO NOT SHARE A SCOPE, end to end through the
+     * registered routes.
+     *
+     * The shape this is filed against is a client with two brands on one
+     * WordPress, or an agency site serving two of our tenants. Nothing writes
+     * the stamp by hand: tenant A publishes through `/content` and tenant B
+     * asks `/translation-group` about what A created, in the order the two
+     * pipelines actually run -- which is what makes this a boundary rather than
+     * a field.
+     */
+    public function test_one_tenants_key_cannot_link_another_tenants_posts(): void {
+        $a = $this->key(CadenceKey::issue('tenant-a', ['content.publish', 'translation.link'], 7));
+        $b = $this->key(CadenceKey::issue('tenant-b', ['content.publish', 'translation.link'], 7));
+        $publish = $this->routes['/content']['callback'];
+        $ids = [];
+        foreach (['en' => 'piece-en', 'de' => 'piece-de'] as $language => $piece) {
+            $made = $publish(new WP_REST_Request([
+                'piece_id' => $piece, 'post_type' => 'post', 'status' => 'publish',
+                'title' => 'T-' . $language, 'content' => 'C', 'language' => $language,
+                'declared' => ['multilingual' => true, 'languages' => ['en', 'de']]], $a));
+            $this->assertSame(201, $made->get_status(), $language);
+            $ids[$language] = $made->get_data()['post_id'];
+        }
+        $plan = ['piece_id' => 'piece-en', 'trid' => null, 'create_group' => true,
+                 'source' => ['post_id' => $ids['en'], 'language_code' => 'en',
+                              'element_type' => 'post_post', 'source_language_code' => null],
+                 'translations' => [['post_id' => $ids['de'], 'language_code' => 'de',
+                                     'element_type' => 'post_post', 'source_language_code' => 'en']]];
+        $link = $this->route[2]['callback'];
+
+        // Tenant B's key is genuine and carries `translation.link`, so the
+        // capability tripwire says yes -- which is the point: the boundary is
+        // at the write, and `scope_admits` alone would have admitted these
+        // posts, because Cadence did publish them.
+        $this->assertTrue(($this->route[2]['permission_callback'])(new WP_REST_Request($plan, $b)));
+        $refused = $link(new WP_REST_Request($plan, $b));
+        $this->assertSame(403, $refused->get_status());
+        $this->assertSame('post_other_key', $refused->get_data()['code']);
+        $this->assertSame([], WpStub::$writes, "a second tenant's key linked these posts anyway");
+
+        // THE ACCEPT-PROOF: tenant A links its own pieces, through the same
+        // route, with the same plan.
+        $linked = $link(new WP_REST_Request($plan, $a));
+        $this->assertSame(200, $linked->get_status(), (string) ($linked->get_data()['reason'] ?? ''));
+        $this->assertSame(2, $linked->get_data()['written']);
+        $this->assertCount(2, WpStub::$writes);
+    }
 }

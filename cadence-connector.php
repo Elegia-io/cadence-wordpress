@@ -36,7 +36,14 @@ add_action('rest_api_init', static function (): void {
     register_rest_route('cadence/v1', '/translation-group', [
         'methods'  => 'POST',
         'callback' => static function ($request) {
-            $result = CadenceLinkRequest::run((array) $request->get_json_params());
+            $result = CadenceLinkRequest::run(
+                (array) $request->get_json_params(),
+                // WHICH KEY IS ASKING, so the scope can be this key's own
+                // pieces rather than every piece Cadence ever published here.
+                // The public id and never the secret: it is compared against
+                // what `/content` stamped on the post.
+                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER))
+            );
             $answer = CadenceRestRoute::respond($result);
             return new WP_REST_Response($answer['body'], $answer['status']);
         },
@@ -70,7 +77,15 @@ add_action('rest_api_init', static function (): void {
                 // `post_author` on the insert. The request remains
                 // unauthenticated as far as WordPress is concerned -- two
                 // things the same header decides, and neither is a login.
-                CadenceKey::author_for($request->get_header(CadenceKey::HEADER))
+                CadenceKey::author_for($request->get_header(CadenceKey::HEADER)),
+                // THE POST TYPES THIS KEY MAY CREATE IN, or null for a key
+                // issued before the field existed -- which publishes into any
+                // registered type, exactly as it did before this plugin was
+                // updated under it.
+                CadenceKey::publish_types_for($request->get_header(CadenceKey::HEADER)),
+                // AND THE KEY'S OWN ID, stamped on the post it creates so the
+                // linking route can later ask whether the post is this key's.
+                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER))
             );
             $answer = CadenceRestRoute::respond($result);
             return new WP_REST_Response($answer['body'], $answer['status']);

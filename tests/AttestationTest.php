@@ -23,6 +23,7 @@
 
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class AttestationTest extends TestCase {
@@ -37,7 +38,7 @@ final class AttestationTest extends TestCase {
     private const KEY = 'ca11ab1e0000key2';
 
     /**
-     * THE CONTRACT'S THREE VECTORS, verbatim.
+     * THE CONTRACT'S SEVEN VECTORS, verbatim.
      *
      * `material` is base64 of the exact bytes hashed -- carried so a failure
      * can be diffed as BYTES. A digest that differs tells you the layout is
@@ -45,7 +46,7 @@ final class AttestationTest extends TestCase {
      * implementation needs to know.
      */
     private function vectors(): array {
-        return [
+        $content = [
         [
             'label'    => 'content-ascii',
             'route'    => '/content',
@@ -72,6 +73,80 @@ final class AttestationTest extends TestCase {
             'bytes'    => 301,
             'digest'   => 'a4b919391a033f9c28d86d20ede57a56bc04a8529631d0ae5ab605bda18feb8b',
             'header'   => 'v1 45da37c57dd21b36 H_xyN7u_R9yeNfg5T6X6gPDY9u4aHf0mBXO6faB_FHjbwLrCxXFJxtfEMKHo7xFtAUwbgbxeenITyUv_gYg2Ag',
+        ],
+        ];
+        // THE LINK VECTORS JOIN THEM, reduced to the same flat shape by the ONE
+        // implementation that reduces a plan. So every assertion in this file
+        // about bytes, byte counts, raw digests and end-to-end verification
+        // covers them too -- and a reduction that sorted wrongly, rendered a
+        // boolean as `1`, or dropped a member fails the BYTE DIFF rather than
+        // only the test written for it.
+        foreach ($this->link_vectors() as $v) {
+            $fields = CadenceAttestation::link_fields($v['plan']);
+            $this->assertIsArray($fields, $v['label'] . ': the plan has no signable reduction');
+            $content[] = ['label' => $v['label'], 'route' => $v['route'], 'fields' => $fields,
+                          'material' => $v['material'], 'bytes' => $v['bytes'],
+                          'digest' => $v['digest'], 'header' => $v['header']];
+        }
+        return $content;
+    }
+
+    /**
+     * THE CONTRACT'S FOUR `/translation-group` VECTORS, verbatim.
+     *
+     * They carry the PLAN as it goes on the wire, not a flat field map: this
+     * route's signed set is not a fixed list, so the map is something the two
+     * halves DERIVE and therefore something a vector must be able to catch them
+     * deriving differently. `order` is the expanded field order the contract
+     * says that derivation must produce, and `members` the canonical order the
+     * members go in -- both asserted against a derivation here rather than read
+     * out and composed from, which would pin nothing at all.
+     */
+    private function link_vectors(): array {
+        return [
+        [
+            'label'    => 'link-join-existing-group',
+            'route'    => '/translation-group',
+            'plan'     => ['trid' => 4471, 'create_group' => false, 'source' => ['post_id' => 101, 'language_code' => 'en', 'element_type' => 'post_post'], 'translations' => ['it' => ['post_id' => 102, 'language_code' => 'it', 'element_type' => 'post_post']], 'piece_id' => 'acme-blog-2026-09-12-attestation'],
+            'members'  => ['en', 'it'],
+            'order'    => ['trid', 'create_group', 'piece_id', 'member.0.post_id', 'member.0.language_code', 'member.0.element_type', 'member.0.source_language_code', 'member.1.post_id', 'member.1.language_code', 'member.1.element_type', 'member.1.source_language_code'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL3RyYW5zbGF0aW9uLWdyb3VwCnRyaWQ6NDo0NDcxCmNyZWF0ZV9ncm91cDo1OmZhbHNlCnBpZWNlX2lkOjMyOmFjbWUtYmxvZy0yMDI2LTA5LTEyLWF0dGVzdGF0aW9uCm1lbWJlci4wLnBvc3RfaWQ6MzoxMDEKbWVtYmVyLjAubGFuZ3VhZ2VfY29kZToyOmVuCm1lbWJlci4wLmVsZW1lbnRfdHlwZTo5OnBvc3RfcG9zdAptZW1iZXIuMC5zb3VyY2VfbGFuZ3VhZ2VfY29kZTowOgptZW1iZXIuMS5wb3N0X2lkOjM6MTAyCm1lbWJlci4xLmxhbmd1YWdlX2NvZGU6MjppdAptZW1iZXIuMS5lbGVtZW50X3R5cGU6OTpwb3N0X3Bvc3QKbWVtYmVyLjEuc291cmNlX2xhbmd1YWdlX2NvZGU6MDoK',
+            'bytes'    => 351,
+            'digest'   => '6689e84d3e8282fb687227ce81dd223fa3827af250bb2467a5d581fe14090860',
+            'header'   => 'v1 45da37c57dd21b36 SXC0X3-tIPhgf4u_KijTKQpHDL3v89NyrVzITQk9uAR49kz0SiK0OQn_zPDVZS9UsP0yUJWjiPXzS2vNKO63BA',
+        ],
+        [
+            'label'    => 'link-create-group-unicode-piece-id',
+            'route'    => '/translation-group',
+            'plan'     => ['trid' => null, 'create_group' => true, 'source' => ['post_id' => 7, 'language_code' => 'en-gb', 'element_type' => 'post_page'], 'translations' => ['de' => ['post_id' => 8, 'language_code' => 'de', 'element_type' => 'post_page'], 'it' => ['post_id' => 9, 'language_code' => 'it', 'element_type' => 'post_page']], 'piece_id' => 'acme-Fußnoten-2026'],
+            'members'  => ['en-gb', 'de', 'it'],
+            'order'    => ['trid', 'create_group', 'piece_id', 'member.0.post_id', 'member.0.language_code', 'member.0.element_type', 'member.0.source_language_code', 'member.1.post_id', 'member.1.language_code', 'member.1.element_type', 'member.1.source_language_code', 'member.2.post_id', 'member.2.language_code', 'member.2.element_type', 'member.2.source_language_code'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL3RyYW5zbGF0aW9uLWdyb3VwCnRyaWQ6MDoKY3JlYXRlX2dyb3VwOjQ6dHJ1ZQpwaWVjZV9pZDoxOTphY21lLUZ1w59ub3Rlbi0yMDI2Cm1lbWJlci4wLnBvc3RfaWQ6MTo3Cm1lbWJlci4wLmxhbmd1YWdlX2NvZGU6NTplbi1nYgptZW1iZXIuMC5lbGVtZW50X3R5cGU6OTpwb3N0X3BhZ2UKbWVtYmVyLjAuc291cmNlX2xhbmd1YWdlX2NvZGU6MDoKbWVtYmVyLjEucG9zdF9pZDoxOjgKbWVtYmVyLjEubGFuZ3VhZ2VfY29kZToyOmRlCm1lbWJlci4xLmVsZW1lbnRfdHlwZTo5OnBvc3RfcGFnZQptZW1iZXIuMS5zb3VyY2VfbGFuZ3VhZ2VfY29kZTowOgptZW1iZXIuMi5wb3N0X2lkOjE6OQptZW1iZXIuMi5sYW5ndWFnZV9jb2RlOjI6aXQKbWVtYmVyLjIuZWxlbWVudF90eXBlOjk6cG9zdF9wYWdlCm1lbWJlci4yLnNvdXJjZV9sYW5ndWFnZV9jb2RlOjA6Cg==',
+            'bytes'    => 448,
+            'digest'   => '5eac1419949bb10107f5383698b2e17f7b9c19fb729925a6549b4d2c4d0ae086',
+            'header'   => 'v1 45da37c57dd21b36 DFABbje4uTRlYh6I3fVoLi0aujnjnEuol8UEuXr5WyAebtkNaebbe8xwHkYsXaduCkuItZz-OfGXG3aIvF9dCQ',
+        ],
+        [
+            'label'    => 'link-wire-order-is-not-canonical-order',
+            'route'    => '/translation-group',
+            'plan'     => ['trid' => 900001, 'create_group' => false, 'source' => ['post_id' => 1000, 'language_code' => 'en', 'element_type' => 'post_post'], 'translations' => ['pt-br' => ['post_id' => 1003, 'language_code' => 'pt-br', 'element_type' => 'post_post', 'source_language_code' => 'en'], 'de' => ['post_id' => 1001, 'language_code' => 'de', 'element_type' => 'post_post', 'source_language_code' => 'en'], 'it' => ['post_id' => 1002, 'language_code' => 'it', 'element_type' => 'post_post']]],
+            'members'  => ['en', 'de', 'it', 'pt-br'],
+            'order'    => ['trid', 'create_group', 'piece_id', 'member.0.post_id', 'member.0.language_code', 'member.0.element_type', 'member.0.source_language_code', 'member.1.post_id', 'member.1.language_code', 'member.1.element_type', 'member.1.source_language_code', 'member.2.post_id', 'member.2.language_code', 'member.2.element_type', 'member.2.source_language_code', 'member.3.post_id', 'member.3.language_code', 'member.3.element_type', 'member.3.source_language_code'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL3RyYW5zbGF0aW9uLWdyb3VwCnRyaWQ6Njo5MDAwMDEKY3JlYXRlX2dyb3VwOjU6ZmFsc2UKcGllY2VfaWQ6MDoKbWVtYmVyLjAucG9zdF9pZDo0OjEwMDAKbWVtYmVyLjAubGFuZ3VhZ2VfY29kZToyOmVuCm1lbWJlci4wLmVsZW1lbnRfdHlwZTo5OnBvc3RfcG9zdAptZW1iZXIuMC5zb3VyY2VfbGFuZ3VhZ2VfY29kZTowOgptZW1iZXIuMS5wb3N0X2lkOjQ6MTAwMQptZW1iZXIuMS5sYW5ndWFnZV9jb2RlOjI6ZGUKbWVtYmVyLjEuZWxlbWVudF90eXBlOjk6cG9zdF9wb3N0Cm1lbWJlci4xLnNvdXJjZV9sYW5ndWFnZV9jb2RlOjI6ZW4KbWVtYmVyLjIucG9zdF9pZDo0OjEwMDIKbWVtYmVyLjIubGFuZ3VhZ2VfY29kZToyOml0Cm1lbWJlci4yLmVsZW1lbnRfdHlwZTo5OnBvc3RfcG9zdAptZW1iZXIuMi5zb3VyY2VfbGFuZ3VhZ2VfY29kZTowOgptZW1iZXIuMy5wb3N0X2lkOjQ6MTAwMwptZW1iZXIuMy5sYW5ndWFnZV9jb2RlOjU6cHQtYnIKbWVtYmVyLjMuZWxlbWVudF90eXBlOjk6cG9zdF9wb3N0Cm1lbWJlci4zLnNvdXJjZV9sYW5ndWFnZV9jb2RlOjI6ZW4K',
+            'bytes'    => 567,
+            'digest'   => '6868f55280aee8f8c009f038a04b8a62a85b15f3f13f716f1ee13940f47684f5',
+            'header'   => 'v1 45da37c57dd21b36 SBUINpo86LmZmb5y__hXzDnAjuy8X99_50q6IjjObIpGnu_Bc_yplUR5vW9RnVQSTAZNch8cMWO2tVh_LV1PCQ',
+        ],
+        [
+            'label'    => 'link-two-translations-share-a-language',
+            'route'    => '/translation-group',
+            'plan'     => ['trid' => 55, 'create_group' => false, 'source' => ['post_id' => 1, 'language_code' => 'en', 'element_type' => 'post_post'], 'translations' => ['a' => ['post_id' => 30, 'language_code' => 'it', 'element_type' => 'post_post'], 'b' => ['post_id' => 20, 'language_code' => 'it', 'element_type' => 'post_post']], 'piece_id' => 'tie'],
+            'members'  => ['en', 'it', 'it'],
+            'order'    => ['trid', 'create_group', 'piece_id', 'member.0.post_id', 'member.0.language_code', 'member.0.element_type', 'member.0.source_language_code', 'member.1.post_id', 'member.1.language_code', 'member.1.element_type', 'member.1.source_language_code', 'member.2.post_id', 'member.2.language_code', 'member.2.element_type', 'member.2.source_language_code'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL3RyYW5zbGF0aW9uLWdyb3VwCnRyaWQ6Mjo1NQpjcmVhdGVfZ3JvdXA6NTpmYWxzZQpwaWVjZV9pZDozOnRpZQptZW1iZXIuMC5wb3N0X2lkOjE6MQptZW1iZXIuMC5sYW5ndWFnZV9jb2RlOjI6ZW4KbWVtYmVyLjAuZWxlbWVudF90eXBlOjk6cG9zdF9wb3N0Cm1lbWJlci4wLnNvdXJjZV9sYW5ndWFnZV9jb2RlOjA6Cm1lbWJlci4xLnBvc3RfaWQ6MjoyMAptZW1iZXIuMS5sYW5ndWFnZV9jb2RlOjI6aXQKbWVtYmVyLjEuZWxlbWVudF90eXBlOjk6cG9zdF9wb3N0Cm1lbWJlci4xLnNvdXJjZV9sYW5ndWFnZV9jb2RlOjA6Cm1lbWJlci4yLnBvc3RfaWQ6MjozMAptZW1iZXIuMi5sYW5ndWFnZV9jb2RlOjI6aXQKbWVtYmVyLjIuZWxlbWVudF90eXBlOjk6cG9zdF9wb3N0Cm1lbWJlci4yLnNvdXJjZV9sYW5ndWFnZV9jb2RlOjA6Cg==',
+            'bytes'    => 433,
+            'digest'   => '5bb08a1112e5b2c2473f791c8dc3b6e405f147c1582abd731afdd08302dbc05d',
+            'header'   => 'v1 45da37c57dd21b36 MnN_N6aKFEMZ_49CGXXWwwqhuPRmIEo8VVjjV-xMSIZW5Ix39gdYunoxagFqIrzPOC4uyIcpvk7VFIpn8j7aCw',
         ],
         ];
     }
@@ -445,6 +520,203 @@ final class AttestationTest extends TestCase {
         $this->assertFalse($r['ok']);
         $this->assertSame('malformed', $r['branch'],
             'a second spelling of one signature was accepted as a header');
+    }
+
+    /**
+     * THE FIELD ORDER IS DERIVED FROM THE PLAN, and it is the contract's.
+     *
+     * DERIVED AND THEN COMPARED, never read out of the vector and composed
+     * from: an implementation handed the order it is supposed to produce has
+     * been told the answer, and the one thing these vectors exist to catch is a
+     * second implementation producing a different one.
+     *
+     * `@members` is the only entry in a field order that is not a field, and
+     * this is where its expansion is pinned: four names per member, prefixed
+     * `member.<i>.`, i counting from 0 over the CANONICAL order.
+     */
+    public function test_every_link_vector_derives_the_contracts_own_field_order(): void {
+        foreach ($this->link_vectors() as $v) {
+            $fields = CadenceAttestation::link_fields($v['plan']);
+            $this->assertIsArray($fields, $v['label']);
+            $this->assertSame($v['order'],
+                CadenceAttestation::signed_field_order($v['route'], $fields), $v['label']);
+            // AND THE MATERIAL IS COMPOSED OVER THAT ORDER AND NOTHING ELSE --
+            // the map's own key order could agree with it by accident, so the
+            // expansion is what the bytes are checked against.
+            $this->assertSame(array_keys($fields),
+                CadenceAttestation::signed_field_order($v['route'], $fields), $v['label']);
+        }
+    }
+
+    /**
+     * THE SOURCE IS MEMBER 0 AND THE TRANSLATIONS ARE SORTED.
+     *
+     * Read back out of the composed fields, so what is asserted is the order
+     * the BYTES are in. The source is member 0 because it is the plan's
+     * `source`, never because of its language: in
+     * `link-create-group-unicode-piece-id` it is `en-gb`, which sorts after
+     * `de` and would be member 1 if the sort reached it.
+     */
+    public function test_the_canonical_member_order_is_the_source_then_sorted_translations(): void {
+        foreach ($this->link_vectors() as $v) {
+            $fields = CadenceAttestation::link_fields($v['plan']);
+            $languages = [];
+            for ($i = 0; array_key_exists('member.' . $i . '.language_code', $fields); $i++) {
+                $languages[] = $fields['member.' . $i . '.language_code'];
+            }
+            $this->assertSame($v['members'], $languages, $v['label']);
+        }
+    }
+
+    /**
+     * AND THE WIRE ORDER IS NOT THE CANONICAL ORDER.
+     *
+     * The case that separates a correct implementation from a plausible one.
+     * The translations arrive `pt-br`, `de`, `it`; the material carries `de`,
+     * `it`, `pt-br` after the source. A verifier that composed them in the
+     * order its JSON parser handed back would hash different bytes and refuse
+     * every honest request as `mismatch` -- blaming a tenant's signing key for
+     * a proxy that re-serialised the body.
+     */
+    public function test_the_translations_are_sorted_and_never_taken_in_wire_order(): void {
+        $v = $this->vector_named('link-wire-order-is-not-canonical-order');
+        $wire = array_keys($v['plan']['translations']);
+        $this->assertSame(['pt-br', 'de', 'it'], $wire,
+            'the fixture arrived in sorted order, so this proves nothing');
+        $this->assertNotSame($wire, array_slice($v['members'], 1),
+            'the fixture no longer separates a sorting implementation from a wire-order one');
+
+        $fields = CadenceAttestation::link_fields($v['plan']);
+        $this->assertSame(['en', 'de', 'it', 'pt-br'], [
+            $fields['member.0.language_code'], $fields['member.1.language_code'],
+            $fields['member.2.language_code'], $fields['member.3.language_code'],
+        ]);
+        // The bytes, not merely the order: composing in wire order is a
+        // different material and a different digest, and this is the vector
+        // that says which one the spine signed.
+        $this->assertSame(base64_decode($v['material'], true),
+            CadenceAttestation::material($v['route'], $fields));
+    }
+
+    /**
+     * THE TIE-BREAK, over a plan the route itself refuses.
+     *
+     * Two translations sharing a `language_code` make a sort by language alone
+     * ambiguous, and two implementations could order them differently over one
+     * honest body. `post_id` ascending breaks it. Neither half will ever compose
+     * this plan -- this connector refuses it as `bad_plan` -- but verification
+     * runs BEFORE that refusal, so the form has to answer for it anyway, which
+     * is why this is driven through the composer and not through `run`.
+     */
+    public function test_two_translations_sharing_a_language_are_ordered_by_post_id(): void {
+        $v = $this->vector_named('link-two-translations-share-a-language');
+        $fields = CadenceAttestation::link_fields($v['plan']);
+        $this->assertIsArray($fields);
+        $this->assertSame([30, 20], array_column(array_values($v['plan']['translations']), 'post_id'),
+            'the fixture is already in post_id order, so the tie-break is not exercised');
+        $this->assertSame([1, 20, 30], [$fields['member.0.post_id'],
+            $fields['member.1.post_id'], $fields['member.2.post_id']]);
+        $this->assertSame(base64_decode($v['material'], true),
+            CadenceAttestation::material($v['route'], $fields));
+    }
+
+    /**
+     * AN ABSENT `trid`, `piece_id` OR `source_language_code` IS A ZERO-LENGTH
+     * VALUE, and never a missing line.
+     *
+     * `trid:0:` is well formed and signs normally, exactly as an empty title
+     * does on `/content`. A composer that omitted the line instead would
+     * produce a shorter material that still parses, and the two halves would
+     * disagree on every plan that creates a group.
+     */
+    public function test_an_absent_optional_renders_as_a_zero_length_value(): void {
+        $v = $this->vector_named('link-wire-order-is-not-canonical-order');
+        $this->assertArrayNotHasKey('piece_id', $v['plan'],
+            'the fixture names a piece, so the empty rendering is not exercised');
+        $material = CadenceAttestation::material(
+            $v['route'], CadenceAttestation::link_fields($v['plan']));
+        $this->assertStringContainsString("\npiece_id:0:\n", $material);
+        $this->assertStringContainsString("\nmember.2.source_language_code:0:\n", $material);
+        // AND THE BOOLEAN IS THE ASCII LITERAL, never `1`/`0`.
+        $this->assertStringContainsString("\ncreate_group:5:false\n", $material);
+        $create = $this->vector_named('link-create-group-unicode-piece-id');
+        $this->assertStringContainsString("\ncreate_group:4:true\n", CadenceAttestation::material(
+            $create['route'], CadenceAttestation::link_fields($create['plan'])));
+    }
+
+    /**
+     * A PLAN WITH NO RENDERING IS REFUSED BEFORE A SIGNATURE IS COMPOSED.
+     *
+     * `'true'` and `true` rendered alike would let a plan the shape check
+     * refuses verify against a signature over a plan it accepts, and a `post_id`
+     * that is a string is the same coercion `/content/replace` refuses. The
+     * return is a REASON and not an exception: this runs on an unvalidated body,
+     * ahead of every other check, and an exception there is a 500 naming no
+     * repair.
+     *
+     * @param array $plan
+     */
+    #[DataProvider('unsignable_plans')]
+    public function test_a_plan_with_no_rendering_has_no_material(array $plan, string $names): void {
+        $reason = CadenceAttestation::link_fields($plan);
+        $this->assertIsString($reason, $names . ' was signed rather than refused');
+        $this->assertStringContainsString($names, $reason);
+        $this->assertStringContainsString('cannot be signed', $reason);
+    }
+
+    public static function unsignable_plans(): array {
+        $ok = ['trid' => 5, 'create_group' => false,
+               'source' => ['post_id' => 1, 'language_code' => 'en', 'element_type' => 'post_post'],
+               'translations' => [['post_id' => 2, 'language_code' => 'de',
+                                   'element_type' => 'post_post']]];
+        return [
+            'a string boolean'   => [array_merge($ok, ['create_group' => 'false']), 'create_group'],
+            'an integer boolean' => [array_merge($ok, ['create_group' => 0]), 'create_group'],
+            'an absent boolean'  => [array_diff_key($ok, ['create_group' => null]), 'create_group'],
+            'a string trid'      => [array_merge($ok, ['trid' => '5']), 'trid'],
+            'a boolean trid'     => [array_merge($ok, ['trid' => true]), 'trid'],
+            'a non-string piece' => [array_merge($ok, ['piece_id' => 7]), 'piece_id'],
+            'a scalar source'    => [array_merge($ok, ['source' => 'post 1']), 'source'],
+            'a string post_id'   => [array_merge($ok, ['translations' => [
+                ['post_id' => '2', 'language_code' => 'de', 'element_type' => 'post_post']]]),
+                'post_id'],
+            'a boolean post_id'  => [array_merge($ok, ['translations' => [
+                ['post_id' => true, 'language_code' => 'de', 'element_type' => 'post_post']]]),
+                'post_id'],
+            'a non-string code'  => [array_merge($ok, ['translations' => [
+                ['post_id' => 2, 'language_code' => 3, 'element_type' => 'post_post']]]),
+                'language_code'],
+            'a non-string type'  => [array_merge($ok, ['translations' => [
+                ['post_id' => 2, 'language_code' => 'de', 'element_type' => []]]]),
+                'element_type'],
+            'a non-string source code' => [array_merge($ok, ['translations' => [
+                ['post_id' => 2, 'language_code' => 'de', 'element_type' => 'post_post',
+                 'source_language_code' => 5]]]), 'source_language_code'],
+        ];
+    }
+
+    /**
+     * A MEMBER `post_id` THAT IS NOT AN INT IS REFUSED WHERE THE BYTES ARE MADE
+     * TOO, and not only by the reduction above -- the same refusal said twice,
+     * so a future call site that arrived from somewhere else cannot reintroduce
+     * the coercion. `'007'` and `7` are one post and two signatures.
+     */
+    public function test_the_material_refuses_a_member_post_id_that_is_a_string(): void {
+        $fields = CadenceAttestation::link_fields(
+            $this->vector_named('link-join-existing-group')['plan']);
+        $fields['member.1.post_id'] = '102';
+        $this->expectException(InvalidArgumentException::class);
+        CadenceAttestation::material('/translation-group', $fields);
+    }
+
+    /** One vector by its label, so a test naming one cannot silently pick another. */
+    private function vector_named(string $label): array {
+        foreach ($this->link_vectors() as $v) {
+            if ($v['label'] === $label) {
+                return $v;
+            }
+        }
+        $this->fail('no link vector labelled ' . $label);
     }
 
     /** THE BRANCH VOCABULARY IS CLOSED, and the contract's list is that list. */

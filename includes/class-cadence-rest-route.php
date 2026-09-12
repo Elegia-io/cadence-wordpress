@@ -22,7 +22,7 @@ final class CadenceRestRoute {
      * which reads the header directly and fails the moment a release bumps one
      * without the other, so drift is caught rather than merely discouraged.
      */
-    public const VERSION = '0.6.0';
+    public const VERSION = '0.7.0';
 
     /**
      * THE REPLY'S OWN SHAPE, as a number the spine can compare with `<=`
@@ -218,10 +218,12 @@ final class CadenceRestRoute {
      * `replace_other_key` IS ITS OWN CODE and lives on `/content/replace`,
      * which verifies the request's attestation before it reads anything about
      * the post -- so its finer answer costs a signing key, not merely a leaked
-     * connector key. THAT is why the two routes may differ here, and the
-     * difference is not an inconsistency to tidy away: the linking route takes
-     * no attestation at all (`Elegia-io/cadence`#1370), which is precisely what
-     * forced the coarser answer there.
+     * connector key. The linking route now verifies one too (issue 1370 in
+     * `Elegia-io/cadence`), and the coarser answer there STAYS: the merge was
+     * made because the PAIR of codes partitioned the id space, and a signature
+     * in front of it narrows who can ask rather than making the partition
+     * safe to hand back. An exempt key -- a site mid-migration -- reaches the
+     * refusal with no signature at all.
      *
      * `source_group_unset` and `source_group_unreadable` are 500s and NOT 409s,
      * though a re-read is the caller's next step for both. A 409 invites the

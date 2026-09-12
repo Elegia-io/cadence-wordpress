@@ -15,8 +15,42 @@ use PHPUnit\Framework\Attributes\DataProvider;
  */
 final class LinkRequestTest extends TestCase {
 
+    /** The helper's "sign this plan with the suite's key" sentinel, distinct from any header. */
+    private const SIGN = "\0sign";
+
     protected function setUp(): void {
         WpStub::reset();
+    }
+
+    /**
+     * `CadenceLinkRequest::run`, WITH A SIGNED ATTESTATION OVER THE PLAN.
+     *
+     * Every test here that is not itself about the signature presents a valid
+     * one, because `run` verifies before it reads anything about the site: an
+     * unattested call is `attestation_unverified` and never reaches the refusal
+     * the test is about. Named for what it does rather than what it wraps --
+     * `run` is final on PHPUnit's own TestCase.
+     *
+     * THE KEY IS A REAL ONE AND NOT NULL, which is the one behaviour this
+     * helper changes for the tests below: a null key has no stored public key
+     * to check a signature against, so every request it makes is refused.
+     * `CadenceKey::created_by` admits an unstamped post to ANY key, so the
+     * scope answers here are the ones they were.
+     *
+     * @param string|null $attestation the header to present, or the sentinel to
+     *                    sign this plan; null presents none at all.
+     */
+    private function link(array $plan, ?array $post_types = null,
+                          ?string $key_id = CadenceAttest::KEY_ID,
+                          $attestation = self::SIGN): array {
+        return CadenceLinkRequest::run(
+            $plan,
+            $post_types,
+            $key_id,
+            $attestation === self::SIGN
+                ? CadenceAttest::link_header($plan, $key_id)
+                : $attestation
+        );
     }
 
     private function plan(array $over = []): array {
@@ -52,14 +86,14 @@ final class LinkRequestTest extends TestCase {
 
     public function test_a_well_formed_plan_over_agreeing_posts_writes_both(): void {
         $this->twoPosts(5);
-        $r = CadenceLinkRequest::run($this->plan(), null);
+        $r = $this->link($this->plan(), null);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertCount(2, WpStub::$writes);
     }
 
     public function test_a_plan_naming_a_post_that_does_not_exist_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', 5);   // post 2 absent
-        $r = CadenceLinkRequest::run($this->plan(), null);
+        $r = $this->link($this->plan(), null);
         $this->assertFalse($r['ok']);
         $this->assertSame([], WpStub::$writes);
     }
@@ -73,7 +107,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'page', 'de', 9);   // the site says 9, the plan says 5
         $this->ours(1, 2);
-        $r = CadenceLinkRequest::run($this->plan(), null);
+        $r = $this->link($this->plan(), null);
         $this->assertFalse($r['ok']);
         $this->assertStringContainsString('9', $r['reason']);
         $this->assertSame([], WpStub::$writes);
@@ -83,14 +117,14 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', 7);   // already grouped
         $this->ours(1, 2);
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
         $this->assertFalse($r['ok']);
         $this->assertSame([], WpStub::$writes);
     }
 
     public function test_creating_a_group_when_both_are_ungrouped_is_allowed(): void {
         $this->twoPosts(null);
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertCount(2, WpStub::$writes);
     }
@@ -103,14 +137,14 @@ final class LinkRequestTest extends TestCase {
      */
     public function test_create_group_together_with_a_trid_writes_nothing(): void {
         $this->twoPosts(null);
-        $r = CadenceLinkRequest::run($this->plan(['trid' => 5, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => 5, 'create_group' => true]), null);
         $this->assertFalse($r['ok']);
         $this->assertSame([], WpStub::$writes);
     }
 
     public function test_a_plan_with_no_translations_writes_nothing(): void {
         $this->twoPosts(5);
-        $r = CadenceLinkRequest::run($this->plan(['translations' => []]), null);
+        $r = $this->link($this->plan(['translations' => []]), null);
         $this->assertFalse($r['ok']);
         $this->assertSame([], WpStub::$writes);
     }
@@ -119,7 +153,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'page', 'de', 5);
         WpStub::add_post(3, 'page', 'de', 5);
-        $r = CadenceLinkRequest::run($this->plan(['translations' => [
+        $r = $this->link($this->plan(['translations' => [
             ['post_id' => 2, 'language_code' => 'de', 'element_type' => 'post_page',
              'source_language_code' => 'en'],
             ['post_id' => 3, 'language_code' => 'de', 'element_type' => 'post_page',
@@ -131,7 +165,7 @@ final class LinkRequestTest extends TestCase {
 
     public function test_the_source_appearing_among_its_own_translations_writes_nothing(): void {
         $this->twoPosts(5);
-        $r = CadenceLinkRequest::run($this->plan(['translations' => [
+        $r = $this->link($this->plan(['translations' => [
             ['post_id' => 1, 'language_code' => 'de', 'element_type' => 'post_page',
              'source_language_code' => 'en'],
         ]]), null);
@@ -147,7 +181,7 @@ final class LinkRequestTest extends TestCase {
     #[DataProvider('badScalars')]
     public function test_a_malformed_field_writes_nothing(array $over): void {
         $this->twoPosts(5);
-        $r = CadenceLinkRequest::run($this->plan($over), null);
+        $r = $this->link($this->plan($over), null);
         $this->assertFalse($r['ok']);
         $this->assertSame([], WpStub::$writes);
     }
@@ -181,7 +215,7 @@ final class LinkRequestTest extends TestCase {
         // has nothing to do with the type -- the test would go on passing while
         // the thing it names stopped being checked.
         $this->ours(1, 2);
-        $r = CadenceLinkRequest::run($this->plan(), null);
+        $r = $this->link($this->plan(), null);
         $this->assertFalse($r['ok']);
         $this->assertSame('bad_plan', $r['code']);
         $this->assertStringContainsString('whose type is', $r['reason']);
@@ -209,7 +243,7 @@ final class LinkRequestTest extends TestCase {
         // Post 9 is not on the site at all; the plan below names 1 and 2, so
         // this asserts the two SHAPES that used to differ: wrong type, and
         // absent. Neither is ours.
-        $r = CadenceLinkRequest::run($this->plan(), null);
+        $r = $this->link($this->plan(), null);
         $this->assertFalse($r['ok']);
         $this->assertSame('post_out_of_scope', $r['code']);
         foreach (['does not exist', 'whose type is', 'page', 'post_post', 'post_page'] as $leak) {
@@ -223,7 +257,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::$writes = [];
         $plan = $this->plan();
         $plan['source']['post_id'] = 9;
-        $r = CadenceLinkRequest::run($plan, null);
+        $r = $this->link($plan, null);
         $this->assertFalse($r['ok']);
         $this->assertSame('post_out_of_scope', $r['code']);
         $this->assertStringNotContainsString('does not exist', $r['reason']);
@@ -241,7 +275,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'page', 'de', null);   // WPML: in no group
         $this->ours(1, 2);
-        $r = CadenceLinkRequest::run($this->plan(), null);
+        $r = $this->link($this->plan(), null);
         $this->assertFalse($r['ok']);
         $this->assertSame([], WpStub::$writes);
     }
@@ -261,7 +295,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null, false);   // WP yes, WPML no
         $this->ours(1, 2);
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
         $this->assertFalse($r['ok']);
         $this->assertStringContainsString('unknown', $r['reason']);
         $this->assertSame([], WpStub::$writes);
@@ -271,7 +305,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);          // the only difference
         $this->ours(1, 2);
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertCount(2, WpStub::$writes);
     }
@@ -283,7 +317,7 @@ final class LinkRequestTest extends TestCase {
      */
     public function test_the_happy_path_is_reachable_at_all(): void {
         $this->twoPosts(5);
-        $r = CadenceLinkRequest::run($this->plan(), null);
+        $r = $this->link($this->plan(), null);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertCount(2, WpStub::$writes);
         $this->assertSame(5, WpStub::$writes[0]['trid']);
@@ -354,6 +388,14 @@ final class LinkRequestTest extends TestCase {
                 $this->ours(1);
                 return $this->plan(['trid' => null, 'create_group' => true]);
             },
+            // THE SIGNATURE, WHICH IS THE ONLY CAUSE THE PLAN ITSELF CANNOT
+            // CARRY. The plan is perfectly good and the posts agree; what is
+            // wrong is the header, and the branch that fired travels beside the
+            // code in `attestation_branch` rather than as a code of its own.
+            'attestation_unverified' => function () {
+                $this->twoPosts(5);
+                return $this->plan();
+            },
             'link_post_type_out_of_scope' => function () {
                 // BOTH posts are this key's own -- neither scope predicate
                 // fires -- and both are `page`, while the key below reaches
@@ -366,11 +408,21 @@ final class LinkRequestTest extends TestCase {
             },
         ];
 
-        // WHICH KEY IS ASKING. No cause here needs a caller with an identity
-        // any more: the second scope predicate no longer has a code of its own,
-        // and `test_a_plan_naming_a_post_a_different_key_published_writes_nothing`
+        // WHICH KEY IS ASKING. Every cause needs a caller with an identity now,
+        // which is the attestation's doing rather than the scope's: a key this
+        // route cannot name holds no attestation public key either, so a
+        // nameless caller is refused before any of these causes is reached. No
+        // cause needs a PARTICULAR one -- the second scope predicate no longer
+        // has a code of its own, and
+        // `test_a_plan_naming_a_post_a_different_key_published_writes_nothing`
         // is where it is asked about instead.
         $asking = [];
+
+        // AND WHAT IT PRESENTS. One cause is the header rather than the plan,
+        // and it is the only one that does not sign: a header no spine composed
+        // is `malformed`, which needs no key installed and so cannot be
+        // confused with the `no_public_key` branch an un-set-up site answers.
+        $presenting = ['attestation_unverified' => 'this is not a v1 header'];
 
         // AND WHAT IT IS SCOPED TO. Null is the wide case for every other
         // cause -- a key that names no type -- so only the type refusal names
@@ -387,24 +439,26 @@ final class LinkRequestTest extends TestCase {
         $seen = [];
         foreach ($causes as $expected => $arrange) {
             WpStub::reset();
-            $r = CadenceLinkRequest::run($arrange(), $scoped[$expected] ?? null,
-                                          $asking[$expected] ?? null);
+            $r = $this->link($arrange(), $scoped[$expected] ?? null,
+                             $asking[$expected] ?? CadenceAttest::KEY_ID,
+                             $presenting[$expected] ?? self::SIGN);
             $this->assertFalse($r['ok'], $expected . ' was supposed to be refused');
             $this->assertCount($wrote_the_source[$expected] ?? 0, WpStub::$writes, $expected);
             $this->assertSame($expected, $r['code'] ?? null, $expected);
             $seen[] = $r['code'];
         }
-        // Eleven causes, eleven codes: a mapping that collapsed two of them would
+        // Twelve causes, twelve codes: a mapping that collapsed two of them would
         // still pass every assertion above if both expectations were changed
         // together, and the caller could no longer tell them apart. The count is the
         // union of branches that each added to it -- eight after the scope
         // narrowing, ten after the create path's two, eleven once the scope split
         // into "not this connector's" and "not this key's", TEN again when that
-        // split was merged back because the PAIR was a provenance oracle, and eleven
-        // once the key's post types reached this route. So it is asserted against
+        // split was merged back because the PAIR was a provenance oracle, eleven
+        // once the key's post types reached this route, and twelve once the route
+        // verified an attestation over the plan. So it is asserted against
         // `REFUSAL_CODES` rather than retyped from any of them.
-        $this->assertCount(11, array_unique($seen));
-        $this->assertSame(11, count(CadenceLinkRequest::REFUSAL_CODES));
+        $this->assertCount(12, array_unique($seen));
+        $this->assertSame(12, count(CadenceLinkRequest::REFUSAL_CODES));
 
         // AND THE PUBLISHED LIST IS THAT LIST. `REFUSAL_CODES` is what the REST
         // layer maps to HTTP statuses; if a further refusal is added here and
@@ -415,6 +469,171 @@ final class LinkRequestTest extends TestCase {
         $published = CadenceLinkRequest::REFUSAL_CODES;
         sort($published);
         $this->assertSame($seen, $published);
+    }
+
+    /**
+     * AN UNATTESTED PLAN IS REFUSED BEFORE THIS SITE IS ASKED ANYTHING.
+     *
+     * The harm property, and not merely the place the lines sit. Every refusal
+     * below the verification reads the client's site: `post_out_of_scope` sorts
+     * an id into this key's Cadence posts or everything else, `group_unknown`
+     * and `group_disagreement` name what WPML holds for a post, and
+     * `wpml_unavailable` says whether WPML is installed at all. A caller
+     * holding a leaked connector key and no signing key learns none of them.
+     *
+     * The plan here names posts that do not exist, are not this connector's,
+     * and are in no group -- three separate refusals it could have been told
+     * apart by. It is told the signature instead.
+     */
+    public function test_an_unattested_plan_is_refused_before_the_site_is_read(): void {
+        // Nothing arranged: no posts, no stamps, no groups.
+        $r = $this->link($this->plan(), null, CadenceAttest::KEY_ID, null);
+        $this->assertFalse($r['ok']);
+        $this->assertSame('attestation_unverified', $r['code']);
+        $this->assertSame([], WpStub::$writes);
+        // AND THE REASON SAYS NOTHING ABOUT THE SITE.
+        $this->assertStringNotContainsString('post 1', $r['reason']);
+        $this->assertStringNotContainsString('post 2', $r['reason']);
+    }
+
+    /**
+     * AND BEFORE THE PLAN'S OWN SHAPE CHECK.
+     *
+     * Two posts claiming one language is `bad_plan` -- but `bad_plan` is a
+     * refusal this route hands to anyone who can reach it, and the checks under
+     * it are what the attestation is in front of. The canonical form carries a
+     * tie-break over exactly this plan so that an ambiguous one still has one
+     * material to verify against: the ordering question is answered by the form
+     * rather than by which check happened to run first.
+     */
+    public function test_verification_runs_before_the_plans_own_shape_check(): void {
+        $this->twoPosts(5);
+        $plan = $this->plan(['translations' => [
+            ['post_id' => 2, 'language_code' => 'en', 'element_type' => 'post_page'],
+        ]]);
+        // Attested, it is the `bad_plan` it has always been.
+        $this->assertSame('bad_plan', $this->link($plan, null)['code']);
+        // Unattested, the shape is never reached.
+        $r = $this->link($plan, null, CadenceAttest::KEY_ID, null);
+        $this->assertSame('attestation_unverified', $r['code']);
+        $this->assertSame('absent', $r['attestation_branch']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * AND BEFORE THIS SITE IS ASKED WHETHER IT HAS WPML. That answer is a fact
+     * about the client's installation, and an unattested caller does not earn it.
+     */
+    public function test_verification_runs_before_the_site_is_asked_for_wpml(): void {
+        $this->twoPosts(null);
+        WpStub::$wpml_reads = false;
+        WpStub::$wpml_writes = false;
+        $r = $this->link($this->plan(), null, CadenceAttest::KEY_ID, null);
+        $this->assertSame('attestation_unverified', $r['code']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * A TAMPERED `source_language_code` DOES NOT VERIFY, AND NOTHING IS WRITTEN.
+     *
+     * THE REASON THIS ROUTE SIGNS FOUR FIELDS PER MEMBER AND NOT THREE. This
+     * value goes straight into WPML's `wpml_set_element_language_details`, so an
+     * intermediary that changed it changes what the site records as the
+     * translation's source -- a tamper that ALTERS A WRITE rather than one that
+     * can only cause a refusal. Everything else about the plan is the plan the
+     * spine signed.
+     */
+    public function test_a_tampered_source_language_code_does_not_verify(): void {
+        $this->twoPosts(5);
+        $signed = $this->plan();
+        $tampered = $signed;
+        $tampered['translations'][0]['source_language_code'] = 'fr';
+        $r = $this->link($tampered, null, CadenceAttest::KEY_ID,
+                         CadenceAttest::link_header($signed, CadenceAttest::KEY_ID));
+        $this->assertFalse($r['ok']);
+        $this->assertSame('attestation_unverified', $r['code']);
+        $this->assertSame('mismatch', $r['attestation_branch']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * AND SO DOES A SWAPPED `post_id`, which is what aims the write.
+     */
+    public function test_a_tampered_member_post_id_does_not_verify(): void {
+        WpStub::add_post(1, 'page', 'en', 5);
+        WpStub::add_post(2, 'page', 'de', 5);
+        WpStub::add_post(3, 'page', 'de', 5);
+        $this->ours(1, 2, 3);
+        $signed = $this->plan();
+        $tampered = $signed;
+        $tampered['translations'][0]['post_id'] = 3;
+        $r = $this->link($tampered, null, CadenceAttest::KEY_ID,
+                         CadenceAttest::link_header($signed, CadenceAttest::KEY_ID));
+        $this->assertSame('mismatch', $r['attestation_branch'] ?? null);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * AND A BODY RE-SERIALISED IN A DIFFERENT KEY ORDER STILL VERIFIES.
+     *
+     * The other half of the sort, and the reason the canonical order is derived
+     * rather than taken from the wire: an intermediary that re-serialises the
+     * JSON, a parser that sorts, or a client library backed by a hash map
+     * reorders `translations` without changing a value -- and a verifier that
+     * trusted the wire would refuse every honest request as `mismatch`, which
+     * blames a tenant's signing key for a proxy.
+     */
+    public function test_the_same_plan_in_a_different_wire_order_still_verifies(): void {
+        WpStub::add_post(1, 'page', 'en', 5);
+        WpStub::add_post(2, 'page', 'de', 5);
+        WpStub::add_post(3, 'page', 'it', 5);
+        $this->ours(1, 2, 3);
+        $members = [
+            'de' => ['post_id' => 2, 'language_code' => 'de', 'element_type' => 'post_page',
+                     'source_language_code' => 'en'],
+            'it' => ['post_id' => 3, 'language_code' => 'it', 'element_type' => 'post_page',
+                     'source_language_code' => 'en'],
+        ];
+        $signed = $this->plan(['translations' => $members]);
+        $reordered = $this->plan(['translations' => ['it' => $members['it'],
+                                                     'de' => $members['de']]]);
+        $this->assertNotSame(array_keys($signed['translations']),
+            array_keys($reordered['translations']),
+            'both bodies are in one order, so this proves nothing');
+
+        $r = $this->link($reordered, null, CadenceAttest::KEY_ID,
+                         CadenceAttest::link_header($signed, CadenceAttest::KEY_ID));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('verified', $r['attestation']);
+        $this->assertCount(3, WpStub::$writes);
+    }
+
+    /**
+     * THE EXEMPTION EXEMPTS AN ABSENCE AND NEVER A FAILURE.
+     *
+     * An un-upgraded site sends no header at all, and the flag is what keeps it
+     * linking while its operator catches up. A header that is PRESENT and bad is
+     * refused on an exempt key exactly as it is anywhere else: a bad signature is
+     * not a migration and there is no reading of it under which it becomes one.
+     */
+    public function test_the_unsigned_exemption_covers_an_absent_header_and_never_a_bad_one(): void {
+        $this->twoPosts(5);
+        $key = CadenceAttest::exempt_key();
+
+        $r = $this->link($this->plan(), null, $key, null);
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('exempt', $r['attestation']);
+        $this->assertArrayNotHasKey('attestation_kid', $r);
+        $this->assertCount(2, WpStub::$writes);
+
+        WpStub::reset();
+        $this->twoPosts(5);
+        $key = CadenceAttest::exempt_key();
+        $r = $this->link($this->plan(), null, $key, 'v1 ' . str_repeat('a', 16) . ' '
+            . str_repeat('B', 86));
+        $this->assertFalse($r['ok']);
+        $this->assertSame('attestation_unverified', $r['code']);
+        $this->assertSame([], WpStub::$writes);
     }
 
     /**
@@ -434,7 +653,7 @@ final class LinkRequestTest extends TestCase {
         $this->twoPosts(null);
         WpStub::$wpml_reads = false;
         WpStub::$wpml_writes = false;
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
         $this->assertFalse($r['ok']);
         $this->assertSame('wpml_unavailable', $r['code']);
         $this->assertSame([], WpStub::$writes);
@@ -450,7 +669,7 @@ final class LinkRequestTest extends TestCase {
     public function test_wpml_that_answers_reads_but_performs_no_writes_is_refused(): void {
         $this->twoPosts(null);
         WpStub::$wpml_writes = false;
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
         $this->assertFalse($r['ok']);
         $this->assertSame('wpml_unavailable', $r['code']);
         $this->assertSame([], WpStub::$writes);
@@ -466,7 +685,7 @@ final class LinkRequestTest extends TestCase {
     public function test_wpml_that_writes_but_answers_no_reads_is_refused_as_unavailable(): void {
         $this->twoPosts(null);
         WpStub::$wpml_reads = false;
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
         $this->assertFalse($r['ok']);
         $this->assertSame('wpml_unavailable', $r['code']);
         $this->assertSame([], WpStub::$writes);
@@ -485,7 +704,7 @@ final class LinkRequestTest extends TestCase {
     public function test_a_filter_that_declines_to_answer_writes_nothing(): void {
         $this->twoPosts(null);
         WpStub::$wpml_declines = true;
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
         $this->assertFalse($r['ok']);
         $this->assertSame('group_unknown', $r['code']);
         $this->assertSame([], WpStub::$writes);
@@ -493,7 +712,7 @@ final class LinkRequestTest extends TestCase {
 
     public function test_a_written_plan_carries_no_code(): void {
         $this->twoPosts(5);
-        $r = CadenceLinkRequest::run($this->plan(), null);
+        $r = $this->link($this->plan(), null);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertArrayNotHasKey('code', $r);
     }
@@ -507,7 +726,7 @@ final class LinkRequestTest extends TestCase {
 
     public function test_a_plan_naming_its_piece_reports_what_the_site_now_says(): void {
         $this->twoPosts(5);
-        $r = CadenceLinkRequest::run($this->plan(['piece_id' => 'piece-1']), null);
+        $r = $this->link($this->plan(['piece_id' => 'piece-1']), null);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertSame(2, $r['written']);
         // The WHOLE report, by identity: a field appearing here that nothing
@@ -536,7 +755,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(3, 'page', 'fr', 5);
         $this->ours(3);
         WpStub::$wpml_write_detaches = [2];
-        $r = CadenceLinkRequest::run($this->plan(['piece_id' => 'piece-1', 'translations' => [
+        $r = $this->link($this->plan(['piece_id' => 'piece-1', 'translations' => [
             ['post_id' => 2, 'language_code' => 'de',
              'element_type' => 'post_page', 'source_language_code' => 'en'],
             ['post_id' => 3, 'language_code' => 'fr',
@@ -555,7 +774,7 @@ final class LinkRequestTest extends TestCase {
     public function test_a_source_the_site_puts_in_no_group_links_nothing(): void {
         $this->twoPosts(5);
         WpStub::$wpml_write_detaches = [1];
-        $r = CadenceLinkRequest::run($this->plan(['piece_id' => 'piece-1']), null);
+        $r = $this->link($this->plan(['piece_id' => 'piece-1']), null);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertSame([], $r['report']['linked']);
     }
@@ -581,7 +800,7 @@ final class LinkRequestTest extends TestCase {
      */
     public function test_the_create_path_learns_its_group_from_its_own_first_write(): void {
         $this->twoPosts(null);
-        $r = CadenceLinkRequest::run($this->plan(
+        $r = $this->link($this->plan(
             ['trid' => null, 'create_group' => true, 'piece_id' => 'piece-1']), null);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertSame(2, $r['written']);
@@ -617,7 +836,7 @@ final class LinkRequestTest extends TestCase {
     public function test_a_source_left_in_no_group_by_its_own_write_stops_before_the_translations(): void {
         $this->twoPosts(null);
         WpStub::$wpml_write_detaches = [1];
-        $r = CadenceLinkRequest::run($this->plan(
+        $r = $this->link($this->plan(
             ['trid' => null, 'create_group' => true, 'piece_id' => 'piece-1']), null);
         $this->assertFalse($r['ok']);
         $this->assertSame('source_group_unset', $r['code']);
@@ -641,7 +860,7 @@ final class LinkRequestTest extends TestCase {
     public function test_a_source_whose_group_cannot_be_read_back_stops_before_the_translations(): void {
         $this->twoPosts(null);
         WpStub::$wpml_write_unreadable = [1];
-        $r = CadenceLinkRequest::run($this->plan(
+        $r = $this->link($this->plan(
             ['trid' => null, 'create_group' => true, 'piece_id' => 'piece-1']), null);
         $this->assertFalse($r['ok']);
         $this->assertSame('source_group_unreadable', $r['code']);
@@ -661,7 +880,7 @@ final class LinkRequestTest extends TestCase {
     public function test_a_half_applied_create_naming_no_piece_still_carries_its_count(): void {
         $this->twoPosts(null);
         WpStub::$wpml_write_detaches = [1];
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
         $this->assertSame(['ok' => false, 'code' => 'source_group_unset',
                            'reason' => $r['reason'], 'written' => 1], $r);
         $this->assertArrayNotHasKey('report', $r);
@@ -674,10 +893,15 @@ final class LinkRequestTest extends TestCase {
      */
     public function test_a_plan_naming_no_piece_carries_no_report(): void {
         $this->twoPosts(5);
-        $r = CadenceLinkRequest::run($this->plan(), null);
+        $r = $this->link($this->plan(), null);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertArrayNotHasKey('report', $r);
-        $this->assertSame(['ok' => true, 'written' => 2], $r);
+        // THE ATTESTATION FIELDS ARE NOT A REPORT and are there whether a piece
+        // was named or not: they say what was verified about the REQUEST, which
+        // a ledger needs for a call it cannot join to a piece as much as for one
+        // it can.
+        $this->assertSame(['ok' => true, 'written' => 2, 'attestation' => 'verified',
+                           'attestation_kid' => CadenceAttest::KID], $r);
     }
 
     /**
@@ -688,7 +912,7 @@ final class LinkRequestTest extends TestCase {
     #[DataProvider('unusablePieceIds')]
     public function test_an_unusable_piece_id_writes_nothing($piece_id): void {
         $this->twoPosts(5);
-        $r = CadenceLinkRequest::run($this->plan(['piece_id' => $piece_id]), null);
+        $r = $this->link($this->plan(['piece_id' => $piece_id]), null);
         $this->assertFalse($r['ok']);
         $this->assertSame('bad_plan', $r['code']);
         $this->assertSame([], WpStub::$writes);
@@ -725,7 +949,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(2, 'page', 'de', null);
         $this->ours(1);   // post 2 is somebody else's page
 
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
 
         $this->assertFalse($r['ok'], 'a post this connector never published was linked');
         $this->assertSame('post_out_of_scope', $r['code']);
@@ -748,7 +972,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(2, 'page', 'de', null);
         $this->ours(1, 2);
 
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
 
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertCount(2, WpStub::$writes);
@@ -767,7 +991,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(2, 'page', 'de', null);
         $this->ours(2);   // the TRANSLATION is ours; the source is not
 
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
 
         $this->assertFalse($r['ok'], 'a source this connector never published was linked');
         $this->assertSame('post_out_of_scope', $r['code']);
@@ -792,7 +1016,7 @@ final class LinkRequestTest extends TestCase {
         $this->ours(1);
         WpStub::$meta[2][CadenceContentRequest::META] = $stored;
 
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
 
         $this->assertFalse($r['ok']);
         $this->assertSame('post_out_of_scope', $r['code']);
@@ -826,7 +1050,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::$meta[1][CadenceContentRequest::KEY_META] = 'aaaa1111';
         WpStub::$meta[2][CadenceContentRequest::KEY_META] = 'bbbb2222';
 
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null, 'aaaa1111');
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null, 'aaaa1111');
 
         $this->assertFalse($r['ok'], "a second key's post was linked");
         $this->assertSame('post_out_of_scope', $r['code']);
@@ -881,7 +1105,7 @@ final class LinkRequestTest extends TestCase {
             $plan = $this->plan(['trid' => null, 'create_group' => true]);
             $plan['source']['post_id'] = $probe;
 
-            $r = CadenceLinkRequest::run($plan, null, 'aaaa1111');
+            $r = $this->link($plan, null, 'aaaa1111');
 
             $this->assertFalse($r['ok'], $case);
             $this->assertSame([], WpStub::$writes, $case);
@@ -926,8 +1150,8 @@ final class LinkRequestTest extends TestCase {
         // `page`, because post 2 IS a page and must pass its own type check -- the
         // post under test is the absent one, and a fixture where another post fires
         // first would prove nothing about it.
-        $typed = CadenceLinkRequest::run($plan, ['page']);
-        $untyped = CadenceLinkRequest::run($plan, null);
+        $typed = $this->link($plan, ['page']);
+        $untyped = $this->link($plan, null);
 
         $this->assertSame('bad_plan', $typed['code'], $typed['reason'] ?? '');
         $this->assertStringContainsString('does not exist', $typed['reason']);
@@ -946,7 +1170,7 @@ final class LinkRequestTest extends TestCase {
         $plan = $this->plan(['trid' => null, 'create_group' => true]);
         $plan['source']['post_id'] = 7;
 
-        $r = CadenceLinkRequest::run($plan, null);
+        $r = $this->link($plan, null);
 
         $this->assertSame('bad_plan', $r['code'], $r['reason'] ?? '');
         $this->assertStringContainsString('does not exist', $r['reason']);
@@ -967,7 +1191,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::$meta[1][CadenceContentRequest::KEY_META] = 'bbbb2222';
         WpStub::$meta[2][CadenceContentRequest::KEY_META] = 'aaaa1111';
 
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null, 'aaaa1111');
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null, 'aaaa1111');
 
         $this->assertFalse($r['ok']);
         $this->assertSame('post_out_of_scope', $r['code']);
@@ -987,7 +1211,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::$meta[1][CadenceContentRequest::KEY_META] = 'aaaa1111';
         WpStub::$meta[2][CadenceContentRequest::KEY_META] = 'aaaa1111';
 
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null, 'aaaa1111');
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null, 'aaaa1111');
 
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertCount(2, WpStub::$writes);
@@ -1008,7 +1232,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(2, 'page', 'de', null);
         $this->ours(1, 2);   // the identifier only -- no stamp, as 0.3.0 wrote them
 
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null, 'aaaa1111');
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null, 'aaaa1111');
 
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertCount(2, WpStub::$writes);
@@ -1057,7 +1281,7 @@ final class LinkRequestTest extends TestCase {
         $this->ours(1, 2);   // an identifier and no stamp, as 0.3.0 wrote them
 
         // A key that published NEITHER of these, and says so.
-        $r = CadenceLinkRequest::run(
+        $r = $this->link(
             $this->plan(['trid' => null, 'create_group' => true]), null, 'bbbb2222');
 
         $this->assertTrue($r['ok'], 'the pre-stamp gap has been closed; read this docblock');
@@ -1066,7 +1290,7 @@ final class LinkRequestTest extends TestCase {
         // everything: stamp ONE of the two and the same key is refused.
         WpStub::$writes = [];
         WpStub::$meta[2][CadenceContentRequest::KEY_META] = 'aaaa1111';
-        $refused = CadenceLinkRequest::run(
+        $refused = $this->link(
             $this->plan(['trid' => null, 'create_group' => true]), null, 'bbbb2222');
         $this->assertFalse($refused['ok']);
         $this->assertSame('post_out_of_scope', $refused['code']);
@@ -1100,7 +1324,7 @@ final class LinkRequestTest extends TestCase {
         $this->ours(1);
         WpStub::$meta[2]['_some_other_plugin'] = 'Secret Draft Title';
 
-        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), null);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
 
         $this->assertStringContainsString('2', $r['reason']);
         // The IN-SCOPE post's stored identifier is what a leak would spill,
@@ -1129,7 +1353,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(2, 'page', 'de', null);
         $this->ours(1, 2);
 
-        $r = CadenceLinkRequest::run(
+        $r = $this->link(
             $this->plan(['trid' => null, 'create_group' => true]), ['post'], 'aaaa1111');
 
         $this->assertFalse($r['ok'], 'a page was linked by a key scoped to posts');
@@ -1151,7 +1375,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(2, 'post', 'de', null);
         $this->ours(1, 2);
 
-        $r = CadenceLinkRequest::run(
+        $r = $this->link(
             $this->plan(['trid' => null, 'create_group' => true]), ['post'], 'aaaa1111');
 
         $this->assertFalse($r['ok']);
@@ -1174,7 +1398,7 @@ final class LinkRequestTest extends TestCase {
         // `post_post`, because the element type has to agree with the post's
         // own type and these are posts: the fixture everywhere else in this
         // file is a pair of pages.
-        $r = CadenceLinkRequest::run($this->plan([
+        $r = $this->link($this->plan([
             'trid' => null, 'create_group' => true,
             'source' => ['post_id' => 1, 'language_code' => 'en',
                          'element_type' => 'post_post', 'source_language_code' => null],
@@ -1201,7 +1425,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(2, 'page', 'de', null);
         $this->ours(1, 2);
 
-        $r = CadenceLinkRequest::run(
+        $r = $this->link(
             $this->plan(['trid' => null, 'create_group' => true]), null, 'aaaa1111');
 
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
@@ -1234,7 +1458,7 @@ final class LinkRequestTest extends TestCase {
             WpStub::add_post(1, 'post', 'en', null);
             WpStub::add_post(2, $type, 'de', null);
             $this->ours(1);
-            $r = CadenceLinkRequest::run(
+            $r = $this->link(
                 $this->plan(['trid' => null, 'create_group' => true]), ['post'], 'aaaa1111');
             $this->assertFalse($r['ok']);
             $this->assertSame([], WpStub::$writes);
@@ -1255,7 +1479,7 @@ final class LinkRequestTest extends TestCase {
             $this->ours(1, 2);
             WpStub::$meta[1][CadenceContentRequest::KEY_META] = 'aaaa1111';
             WpStub::$meta[2][CadenceContentRequest::KEY_META] = 'bbbb2222';
-            $r = CadenceLinkRequest::run(
+            $r = $this->link(
                 $this->plan(['trid' => null, 'create_group' => true]), ['post'], 'aaaa1111');
             $this->assertFalse($r['ok']);
             $this->assertSame([], WpStub::$writes);
@@ -1285,7 +1509,7 @@ final class LinkRequestTest extends TestCase {
         WpStub::add_post(2, 'attachment', 'de', null);
         $this->ours(1, 2);
 
-        $r = CadenceLinkRequest::run(
+        $r = $this->link(
             $this->plan(['trid' => null, 'create_group' => true]),
             ['post', 'landing_page'], 'aaaa1111');
 

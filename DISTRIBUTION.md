@@ -79,9 +79,18 @@ Submission is not something this repository can perform. Before the first
 client:
 
 1. Register (or confirm) a WordPress.org account and put its **username** in
-   `readme.txt`'s `Contributors` field. The value there now is a placeholder:
-   the field must name a real registered account, and nothing in this repository
-   establishes which one.
+   `readme.txt`'s `Contributors` field. The value there now is a placeholder,
+   and it is deliberately not a valid username, because the first placeholder
+   was: `elegia` reads like ours and is somebody else's — that account exists,
+   joined February 2013, has zero contributions (checked 2026-09-12 at
+   https://profiles.wordpress.org/elegia/ ). A submission carrying it would have
+   credited a stranger or simply failed.
+
+   `build-zip.py` refuses to build while the placeholder is there, so this step
+   cannot be skipped by forgetting it. It is refused at the BUILD rather than in
+   CI on purpose: the placeholder is the correct value in the tree until a human
+   registers the account, so a CI leg would red the branch over a step no commit
+   can take, while the zip is the thing that actually gets submitted.
 2. Set `Tested up to:` to the newest WordPress release the plugin has actually
    been run against. It currently reads `6.4`, the same as `Requires at least`,
    because **no live-WordPress test exists anywhere in this repository** — the

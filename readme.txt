@@ -1,5 +1,5 @@
 === Cadence Connector ===
-Contributors: elegia
+Contributors: OPERATOR-WORDPRESS-ORG-USERNAME-NOT-YET-REGISTERED
 Tags: rest-api, wpml, multilingual, publishing, translation
 Requires at least: 6.4
 Tested up to: 6.4

@@ -59,6 +59,25 @@ final class KeyTest extends TestCase {
     }
 
     /**
+     * A BYLINE CHECKED ONLY AT ISSUE TIME SURVIVES THE USER'S DELETION -- the
+     * failure this asserts against. `issue()` refused nobody at the moment the
+     * key was created; the user is then removed from the site, as
+     * `wp_delete_user` allows for any id, and the next publish must not carry
+     * an author that resolves to nothing.
+     */
+    public function test_a_byline_whose_user_has_since_been_deleted_names_no_byline(): void {
+        $key = $this->issue(['content.publish'], 'tenant-a', 7);
+        unset(WpStub::$users[7]);
+        $this->assertNull(CadenceKey::author_for($key['secret']));
+        // THE TWIN: the capability the key was issued for is untouched by the
+        // byline dying. Deleting a user must not also revoke a key -- the two
+        // are unrelated grants, and a key that stops authorising because a
+        // WordPress account vanished would be the identity coupling this
+        // credential exists to avoid.
+        $this->assertTrue(CadenceKey::authorises($key['secret'], 'content.publish'));
+    }
+
+    /**
      * AN ID THIS SITE HAS NO USER FOR IS REFUSED, at the moment the key is
      * issued -- which is the moment a human is on the screen to fix it. A
      * byline naming nobody is the empty byline this exists to stop, stored.

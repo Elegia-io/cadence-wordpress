@@ -315,6 +315,14 @@ final class PluginTest extends TestCase {
         $this->assertMatchesRegularExpression('/^\d+\.\d+\.\d+$/', $field('Version'));
         $this->assertNotSame('', $field('Description'));
 
+        // THE VERSION ON THE REPLY IS THIS SAME VERSION. `CadenceRestRoute::VERSION`
+        // is a second copy of this line rather than a parse of it, so nothing
+        // enforces the two moving together except this comparison -- a release
+        // that bumps the header and forgets the constant now fails here instead
+        // of shipping a reply that names the version it was before the bump.
+        $this->assertSame($field('Version'), CadenceRestRoute::VERSION,
+            'the header was bumped without CadenceRestRoute::VERSION, so every reply now names the wrong version');
+
         // `array_is_list` and the typed closures below it are 8.1; a header
         // claiming less lets WordPress activate this on a host it fatals on.
         $this->assertTrue(version_compare($field('Requires PHP'), '8.1', '>='),

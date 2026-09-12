@@ -276,21 +276,45 @@ final class CadenceAttestation {
         // `unknown_kid` there would send an operator to check a rotation that
         // has not begun.
         $stored = $key_id === null ? [] : CadenceKey::verify_keys($key_id);
-        if ($stored === []) {
-            return self::refuse('no_public_key',
-                'this connector key carries no attestation public key at all, so there is nothing '
-                . 'here to check a signature against; paste one on the Cadence Keys screen. '
-                . 'Nothing was written');
+        // DECODED BEFORE ANY OF IT IS USED, so a stored value that is not a key is
+        // skipped rather than handed to libsodium. `sodium_crypto_sign_verify_detached`
+        // THROWS on a key that is not 32 bytes and the call below sits outside any try,
+        // so a row written straight into the option -- a hand edit, a restored backup, a
+        // migration -- made this site answer 500 to a publish. A 500 is not one of the
+        // five branches and names no repair. Skipping also means a record holding one
+        // good key and one corrupt one still verifies, which is what a rotation
+        // half-pasted into the database looks like.
+        $usable = [];
+        foreach ($stored as $record) {
+            $raw = is_string($record['pk'] ?? null) ? self::decode_public_key($record['pk']) : '';
+            if ($raw !== '') {
+                $usable[] = ['kid' => $record['kid'] ?? null, 'raw' => $raw];
+            }
+        }
+        // ONE BRANCH, ONE ORIGIN, two sentences: `test_the_branch_vocabulary_is_exactly_five`
+        // asserts each branch is refused from exactly one place, and it is right to --
+        // but the repair differs between a screen showing nothing and a screen showing
+        // something that is not a key, and a refusal that said the first over the second
+        // would send an operator to paste a key they can already see.
+        if ($usable === []) {
+            return self::refuse('no_public_key', $stored === []
+                ? 'this connector key carries no attestation public key at all, so there is '
+                  . 'nothing here to check a signature against; paste one on the Cadence Keys '
+                  . 'screen. Nothing was written'
+                : 'this connector key carries attestation public keys and not one of them '
+                  . 'decodes to a key, so there is nothing here to check a signature against; '
+                  . 're-paste this tenant\'s public key on the Cadence Keys screen. '
+                  . 'Nothing was written');
         }
 
         $public_key = null;
-        foreach ($stored as $record) {
-            if (($record['kid'] ?? null) === $parsed['kid']) {
-                $public_key = $record['pk'] ?? null;
+        foreach ($usable as $record) {
+            if ($record['kid'] === $parsed['kid']) {
+                $public_key = $record['raw'];
                 break;
             }
         }
-        if (!is_string($public_key)) {
+        if ($public_key === null) {
             return self::refuse('unknown_kid',
                 'the signature names key ' . $parsed['kid'] . ', and this connector key holds no '
                 . 'public key under that name; a rotation that pasted the new key here has not '
@@ -300,7 +324,7 @@ final class CadenceAttestation {
         $material = self::material($route, $fields);
         // OVER THE 32 RAW BYTES OF THE SHA-256, never its hex spelling.
         $verified = sodium_crypto_sign_verify_detached(
-            $parsed['signature'], self::digest($material), self::decode_public_key($public_key));
+            $parsed['signature'], self::digest($material), $public_key);
         if ($verified !== true) {
             return self::refuse('mismatch',
                 'the signature is well formed and names a public key this site holds, and it does '
@@ -327,14 +351,39 @@ final class CadenceAttestation {
      * and validated to 32 bytes by `CadenceKey::add_verify_key` before it is
      * ever stored, so this is a decode and not a second check.
      */
+    /**
+     * A STORED PUBLIC KEY THAT IS NOT ONE IS NOT A KEY, and must not become a crash.
+     *
+     * Placement validates what it accepts, so this can only be reached by a value
+     * written straight into the option -- a hand-edited row, a restored backup, a
+     * migration. `sodium_crypto_sign_verify_detached` THROWS on a key that is not 32
+     * bytes, and the verify here sits outside any try, so the site answered 500 to a
+     * publish. A 500 says nothing an operator can act on and is not one of the five
+     * branches; an unusable stored key is honestly `no_public_key`, and the entry is
+     * skipped so a record holding one good key and one corrupt one still verifies.
+     */
     private static function decode_public_key(string $stored): string {
         $raw = base64_decode($stored, true);
-        return $raw === false ? '' : $raw;
+        return ($raw === false || strlen($raw) !== SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES)
+            ? '' : $raw;
     }
 
-    /** Unpadded base64url to raw bytes, or null if it is not that. */
+    /**
+     * Unpadded base64url to raw bytes, or null if it is not EXACTLY that.
+     *
+     * ONE SIGNATURE, ONE SPELLING. base64 does not use the last character's trailing
+     * bits, so four different 86-character tokens decode to the same 64 bytes -- and a
+     * decoder that accepts all four gives one signature four headers. Re-encoding the
+     * decoded bytes and requiring the token back is the only check that refuses the
+     * other three, and it costs one encode. This is the same rule that makes a padded
+     * token `malformed`: an alternative spelling is not a Cadence spine's output, and
+     * `malformed` should keep meaning that.
+     */
     private static function base64url_decode(string $encoded): ?string {
         $raw = base64_decode(strtr($encoded, '-_', '+/') . '==', true);
-        return $raw === false ? null : $raw;
+        if ($raw === false) {
+            return null;
+        }
+        return rtrim(strtr(base64_encode($raw), '+/', '-_'), '=') === $encoded ? $raw : null;
     }
 }

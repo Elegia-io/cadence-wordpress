@@ -140,7 +140,9 @@ final class CadenceContentRequest {
         // acted upon -- until the signature over its bytes has verified.
         $attested = CadenceAttestation::verify($attestation, '/content', $fields, $key_id);
         if ($attested['ok'] !== true) {
-            return ['ok' => false, 'code' => $attested['code'], 'reason' => $attested['reason']];
+            return ['ok' => false, 'code' => $attested['code'],
+                    'reason' => $attested['reason'],
+                    'attestation_branch' => $attested['branch']];
         }
 
         // AUTHORISATION FIRST, AND BEFORE THE SITE IS ASKED ANYTHING.

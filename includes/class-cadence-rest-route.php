@@ -140,6 +140,17 @@ final class CadenceRestRoute {
         if (array_key_exists('written', $result)) {
             $body['written'] = $result['written'];
         }
+        // WHICH OF THE FIVE ATTESTATION BRANCHES FIRED, on the wire rather than only
+        // inside this plugin. `attestation_unverified` is one code over five different
+        // repairs -- nobody pasted a key, a rotation is half done, the header was
+        // stripped in transit, it was unreadable, it did not verify -- and the caller
+        // decides what to tell an operator from the reply alone. `verify()` has always
+        // returned the branch; it stopped at the route, so every refusal reached the
+        // spine as a branch it could not name. Conditional on the key, like `written`
+        // above, so whoever stops setting it stops sending it.
+        if (array_key_exists('attestation_branch', $result)) {
+            $body['attestation_branch'] = $result['attestation_branch'];
+        }
         if (isset($result['report']) && is_array($result['report'])) {
             $body = array_merge($body, $result['report']);
         }

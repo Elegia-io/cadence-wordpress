@@ -127,7 +127,9 @@ final class CadenceReplaceRequest {
         // the material's decimal-ASCII rendering of it is never a coercion.
         $attested = CadenceAttestation::verify($attestation, '/content/replace', $fields, $key_id);
         if ($attested['ok'] !== true) {
-            return ['ok' => false, 'code' => $attested['code'], 'reason' => $attested['reason']];
+            return ['ok' => false, 'code' => $attested['code'],
+                    'reason' => $attested['reason'],
+                    'attestation_branch' => $attested['branch']];
         }
 
         // READ THE POST BEFORE ANYTHING IS DECIDED ABOUT IT. `wp_update_post`

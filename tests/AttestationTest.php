@@ -365,6 +365,88 @@ final class AttestationTest extends TestCase {
         $this->assertCount(5, array_unique($reasons));
     }
 
+    /**
+     * A STORED VALUE THAT IS NOT A KEY IS A REFUSAL, NEVER A 500.
+     *
+     * Placement validates what it accepts, so this is reachable only by a row written
+     * straight into the option: a hand edit, a restored backup, a migration.
+     * `sodium_crypto_sign_verify_detached` throws on a key that is not 32 bytes and
+     * the verify sits outside any try, so the site answered 500 to a publish -- a
+     * status that is not one of the five branches and names no repair.
+     */
+    public function test_a_corrupt_stored_public_key_refuses_and_does_not_crash(): void {
+        $fields = $this->content_fields();
+        $good   = $this->signed('/content', $fields);
+
+        $keys = get_option(CadenceKey::OPTION, []);
+        // Valid base64 and the wrong length: what a truncated paste produces.
+        $keys[self::KEY]['verify'] = [['kid' => CadenceAttest::KID,
+                                       'pk' => base64_encode('short'), 'added' => 0]];
+        update_option(CadenceKey::OPTION, $keys);
+
+        $r = CadenceAttestation::verify($good, '/content', $fields, self::KEY);
+
+        $this->assertFalse($r['ok']);
+        $this->assertSame('no_public_key', $r['branch']);
+        // And the sentence is the one for THIS state: the screen shows a key and it is
+        // not one. Telling an operator to paste a key they can already see is the
+        // wrong repair.
+        $this->assertStringContainsString('not one of them decodes to a key', $r['reason']);
+    }
+
+    /** AND ONE CORRUPT ENTRY BESIDE ONE GOOD ONE STILL VERIFIES. */
+    public function test_a_corrupt_entry_does_not_disable_the_good_key_beside_it(): void {
+        $fields = $this->content_fields();
+        $keys = get_option(CadenceKey::OPTION, []);
+        $keys[self::KEY]['verify'] = [
+            ['kid' => 'ffffffffffffffff', 'pk' => base64_encode('short'), 'added' => 0],
+            ['kid' => CadenceAttest::KID, 'pk' => CadenceAttest::public_key_base64(),
+             'added' => 1],
+        ];
+        update_option(CadenceKey::OPTION, $keys);
+
+        $r = CadenceAttestation::verify($this->signed('/content', $fields), '/content',
+                                        $fields, self::KEY);
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame(CadenceAttest::KID, $r['kid'],
+            'the verifying kid is the good entry, not the first on the record');
+    }
+
+    /**
+     * ONE SIGNATURE, ONE SPELLING: the last character's unused bits are not a licence.
+     *
+     * 64 bytes is 512 bits and 86 base64 characters carry 516, so the final
+     * character's low four bits are never read -- sixteen tokens decode to the same
+     * signature and a plain decoder accepts all sixteen. That gives one signature
+     * sixteen headers, which is the same thing a padded token would be, and
+     * `malformed` has to keep meaning "no Cadence spine composed this".
+     */
+    public function test_an_alternative_spelling_of_the_same_signature_is_malformed(): void {
+        $fields = $this->content_fields();
+        $good   = $this->signed('/content', $fields);
+        [$v, $kid, $token] = explode(' ', $good);
+
+        $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+        $at       = strpos($alphabet, $token[85]);
+        $variant  = substr($token, 0, 85) . $alphabet[$at ^ 1];
+
+        $this->assertNotSame($token, $variant);
+        // The premise: it really is the same 64 bytes, so only a re-encode check can
+        // tell them apart. If this ever fails the test below proves nothing.
+        $this->assertSame(
+            base64_decode(strtr($token, '-_', '+/') . '==', true),
+            base64_decode(strtr($variant, '-_', '+/') . '==', true),
+            'the variant is a different signature, so this test is not measuring the spelling');
+
+        $r = CadenceAttestation::verify($v . ' ' . $kid . ' ' . $variant, '/content',
+                                        $fields, self::KEY);
+
+        $this->assertFalse($r['ok']);
+        $this->assertSame('malformed', $r['branch'],
+            'a second spelling of one signature was accepted as a header');
+    }
+
     /** THE BRANCH VOCABULARY IS CLOSED, and the contract's list is that list. */
     public function test_the_branch_vocabulary_is_exactly_five(): void {
         $source = file_get_contents(__DIR__ . '/../includes/class-cadence-attestation.php');
@@ -665,6 +747,87 @@ final class AttestationTest extends TestCase {
         $this->assertNotSame('attestation_unverified', $r['code'],
             'an attested body was still refused by the attestation');
         $this->assertSame('post_type_out_of_scope', $r['code']);
+    }
+
+    /**
+     * EVERY BRANCH REACHES THE WIRE, AND THIS IS ASKED OF THE REPLY BODY.
+     *
+     * `test_each_branch_answers_403_with_its_own_sentence` above asks
+     * `CadenceAttestation::verify()` directly, and it passed while the branch was
+     * being DROPPED at the route -- both request classes returned only `ok`, `code`
+     * and `reason`, and `respond()` had no slot for it. So every refusal arrived at
+     * the caller as one it could not name: a first setup with no key pasted and a
+     * half-finished rotation were indistinguishable, and the caller's own message
+     * said the two implementations disagreed about the vocabulary, which was false.
+     *
+     * The lesson is the assertion's SUBJECT, not its strength: a branch is a thing
+     * the caller reads off the wire, so it has to be asked of the wire. Found by a
+     * cross-model review on 2026-09-12, one finding after the same class of defect
+     * hid the verifying kid.
+     */
+    public function test_every_branch_reaches_the_reply_body_through_the_route(): void {
+        $body = ['piece_id' => 'p-1', 'language' => 'en', 'post_type' => 'post',
+                 'status' => 'draft', 'title' => 'T', 'content' => 'C',
+                 'declared' => ['multilingual' => true, 'languages' => ['en']]];
+        $fields = CadenceAttest::fields('/content', $body);
+        $good   = $this->signed('/content', $fields);
+
+        $cases = [
+            'absent'        => null,
+            'malformed'     => 'v1 ' . CadenceAttest::KID,
+            'unknown_kid'   => 'v1 ffffffffffffffff ' . explode(' ', $good)[2],
+            'no_public_key' => $good,
+            'mismatch'      => $this->signed(
+                '/content', CadenceAttest::fields('/content', ['title' => 'OTHER'] + $body)),
+        ];
+
+        $seen = [];
+        foreach ($cases as $branch => $header) {
+            $keys = get_option(CadenceKey::OPTION, []);
+            $keys[self::KEY]['verify'] = $branch === 'no_public_key'
+                ? []
+                : [['kid' => CadenceAttest::KID, 'pk' => CadenceAttest::public_key_base64(),
+                    'added' => 0]];
+            update_option(CadenceKey::OPTION, $keys);
+            WpStub::$inserted = [];
+
+            $r      = CadenceContentRequest::run($body, static fn (string $c): bool => false,
+                                                 null, null, self::KEY, $header);
+            $answer = CadenceRestRoute::respond($r);
+
+            $this->assertSame(403, $answer['status'], $branch);
+            $this->assertSame('attestation_unverified', $answer['body']['code'], $branch);
+            $this->assertArrayHasKey('attestation_branch', $answer['body'],
+                $branch . ' was refused and the reply body does not say which branch fired');
+            $this->assertSame($branch, $answer['body']['attestation_branch'], $branch);
+            $this->assertCount(0, WpStub::$inserted, $branch . ' wrote something');
+            $seen[] = $answer['body']['attestation_branch'];
+        }
+
+        // THE DENOMINATOR, so a loop that stopped arranging branches cannot report a
+        // pass over fewer than five.
+        $this->assertSame(array_keys($cases), $seen);
+        $this->assertCount(5, array_unique($seen), 'two branches answered the same name');
+    }
+
+    /** A REPLY THAT IS NOT AN ATTESTATION REFUSAL CARRIES NO BRANCH. */
+    public function test_an_ordinary_refusal_does_not_name_an_attestation_branch(): void {
+        // A type OUTSIDE this key's scope: an ordinary refusal, taken after the
+        // attestation verified, so the reply is a refusal with no branch to name.
+
+        $body = ['piece_id' => 'p-1', 'language' => 'en', 'post_type' => 'page',
+                 'status' => 'draft', 'title' => 'T', 'content' => 'C',
+                 'declared' => ['multilingual' => true, 'languages' => ['en']]];
+        $r = CadenceContentRequest::run($body, static fn (string $c): bool => false, ['post'],
+            null, self::KEY,
+            $this->signed('/content', CadenceAttest::fields('/content', $body)));
+        $answer = CadenceRestRoute::respond($r);
+
+        $this->assertFalse($answer['body']['ok']);
+        $this->assertSame('post_type_out_of_scope', $answer['body']['code']);
+        $this->assertNotSame('attestation_unverified', $answer['body']['code']);
+        $this->assertArrayNotHasKey('attestation_branch', $answer['body'],
+            'a refusal that is not about the attestation named an attestation branch');
     }
 
     /** AND AN ATTESTED PUBLISH OF A GOOD BODY WRITES, AND SAYS SO ON THE WIRE. */

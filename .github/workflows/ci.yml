@@ -92,3 +92,19 @@ jobs:
             --colors=never \
             --fail-on-empty-test-suite \
             tests
+
+  readme:
+    name: readme.txt agrees with the plugin header
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # No `setup-php` and no PHPUnit: this leg reads two text files and
+      # compares two strings. It is separate from `tests` because the suite is
+      # the plugin's own refusals -- what it checks before it writes -- and
+      # this checks the REPOSITORY: that the number WordPress.org builds a
+      # release from (`Stable tag`) is the number every install will report
+      # (the header's `Version`). python3 is preinstalled on the runner.
+      - name: Stable tag vs Version
+        run: python3 check-readme-version.py

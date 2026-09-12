@@ -20,7 +20,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SLUG = "cadence-connector"
-SHIP = [f"{SLUG}.php", "README.md", "LICENSE", "includes"]
+# `readme.txt` ships and `DISTRIBUTION.md` does not: the first is the file the
+# WordPress.org directory reads to build the listing and pick the release, the
+# second is the record of why we host there, which is development history.
+SHIP = [f"{SLUG}.php", "readme.txt", "README.md", "LICENSE", "includes"]
 
 
 def version() -> str:

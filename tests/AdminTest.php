@@ -133,23 +133,50 @@ final class AdminTest extends TestCase {
     }
 
     /**
-     * THE ISSUED SECRET APPEARS EXACTLY ONCE, on the render that follows
-     * issuing it, and is gone from every render after -- it is never read
-     * back from `CadenceKey::all()`, which does not carry it.
+     * THE ISSUED SECRET NEVER TRAVELS IN THE URL, appears exactly once on the
+     * render that follows issuing it, and is gone from every render after.
+     *
+     * Driven through `handle()` and not by planting `$_GET`, because the URL is
+     * now half of what is under test: the secret used to be redirected as
+     * `?issued=<the key>`, which puts it in the access log, in the browser's
+     * history and in the `Referer` of the next request -- written down by
+     * parties this plugin does not control, and not undone by the screen
+     * showing it once.
+     *
+     * And it is never read back from `CadenceKey::all()` or the option row,
+     * which carry a hash.
      */
-    public function test_the_issued_secret_is_shown_once_and_never_in_the_key_list(): void {
+    public function test_the_issued_secret_is_never_in_the_url_and_is_shown_once(): void {
         $this->grantManageOptions();
-        CadenceKey::issue('tenant-a', ['content.publish'], 7);
-        $secret = 'deadbeef.' . str_repeat('c0ffee', 10);
+        $_POST = ['label' => 'tenant-a', 'author' => '7', 'caps' => ['content.publish']];
+        $location = null;
+        try {
+            CadenceAdmin::handle();
+            $this->fail('handle() did not reach the redirect');
+        } catch (CadenceTestRedirected $e) {
+            $location = $e->location;
+        }
 
-        $_GET['issued'] = $secret;
+        // The value is read out of the stash rather than invented, so this
+        // asserts about the secret the screen actually minted.
+        $this->assertCount(1, WpStub::$transients, 'the issued secret was not stashed for the render');
+        $secret = array_values(WpStub::$transients)[0];
+        $this->assertIsString($secret);
+
+        $this->assertStringNotContainsString($secret, $location,
+            'the issued key travelled in the redirect URL');
+        $this->assertStringNotContainsString('issued', $location,
+            'the URL still names the issue, which is a handle a log can carry');
+        $this->assertStringNotContainsString($secret, (string) json_encode(get_option(CadenceKey::OPTION)),
+            'the option row carries the secret and not only its hash');
+
         ob_start();
         CadenceAdmin::screen();
         $shown = ob_get_clean();
         $this->assertSame(1, substr_count($shown, $secret),
             'the secret did not appear exactly once on the render that issued it');
+        $this->assertSame([], WpStub::$transients, 'the render left the secret in the stash');
 
-        $_GET = [];
         ob_start();
         CadenceAdmin::screen();
         $again = ob_get_clean();

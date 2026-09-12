@@ -272,7 +272,7 @@ final class KeyTest extends TestCase {
             'piece_id' => 'piece-1', 'language' => 'en', 'post_type' => 'post',
             'status' => 'draft', 'title' => 'T', 'content' => 'C',
             'declared' => ['multilingual' => true, 'languages' => ['en']],
-        ], static fn (string $c): bool => false);
+        ], static fn (string $c): bool => false, null);
 
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertTrue(CadenceKey::scope_admits($r['post_id']),
@@ -406,5 +406,46 @@ final class KeyTest extends TestCase {
         $key = $this->issue(['content.publish']);
         $this->assertArrayNotHasKey('post_types', CadenceKey::all()[$key['id']]);
         $this->assertNull(CadenceKey::publish_types_for($key['secret']));
+    }
+
+    /**
+     * A STORED EMPTY LIST READS AS "NONE", NEVER AS "ANY", AND REFUSES EVERY
+     * PUBLISH.
+     *
+     * `issue` refuses `[]`, which the test above it asserts -- but that is the
+     * WRITING side, and the reading side was a property only the docblock
+     * claimed. `is_array($types) && $types !== []` there would turn a stored
+     * `[]` into "any registered type", widening a key on corrupt option data,
+     * and every test in this repository stayed green. This is the test that
+     * fails on it.
+     *
+     * Reachable only through option data nothing here wrote -- a partial
+     * restore, another plugin, a hand-edited row -- which is why it is written
+     * by hand below rather than issued: `issue` cannot produce it, and a
+     * property enforced by nothing is the shape this repository refuses.
+     */
+    public function test_a_stored_empty_publish_scope_refuses_every_publish(): void {
+        $key = CadenceKey::issue('tenant-a', ['content.publish'], 7, ['post']);
+        $this->assertIsArray($key, is_string($key) ? $key : '');
+        $records = get_option(CadenceKey::OPTION);
+        $records[$key['id']]['post_types'] = [];
+        update_option(CadenceKey::OPTION, $records);
+
+        // READ AS "NONE": the empty list itself, not null.
+        $this->assertSame([], CadenceKey::publish_types_for($key['secret']));
+
+        // AND THE READING IS WHAT THE PUBLISH DOES WITH IT. The scope is worth
+        // whatever the route makes of it, so the refusal is asserted here too
+        // rather than left as an inference from the return value.
+        $r = CadenceContentRequest::run([
+            'piece_id' => 'piece-1', 'language' => 'en', 'post_type' => 'post',
+            'status' => 'draft', 'title' => 'T', 'content' => 'C',
+            'declared' => ['multilingual' => true, 'languages' => ['en']],
+        ], static fn (string $c): bool => false,
+            CadenceKey::publish_types_for($key['secret']));
+
+        $this->assertFalse($r['ok'], 'a key scoped to nothing published anyway');
+        $this->assertSame('post_type_out_of_scope', $r['code']);
+        $this->assertSame([], WpStub::$inserted);
     }
 }

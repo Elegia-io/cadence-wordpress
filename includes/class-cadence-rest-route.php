@@ -170,13 +170,18 @@ final class CadenceRestRoute {
      * the request nor the site: it is that this credential does not reach that
      * post.
      *
-     * ALL THREE 403s ARE SEPARATE CODES FOR THE SAME REASON THEY ARE SEPARATE
+     * ALL FOUR 403s ARE SEPARATE CODES FOR THE SAME REASON THEY ARE SEPARATE
      * BRANCHES. `post_out_of_scope` is a post this connector never published,
-     * `post_other_key` one a different key published, and
-     * `post_type_out_of_scope` a post type this key may not create in. One code
-     * over all three would make a caller guess which of three unrelated fixes
-     * -- republish through this route, present the other tenant's key, re-issue
-     * this one with a wider scope -- its operator has to make.
+     * `post_other_key` one a different key published,
+     * `post_type_out_of_scope` a post type this key may not create in, and
+     * `existing_post_type_out_of_scope` a piece this key already has, placed in
+     * a type it may no longer publish into. One code over all four would make a
+     * caller guess which of four unrelated fixes -- republish through this
+     * route, present the other tenant's key, correct the `post_type` it sent,
+     * re-issue this key with a wider scope -- its operator has to make. The
+     * last two are the pair most easily collapsed and least safely: one is the
+     * type the REQUEST names, which the caller can change, and the other the
+     * type a post it already owns was made in, which it cannot.
      *
      * `source_group_unset` and `source_group_unreadable` are 500s and NOT 409s,
      * though a re-read is the caller's next step for both. A 409 invites the
@@ -195,6 +200,7 @@ final class CadenceRestRoute {
         'post_out_of_scope'          => 403,
         'post_other_key'             => 403,
         'post_type_out_of_scope'     => 403,
+        'existing_post_type_out_of_scope' => 403,
         'capability_mismatch'        => 409,
         'unsupported_language'       => 409,
         'group_unknown'              => 409,

@@ -55,7 +55,7 @@ Three capabilities exist, and a key carries only the ones it was issued for:
 |---|---|---|
 | `content.publish` | `POST /content` | the post types named on the key |
 | `content.replace` | `POST /content/replace` | the post carrying the `piece_id` named |
-| `translation.link` | `POST /translation-group` | the posts **this key** published |
+| `translation.link` | `POST /translation-group` | the posts **this key** published, and the ones that predate the stamp |
 
 `content.publish` and `content.replace` are separate on purpose: a key that may
 create must not silently also be able to overwrite. A pipeline that both
@@ -233,10 +233,21 @@ identifier, it puts the same article on the site twice, published and visible to
 visitors. So the identifier decides: one already on a post is answered with that
 post, and nothing is created.
 
+**And the identifier is the calling key's own.** `piece_id` is a name the
+caller chose, so two tenants on one WordPress may pick the same string and mean
+two different pieces. The lookup is scoped to the key that is asking: a key
+never finds another key's post, and each tenant's identifiers are its own. Posts
+this connector made *before* it recorded which key made them are found by any
+key, which is what keeps a client's existing pieces from being published a
+second time.
+
 | Status | | |
 |---|---|---|
 | `201` | created | `created: true`, with `post_id` and `revision` |
 | `200` | it already existed | `created: false`, same `post_id`, and the post's current `revision` when the caller may edit that post |
+| `400` | the body is wrong, or names a post type this site does not register | `bad_request` |
+| `403` | the key does not reach this post type (`post_type_out_of_scope`), or already has this piece in a type it may not publish into (`existing_post_type_out_of_scope`) | nothing was created |
+| `409` | the site disagrees: the declaration, or this piece's own language (`capability_mismatch`, `unsupported_language`) | nothing was created |
 
 A successful answer reports **what the call did**, not merely that a row
 appeared:
@@ -426,7 +437,7 @@ every post is in no group to begin with.
 |---|---|---|
 | `200` | Written. `written` is how many, and the report below says which. | Nothing. |
 | `400` | The request is wrong on its face. | Fix it; re-sending cannot help. |
-| `403` | The key is genuine and does not reach what the request names. | Nothing here can help; the post is not this connector's. |
+| `403` | The key is genuine and does not reach what the request names. | Read `code`: it names which. `post_out_of_scope` — the post is not this connector's, so republish it through `/content`. `post_other_key` — it is, but another key made it. `post_type_out_of_scope` — the type the request names is not on this key; `existing_post_type_out_of_scope` — the piece is already placed in a type that is not. The last two are re-issued keys, not requests to re-send. |
 | `409` | The site disagrees with the request. | Re-read the site and try again. |
 | `503` | The site cannot do this at all. | Fix the site; the request is fine. |
 | `500` | This server tried and failed — including a `create_group` that wrote the source and could not finish — or refused for a reason this version cannot classify. | Read the body: `written` says what was applied. |

@@ -503,4 +503,69 @@ final class PluginTest extends TestCase {
         $this->assertSame(2, $linked->get_data()['written']);
         $this->assertCount(2, WpStub::$writes);
     }
+
+    /**
+     * A SECOND TENANT THAT GUESSES A `piece_id` LEARNS NOTHING ABOUT THE FIRST
+     * TENANT'S POST, and cannot rewrite it with what it is handed.
+     *
+     * THE REVIEWER'S SCENARIO, driven through the registered routes because
+     * that is where it was reachable: `/content`'s idempotent-repeat branch
+     * used to answer with whatever post carried the identifier -- any type, any
+     * creating key -- so key B, scoped to `post` and holding
+     * `content.replace`, was answered `200` with key A's PAGE: its post id and
+     * the revision that rewrites it, from behind a type scope that post
+     * violates, and then `/content/replace` took the pair. The amplifier is
+     * that B needed no prior knowledge of the post id; it guessed a slug.
+     *
+     * Asserted at the route and not at the handler: the handler can scope the
+     * lookup perfectly while the route passes it no key id, and every handler
+     * test would still pass.
+     */
+    public function test_a_second_tenants_guessed_piece_id_reaches_neither_the_post_id_nor_the_revision(): void {
+        $a = CadenceKey::issue('tenant-a', ['content.publish'], 7, ['page']);
+        $b = CadenceKey::issue('tenant-b', ['content.publish', 'content.replace'], 7, ['post']);
+        $this->assertIsArray($a, is_string($a) ? $a : '');
+        $this->assertIsArray($b, is_string($b) ? $b : '');
+        $publish = $this->routes['/content']['callback'];
+        $piece = ['piece_id' => 'shared-slug', 'language' => 'en',
+                  'declared' => ['multilingual' => true, 'languages' => ['en']]];
+
+        $made = $publish(new WP_REST_Request($piece + ['post_type' => 'page', 'status' => 'publish',
+            'title' => "A's title", 'content' => "<p>A's body.</p>"], $this->key($a)));
+        $this->assertSame(201, $made->get_status());
+        $mine = $made->get_data()['post_id'];
+        $this->assertSame($a['id'], WpStub::$meta[$mine][CadenceContentRequest::KEY_META]);
+
+        // B names the same identifier, under the one type its own key admits.
+        $repeat = $publish(new WP_REST_Request($piece + ['post_type' => 'post', 'status' => 'draft',
+            'title' => "B's title", 'content' => "<p>B's body.</p>"], $this->key($b)));
+
+        // B GETS ITS OWN PIECE. Not a refusal: a refusal would confirm the
+        // identifier is taken, and would refuse a publish B may make.
+        $this->assertSame(201, $repeat->get_status(), (string) ($repeat->get_data()['reason'] ?? ''));
+        $theirs = $repeat->get_data()['post_id'];
+        $this->assertNotSame($mine, $theirs, "B was handed A's post id");
+        $this->assertNotSame($made->get_data()['revision'], $repeat->get_data()['revision'],
+            "B was handed the revision of A's post");
+        $this->assertSame($b['id'], WpStub::$meta[$theirs][CadenceContentRequest::KEY_META]);
+        $this->assertSame('post', WpStub::$posts[$theirs]['post_type']);
+        // A's post is untouched and still A's.
+        $this->assertSame("A's title", WpStub::$posts[$mine]['post_title']);
+
+        // AND THE PAIR B HOLDS DOES NOT REWRITE A'S POST. Even handed the id
+        // by this test -- which the route no longer discloses -- the revision
+        // B has is a hash of B's own text, so the replacement is refused and
+        // nothing on the site is rewritten.
+        $replace = $this->routes['/content/replace'];
+        $rewrite = ['piece_id' => 'shared-slug', 'post_id' => $mine,
+                    'revision' => $repeat->get_data()['revision'],
+                    'title' => 'B took it', 'content' => '<p>B body.</p>'];
+        $this->assertTrue(($replace['permission_callback'])(new WP_REST_Request($rewrite, $this->key($b))));
+        $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($b)));
+
+        $this->assertSame(409, $refused->get_status());
+        $this->assertSame('revision_mismatch', $refused->get_data()['code']);
+        $this->assertSame([], WpStub::$updated, "A's post was rewritten anyway");
+        $this->assertSame($a['id'], WpStub::$meta[$mine][CadenceContentRequest::KEY_META]);
+    }
 }

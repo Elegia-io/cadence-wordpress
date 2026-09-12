@@ -773,11 +773,19 @@ final class ReplaceRequestTest extends TestCase {
      * revisions.
      */
     public function test_a_piece_in_a_type_this_key_does_not_reach_is_not_rewritten(): void {
-        // The piece is a PAGE and the key names `post`, so the two type names
-        // are different strings and the pair of assertions below can each
-        // fail: the sentence has to carry one and not the other.
+        // The piece is a PAGE and the key does not name `page`, so the two
+        // type names are different strings and the pair of assertions below
+        // can each fail: the sentence has to carry one and not the other.
+        //
+        // AND THE SCOPE IS NOT SPELLED THE WAY THE PROSE IS. `post` on its own
+        // is a word this refusal uses for the row it is about -- "is on a post
+        // of a type" -- so a check for it is satisfied by the sentence with
+        // the scope removed from it entirely, which is exactly the mutation
+        // this test has to fail on. The scope asserted below is therefore the
+        // JOINED list, separator and all: a form only `implode` produces, and
+        // one carrying a second type name the sentence has no other use for.
         $published = $this->publish(['post_type' => 'page'], 'key-a');
-        $r = $this->replace($this->body($published), ['post'], 'key-a');
+        $r = $this->replace($this->body($published), ['post', 'cadence_brief'], 'key-a');
 
         $this->assertFalse($r['ok'], 'a key rewrote a piece in a type it does not reach');
         $this->assertSame('existing_post_type_out_of_scope', $r['code']);
@@ -785,7 +793,8 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertSame([], $this->statements(), 'the row was held for a refusal decided off it');
         // The key's own scope is the caller's to know; the type the post is
         // actually in is the site's, and is not in the sentence.
-        $this->assertStringContainsString('post', $r['reason']);
+        $this->assertStringContainsString('post, cadence_brief', $r['reason'],
+            'the refusal does not state the scope this key actually has');
         $this->assertStringNotContainsString('page', $r['reason']);
     }
 
@@ -801,6 +810,67 @@ final class ReplaceRequestTest extends TestCase {
         $published = $this->publish([], 'key-a');
         $r = $this->replace($this->body($published), null, 'key-a');
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
+    }
+
+    /**
+     * AND THE TYPE SCOPE IS ASKED LAST, WHICH IS THE WHOLE OF WHAT MAKES IT
+     * SAFE -- pinned here rather than argued in a comment beside the line.
+     *
+     * The check answers "is this post's type one this key publishes into",
+     * and that is a fact about the POST. Asked before `identifier_mismatch`
+     * it answers that question for any post id a caller cares to name --
+     * including every post on the site this connector never touched -- and
+     * the refusal code alone then reports the type: one id answers
+     * `existing_post_type_out_of_scope` and the next answers
+     * `identifier_mismatch`, which is a type oracle over the whole site
+     * needing no knowledge of any identifier at all. Asked last, it can only
+     * ever fire over a post this key reaches AND that is the piece named.
+     *
+     * So: two posts this connector never published, alike in everything but
+     * their type, against a key that names one of those types and a piece_id
+     * the caller guessed. Both must come back with the SAME refusal, and the
+     * same sentence bar the id the caller itself sent. Move the check above
+     * `identifier_mismatch` and post 7 separates from post 8.
+     */
+    public function test_the_type_scope_cannot_be_asked_about_a_post_that_is_not_the_piece(): void {
+        // NEITHER POST IS THIS CONNECTOR'S: no identifier meta and no key
+        // stamp, which is every post that was on the site before the pipeline
+        // ever ran. They differ in type and in nothing else.
+        foreach ([7 => 'page', 8 => 'post'] as $id => $type) {
+            WpStub::$posts[$id] = ['post_type' => $type, 'post_status' => 'publish',
+                                   'post_title' => 'Somebody else', 'post_content' => '<p>Theirs.</p>'];
+        }
+        $this->assertSame([], WpStub::$meta[7] ?? [], 'post 7 carries meta, so it proves nothing');
+        $this->assertSame([], WpStub::$meta[8] ?? [], 'post 8 carries meta, so it proves nothing');
+
+        $answers = [];
+        foreach ([7, 8] as $id) {
+            $answers[$id] = $this->replace([
+                'piece_id' => 'a-guess', 'post_id' => $id,
+                'revision' => 'whatever-the-caller-believes',
+                'title' => 'Taken', 'content' => '<p>Taken.</p>',
+            ], ['post'], 'key-a');
+            $this->assertFalse($answers[$id]['ok'], 'a guessed identifier rewrote post ' . $id);
+        }
+        $this->assertSame([], WpStub::$updated);
+        $this->assertSame([], $this->statements(), 'the row was held for a refusal decided off it');
+
+        // ONE CODE OVER BOTH, and it is the one that says nothing about type.
+        $this->assertSame('identifier_mismatch', $answers[7]['code'],
+            'the page answered about its type to a caller that named no piece of this key');
+        $this->assertSame('identifier_mismatch', $answers[8]['code']);
+
+        // AND ONE SENTENCE OVER BOTH. The post id is the caller's own, so it
+        // is put back to a placeholder before the two are compared; anything
+        // else that differs is the site telling the caller the posts differ.
+        $this->assertSame(
+            str_replace('post 7', 'post N', $answers[7]['reason']),
+            str_replace('post 8', 'post N', $answers[8]['reason']),
+            'the two posts get different sentences, which separates them by type');
+        // Neither sentence names a type -- not the scope, which would be the
+        // caller's own, and not the post's, which is the site's.
+        $this->assertStringNotContainsString('page', $answers[7]['reason']);
+        $this->assertStringNotContainsString('publish into', $answers[7]['reason']);
     }
 
 }

@@ -212,6 +212,13 @@ final class CadenceReplaceRequest {
         // or any post on the site, is inside this key's type scope -- naming
         // the target's type is exactly what the refusals here must not do.
         //
+        // AND THE POSITION IS PINNED, not merely asserted here: move this
+        // block above `identifier_mismatch` and
+        // `ReplaceRequestTest::test_the_type_scope_cannot_be_asked_about_a_post_that_is_not_the_piece`
+        // fails, because two posts this connector never published stop
+        // answering with the same refusal and the pair of codes becomes a type
+        // oracle over every post id a caller cares to name.
+        //
         // `null` names no type and means ANY, so a key issued before the field
         // existed replaces what it always replaced.
         if ($post_types !== null && !in_array(get_post_type($fields['post_id']), $post_types, true)) {

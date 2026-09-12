@@ -34,6 +34,22 @@ final class CadenceContentRequest {
     public const META = '_cadence_external_id';
 
     /**
+     * WHICH KEY CREATED THIS POST. Its PUBLIC ID, never its secret: a meta row
+     * travels in every database dump and every export, and the secret exists
+     * only as a hash in the option table for exactly that reason.
+     *
+     * Written in the same `wp_insert_post` call as `META`, and for the same
+     * argument: a stamp written afterwards leaves a window in which the post
+     * exists carrying no identity, and a link request landing in that window
+     * takes the null-identity path -- which is the compatibility path for posts
+     * that predate the stamp, not a hole for posts made a moment ago.
+     *
+     * Leading underscore: protected meta, so it is not in the Custom Fields box
+     * for a human to edit into another tenant's key id.
+     */
+    public const KEY_META = '_cadence_key';
+
+    /**
      * The statuses this endpoint means, and no others.
      *
      * WordPress accepts ANY string as a post status and stores it. A typo, or
@@ -49,7 +65,8 @@ final class CadenceContentRequest {
      * rather than for covering the ones its own tests happened to name.
      */
     public const REFUSAL_CODES = ['bad_request', 'capability_mismatch',
-                                 'unsupported_language', 'insert_failed'];
+                                 'unsupported_language', 'post_type_out_of_scope',
+                                 'existing_post_type_out_of_scope', 'insert_failed'];
 
     /**
      * @param array    $body       the JSON body, already decoded
@@ -67,13 +84,66 @@ final class CadenceContentRequest {
      *                             exactly what a pre-byline key already does,
      *                             while a missing capability probe would hand
      *                             out a revision token nobody authorised.
+     * @param list<string>|null $post_types the post types this key may create
+     *                          in, or null for ANY -- the key issued before the
+     *                          field existed, which is live on sites this
+     *                          repository does not control. REQUIRED, with no
+     *                          default, for the same reason `$authorises` is:
+     *                          null is the WIDE case, and a default cannot tell
+     *                          a key that named no type from a call site that
+     *                          forgot to ask. The docblock used to claim it
+     *                          could, which is a property no code enforced.
+     * @param string|null $key_id the public id of the presenting key. It is
+     *                          stamped on a post this call creates, so a later
+     *                          `translation.link` can ask whether the post is
+     *                          this key's own -- AND it scopes the lookup that
+     *                          decides whether anything is created at all, so
+     *                          one tenant's `piece_id` never resolves to
+     *                          another's post. Null omits the stamp, exactly as
+     *                          every insert before the field did, and finds
+     *                          only unstamped posts -- the narrow reading, the
+     *                          same one `CadenceLinkRequest::run` gives it.
      * @return array{ok: bool, created?: bool, post_id?: int, report?: array,
      *               revision?: string, code?: string, reason?: string}
      */
-    public static function run(array $body, callable $authorises, ?int $author = null): array {
+    public static function run(array $body, callable $authorises, ?array $post_types,
+                               ?int $author = null, ?string $key_id = null): array {
         $fields = self::validate($body);
         if (is_string($fields)) {
             return ['ok' => false, 'code' => 'bad_request', 'reason' => $fields];
+        }
+
+        // AUTHORISATION FIRST, AND BEFORE THE SITE IS ASKED ANYTHING.
+        //
+        // `content.publish` opens this route; WHICH post types it opens it for
+        // is this. A key names them at issue time because there is nothing on
+        // the site to derive them from -- the post does not exist yet, so it
+        // carries no meta to scope by, which is how the other two capabilities
+        // are scoped.
+        //
+        // AND IT RUNS BEFORE `post_type_exists`, DELIBERATELY. That call is a
+        // read of the client's site, and its refusal says whether a type is
+        // registered there. Asked first, it would answer that question for
+        // every type name a caller cared to send, over a type the key may not
+        // publish into anyway -- a list of the site's post types, enumerable
+        // one 400 at a time from behind a key entitled to none of them. A
+        // caller learns what this site registers only for the types its own
+        // key already names.
+        //
+        // The refusal names THIS branch and no other: it says the key does not
+        // reach that type, and says nothing about whether the type exists.
+        if ($post_types !== null && !in_array($fields['post_type'], $post_types, true)) {
+            return ['ok' => false, 'code' => 'post_type_out_of_scope', 'reason' => sprintf(
+                'this key publishes into %s, and the request names %s; nothing was created',
+                implode(', ', $post_types), $fields['post_type'])];
+        }
+
+        // NOW the site may be asked about this type, because the key reaches
+        // it. Still a `bad_request`: the credential is fine and the body names
+        // something this site does not have.
+        if (!post_type_exists($fields['post_type'])) {
+            return ['ok' => false, 'code' => 'bad_request',
+                    'reason' => sprintf('this site has no post type %s', $fields['post_type'])];
         }
 
         // BEFORE ANYTHING IS WRITTEN. A declaration that disagrees with the
@@ -85,8 +155,33 @@ final class CadenceContentRequest {
         }
         $unsupported = $languages['unsupported'];
 
-        $existing = self::find_by_external_id($fields['piece_id']);
+        // SCOPED TO THE ASKING KEY, so this branch cannot answer with a post
+        // the key may not act on -- see `find_by_external_id`.
+        $existing = self::find_by_external_id($fields['piece_id'], $key_id);
         if ($existing !== null) {
+            // AND THE FOUND POST'S TYPE IS INSIDE THE KEY'S SCOPE TOO, or the
+            // scope is enforced on creation and abandoned on the repeat: a key
+            // narrowed to `post` would otherwise be handed the id and the
+            // revision of its own `page`, which is exactly the pair
+            // `/content/replace` takes.
+            //
+            // A REFUSAL AND NOT A SECOND POST. The post this resolves to is one
+            // this key reaches -- its own stamp, or the unstamped compatibility
+            // set -- so saying so discloses nothing it could not already ask
+            // for; creating instead would put the same piece on the site twice,
+            // which is the failure this whole class exists to prevent.
+            //
+            // It names THIS branch: the piece is already placed in a type this
+            // key does not publish into. It does not name the type, and it is
+            // not `post_type_out_of_scope` -- that one is the REQUEST's type,
+            // which was admitted above, and a caller told it would go on
+            // correcting a `post_type` field that is already right.
+            if ($post_types !== null && !in_array(get_post_type($existing), $post_types, true)) {
+                return ['ok' => false, 'code' => 'existing_post_type_out_of_scope', 'reason' => sprintf(
+                    'the piece %s is already on a post of a type this key does not publish into; '
+                    . 'this key publishes into %s, and nothing was created or changed',
+                    $fields['piece_id'], implode(', ', $post_types))];
+            }
             // NEITHER A SECOND POST NOR A REWRITE OF THE FIRST. The identifier
             // means "this piece"; a body that differs under it means the caller
             // believes it is publishing something new, and the live article is
@@ -121,6 +216,14 @@ final class CadenceContentRequest {
             // class exists to prevent.
             'meta_input'   => [self::META => $fields['piece_id']],
         ];
+        // THE CREATING KEY'S IDENTITY, in the same call and for the same
+        // reason as the identifier beside it. Null for a caller this route
+        // cannot name -- which is what every insert wrote before the stamp
+        // existed, and what `CadenceKey::created_by` reads as the documented
+        // null-identity path rather than as a key that does not match.
+        if ($key_id !== null && trim($key_id) !== '') {
+            $postarr['meta_input'][self::KEY_META] = $key_id;
+        }
         // THE ONLY THING THE AUTHOR ID DOES IS FILL THIS FIELD.
         //
         // Left out, `post_author` takes 0 -- no user -- and a theme printing a
@@ -234,12 +337,11 @@ final class CadenceContentRequest {
         if (!in_array($body['status'], self::STATUSES, true)) {
             return sprintf('status must be one of %s', implode(', ', self::STATUSES));
         }
-        // Asked of the site, not of a list here: a site's post types are its
-        // own, and a plugin that shipped its own list would refuse the custom
-        // type this endpoint exists to publish into.
-        if (!post_type_exists($body['post_type'])) {
-            return sprintf('this site has no post type %s', $body['post_type']);
-        }
+        // WHETHER THE SITE HAS THIS POST TYPE IS NOT ASKED HERE. It is a read
+        // of the client's site and it happens in `run`, after the key's own
+        // publish scope has admitted the type -- see the note there. This
+        // method reads the BODY and nothing else, which is what makes its
+        // refusals safe to give a caller whose entitlement is not yet settled.
         return [
             'piece_id'    => $body['piece_id'],
             'language'    => $body['language'],
@@ -250,8 +352,37 @@ final class CadenceContentRequest {
         ];
     }
 
-    /** The post already carrying this identifier, or null. */
-    private static function find_by_external_id(string $piece_id): ?int {
+    /**
+     * THE POST THIS KEY ALREADY HAS UNDER THIS IDENTIFIER, or null.
+     *
+     * SCOPED TO THE ASKING KEY, AND THAT IS THE FIX RATHER THAN A REFUSAL
+     * BOLTED ON AFTERWARDS. `piece_id` is the CALLER's name for its own piece:
+     * two tenants on one WordPress may legitimately choose the same string, and
+     * when they do they mean two different pieces. An unscoped lookup answered
+     * whichever post carried the string -- any type, any creating key -- so a
+     * key that guessed a `piece_id` was handed another tenant's post id and,
+     * if it also held `content.replace`, the revision that rewrites it.
+     *
+     * A REFUSAL ON THAT BRANCH WOULD HAVE BEEN WORSE ON BOTH COUNTS: it
+     * confirms the identifier is taken, which is the disclosure itself in
+     * smaller print, and it refuses a publish the caller is entitled to. Not
+     * finding another tenant's post is simply correct -- B's piece does not
+     * exist yet, so B creates it, and each tenant's identifier space is its
+     * own.
+     *
+     * THE NULL-IDENTITY PATH STILL APPLIES, through `created_by`. Every post
+     * Cadence made before the stamp existed carries none, and a lookup that
+     * skipped those would stop finding every client's existing posts and
+     * duplicate them on the next publish -- a worse outcome than the
+     * disclosure this closes. That set never grows.
+     *
+     * EVERY CANDIDATE IS ASKED, not just the first row. `posts_per_page => 1`
+     * would hand back whichever post the database happened to order first and
+     * then refuse it here, leaving this key unable to find its OWN post behind
+     * another tenant's row -- which is the duplicate again, arrived at by a
+     * different route.
+     */
+    private static function find_by_external_id(string $piece_id, ?string $key_id): ?int {
         $found = get_posts([
             'post_type'      => 'any',
             // Every status, deliberately. A piece whose post was moved to the
@@ -261,9 +392,14 @@ final class CadenceContentRequest {
             'meta_key'       => self::META,
             'meta_value'     => $piece_id,
             'fields'         => 'ids',
-            'posts_per_page' => 1,
+            'posts_per_page' => -1,
             'no_found_rows'  => true,
         ]);
-        return $found === [] ? null : (int) $found[0];
+        foreach ($found as $id) {
+            if (CadenceKey::created_by((int) $id, $key_id)) {
+                return (int) $id;
+            }
+        }
+        return null;
     }
 }

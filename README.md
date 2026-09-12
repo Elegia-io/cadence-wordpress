@@ -42,7 +42,7 @@ post types, no front-end output.
 Callers authenticate with a **connector key**, not as a WordPress user. On
 **Settings → Cadence Connector**, give the key a label naming the tenant it is
 for, tick the capabilities it needs, choose the **byline** its posts will carry,
-and press *Issue*. The key is shown once and never again; the site stores only a
+name the **post types** it may publish into, and press *Issue*. The key is shown once and never again; the site stores only a
 SHA-256 of it. Present it as a header:
 
 ```
@@ -53,9 +53,9 @@ Three capabilities exist, and a key carries only the ones it was issued for:
 
 | Capability | Opens | May act on |
 |---|---|---|
-| `content.publish` | `POST /content` | any post type this site registers |
+| `content.publish` | `POST /content` | the post types named on the key |
 | `content.replace` | `POST /content/replace` | the post carrying the `piece_id` named |
-| `translation.link` | `POST /translation-group` | posts this connector published |
+| `translation.link` | `POST /translation-group` | the posts **this key** published, and the ones that predate the stamp |
 
 `content.publish` and `content.replace` are separate on purpose: a key that may
 create must not silently also be able to overwrite. A pipeline that both
@@ -75,12 +75,38 @@ covers anything else. A post outside it is refused with `post_out_of_scope` and 
 `403`. `content.replace` is narrower still — the stored identifier must *be* the
 `piece_id` the request names.
 
-**`content.publish` is not scoped, and that is worth saying plainly.** A key
-carrying it may create a post in any post type this site registers. Creating
-cannot be scoped by an identifier the post does not have yet, so narrowing it
-needs a post type named on the key — configuration this version does not have.
-A key is worth what its widest grant is worth: issue `content.publish` only to a
-pipeline that is meant to publish here, and revoke it when that stops being true.
+**And of those, only the posts the asking key itself published.** "Cadence made
+this" and "you made this" are the same question on a site holding one connector
+key and different questions on a site holding two — a client with two brands on
+one WordPress, or an agency site serving two tenants. So `/content` stamps the
+creating key's **public id** beside the identifier, in the same call, and a link
+request naming a post another key published is refused with `post_other_key` and
+a `403`. The id and never the secret: the site stores only a SHA-256 of that, and
+a meta row travels in every database dump.
+
+**A post published before this version carries no key stamp, and stays reachable
+by any key that reaches it.** That is deliberate, and it is what makes the change
+safe to install over content that is already live: refusing every piece already
+on a client's site would break every link over work the pipeline has already
+done, which is worse than the widening it closes. The set never grows — every
+post created from here on carries a stamp.
+
+**`content.publish` is scoped by the post types named on the key.** Creating
+cannot be scoped by an identifier the post does not have yet, so this is the one
+scope an operator declares rather than the plugin deriving it: type the post
+types the tenant's pipeline publishes into, comma-separated, when the key is
+issued. They are checked against the site *then* — a key naming a type this site
+does not register is refused on the screen, where somebody can fix the typo,
+rather than 403-ing every publish afterwards. A request for a type the key does
+not name is refused with `post_type_out_of_scope` and a `403`, and that refusal
+says nothing about whether the site registers the type: a key is told what this
+site has only for the types it already names.
+
+**Leave the field blank and the key publishes into any registered type**, which
+is what every key issued before this version does — they carry no post types at
+all, and go on publishing exactly as they did. The key list marks those rows
+*any type — re-issue to scope*. A key is worth what its widest grant is worth, so
+scope it when you issue it.
 
 **Registering a post this connector did not create is not possible**, and a link
 request naming one is refused. A translation group whose source is a
@@ -159,7 +185,9 @@ translations of each other.
 POST /wp-json/cadence/v1/content
 ```
 
-Requires a key carrying `content.publish`.
+Requires a key carrying `content.publish`, and a `post_type` the key names — or
+any registered type, if it names none. The post carries the creating key's public
+id, which is what later scopes `translation.link` to this key's own pieces.
 
 ```json
 {
@@ -205,10 +233,21 @@ identifier, it puts the same article on the site twice, published and visible to
 visitors. So the identifier decides: one already on a post is answered with that
 post, and nothing is created.
 
+**And the identifier is the calling key's own.** `piece_id` is a name the
+caller chose, so two tenants on one WordPress may pick the same string and mean
+two different pieces. The lookup is scoped to the key that is asking: a key
+never finds another key's post, and each tenant's identifiers are its own. Posts
+this connector made *before* it recorded which key made them are found by any
+key, which is what keeps a client's existing pieces from being published a
+second time.
+
 | Status | | |
 |---|---|---|
 | `201` | created | `created: true`, with `post_id` and `revision` |
 | `200` | it already existed | `created: false`, same `post_id`, and the post's current `revision` when the caller may edit that post |
+| `400` | the body is wrong, or names a post type this site does not register | `bad_request` |
+| `403` | the key does not reach this post type (`post_type_out_of_scope`), or already has this piece in a type it may not publish into (`existing_post_type_out_of_scope`) | nothing was created |
+| `409` | the site disagrees: the declaration, or this piece's own language (`capability_mismatch`, `unsupported_language`) | nothing was created |
 
 A successful answer reports **what the call did**, not merely that a row
 appeared:
@@ -398,7 +437,7 @@ every post is in no group to begin with.
 |---|---|---|
 | `200` | Written. `written` is how many, and the report below says which. | Nothing. |
 | `400` | The request is wrong on its face. | Fix it; re-sending cannot help. |
-| `403` | The key is genuine and does not reach what the request names. | Nothing here can help; the post is not this connector's. |
+| `403` | The key is genuine and does not reach what the request names. | Read `code`: it names which. `post_out_of_scope` — the post is not this connector's, so republish it through `/content`. `post_other_key` — it is, but another key made it. `post_type_out_of_scope` — the type the request names is not on this key; `existing_post_type_out_of_scope` — the piece is already placed in a type that is not. The last two are re-issued keys, not requests to re-send. |
 | `409` | The site disagrees with the request. | Re-read the site and try again. |
 | `503` | The site cannot do this at all. | Fix the site; the request is fine. |
 | `500` | This server tried and failed — including a `create_group` that wrote the source and could not finish — or refused for a reason this version cannot classify. | Read the body: `written` says what was applied. |
@@ -454,6 +493,8 @@ the reason is prose and changes freely.
 | `already_grouped` | 409 | a post is already in a group, and creating one would detach it |
 | `group_disagreement` | 409 | the site's group for a post is not the one named |
 | `post_out_of_scope` | 403 | a post the plan names is not one this connector published |
+| `post_other_key` | 403 | a post the plan names was published through a different connector key |
+| `post_type_out_of_scope` | 403 | the post type named is not one this key may create in |
 | `source_group_unset` | 500 | the source was written and the site still puts it in no group, so there was no group for the translations to join. **The source was written**; the translations were not |
 | `source_group_unreadable` | 500 | the source was written and WPML then said nothing usable about it, so its group cannot be named. **The source was written**; the translations were not |
 | `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks |

@@ -165,6 +165,16 @@ final class WpStub {
      */
     public static bool $referer_valid = true;
 
+    /**
+     * THE TRANSIENT STORE, which is where a just-issued key waits for the
+     * redirect to land instead of travelling in the URL. Kept separate from
+     * `$options` so a test can see the difference: a secret in the options
+     * table outlives the render, and one here is deleted by the read.
+     *
+     * @var array<string, mixed>
+     */
+    public static array $transients = [];
+
     public static function reset(): void {
         self::$posts = [];
         self::$writes = [];
@@ -193,6 +203,7 @@ final class WpStub {
         self::$options = [];
         self::$users = [7 => 'A Real Person'];
         self::$referer_valid = true;
+        self::$transients = [];
     }
 
     public static function add_post(int $id, string $post_type = 'page',
@@ -574,6 +585,27 @@ function get_userdata(int $id) {
     return isset(WpStub::$users[$id])
         ? (object) ['ID' => $id, 'display_name' => WpStub::$users[$id]]
         : false;
+}
+
+/**
+ * The three transient calls, in what the admin screen asks of them. No clock:
+ * the expiry is WordPress's business and a stub that implemented it would let a
+ * test pass by waiting rather than by reading, while the property under test is
+ * that the READ deletes.
+ */
+function set_transient(string $key, $value, int $expiry = 0): bool {
+    WpStub::$transients[$key] = $value;
+    return true;
+}
+
+function get_transient(string $key) {
+    return array_key_exists($key, WpStub::$transients) ? WpStub::$transients[$key] : false;
+}
+
+function delete_transient(string $key): bool {
+    $had = array_key_exists($key, WpStub::$transients);
+    unset(WpStub::$transients[$key]);
+    return $had;
 }
 
 function get_option(string $name, $default = false) {

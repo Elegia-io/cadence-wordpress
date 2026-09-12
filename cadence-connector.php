@@ -3,7 +3,7 @@
  * Plugin Name:       Cadence Connector
  * Plugin URI:        https://github.com/Elegia-io/cadence-wordpress
  * Description:       Lets an external content pipeline publish posts into WordPress, replace the ones it published, and link them into WPML translation groups, refusing any request that disagrees with the site's own state.
- * Version:           0.3.0
+ * Version:           0.4.0
  * Requires at least: 6.4
  * Requires PHP:      8.1
  * Author:            Elegia
@@ -36,7 +36,14 @@ add_action('rest_api_init', static function (): void {
     register_rest_route('cadence/v1', '/translation-group', [
         'methods'  => 'POST',
         'callback' => static function ($request) {
-            $result = CadenceLinkRequest::run((array) $request->get_json_params());
+            $result = CadenceLinkRequest::run(
+                (array) $request->get_json_params(),
+                // WHICH KEY IS ASKING, so the scope can be this key's own
+                // pieces rather than every piece Cadence ever published here.
+                // The public id and never the secret: it is compared against
+                // what `/content` stamped on the post.
+                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER))
+            );
             $answer = CadenceRestRoute::respond($result);
             return new WP_REST_Response($answer['body'], $answer['status']);
         },
@@ -66,11 +73,25 @@ add_action('rest_api_init', static function (): void {
                 // question, asked of the same presented key.
                 static fn (string $capability): bool =>
                     CadenceKey::authorises($request->get_header(CadenceKey::HEADER), $capability),
+                // THE POST TYPES THIS KEY MAY CREATE IN, or null for a key
+                // issued before the field existed -- which publishes into any
+                // registered type, exactly as it did before this plugin was
+                // updated under it. Passed positionally ahead of the byline
+                // because `run` takes it as a REQUIRED argument: null is the
+                // wide case, and a default would be a call site's omission
+                // reading as a key that named no type.
+                CadenceKey::publish_types_for($request->get_header(CadenceKey::HEADER)),
                 // The byline this key names, and nothing else: it fills
                 // `post_author` on the insert. The request remains
                 // unauthenticated as far as WordPress is concerned -- two
                 // things the same header decides, and neither is a login.
-                CadenceKey::author_for($request->get_header(CadenceKey::HEADER))
+                CadenceKey::author_for($request->get_header(CadenceKey::HEADER)),
+                // AND THE KEY'S OWN ID, which does two things: it is stamped on
+                // a post this call creates, so the linking route can later ask
+                // whether the post is this key's, and it scopes the lookup that
+                // decides whether anything is created -- so one tenant's
+                // `piece_id` never resolves to another tenant's post.
+                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER))
             );
             $answer = CadenceRestRoute::respond($result);
             return new WP_REST_Response($answer['body'], $answer['status']);

@@ -44,13 +44,18 @@ final class CadenceKey {
      * as two ticks on the same key -- but one is never implied by the other.
      *
      * WHAT EACH ONE MAY ACT ON, which is a second question from what it may do.
-     * `translation.link` and `content.replace` are scoped to this plugin's own
-     * posts: the first by `scope_admits`, the second by the stricter comparison
-     * behind `identifier_mismatch`, which demands the stored identifier BE the
-     * one named. `content.publish` is NOT scoped, and is the widening left
-     * standing: it may create in any post type this site registers. Narrowing
-     * it needs a post type named on the key, which is configuration this
-     * plugin does not have and an operator would have to keep current.
+     * `translation.link` is scoped to this plugin's own posts by `scope_admits`
+     * AND to the posts THIS key created by `created_by`; `content.replace` by
+     * the stricter comparison behind `identifier_mismatch`, which demands the
+     * stored identifier BE the one named.
+     *
+     * `content.publish` IS SCOPED BY THE POST TYPES NAMED ON THE KEY, and it is
+     * the one scope an operator has to keep current: creating cannot be scoped
+     * by meta the post does not have yet, so there is nothing on the site to
+     * derive it from. `null` -- a key issued before the field existed, or one
+     * issued with the field left blank -- means ANY registered post type, which
+     * is what every key did before this and what keys already live on clients'
+     * sites go on doing. See `publish_types_for`.
      */
     public const CAPABILITIES = ['content.publish', 'content.replace', 'translation.link'];
 
@@ -79,14 +84,18 @@ final class CadenceKey {
      * value cannot have come from this plugin, and admitting it would put every
      * post carrying an empty `_cadence_external_id` inside the grant.
      *
-     * WHAT THIS DOES NOT SEPARATE: two keys on one site. Both hold the same
-     * scope, so tenant A's key may link tenant B's Cadence posts. That is
-     * narrower than the whole site and is still wider than one tenant --
-     * tracked, and the release bar is one vault and one site per client.
+     * WHAT THIS ON ITS OWN DOES NOT SEPARATE: two keys on one site. This
+     * predicate asks "did Cadence make this post", which is one question short
+     * of "did YOU make it" -- so it is now one of two, and `created_by` asks
+     * the other. Kept separate rather than folded in because the two refuse
+     * different things and each refusal has to be able to name the branch that
+     * fired: a post nobody here published is not the same answer as one a
+     * different key published, and a caller told the first about the second
+     * would re-read its own plan forever.
      *
      * NOT ASKED OF `content.publish`. Creating a post cannot be scoped by meta
-     * the post does not have yet, and that capability is still as wide as the
-     * site's registered post types -- see the note in `CAPABILITIES`.
+     * the post does not have yet; that capability is scoped by the post types
+     * named on the key instead -- see `publish_types_for`.
      */
     public static function scope_admits(int $post_id): bool {
         // `get_post_meta(..., true)` answers `''` for meta that is not there,
@@ -95,6 +104,101 @@ final class CadenceKey {
         // plugin published.
         $stored = get_post_meta($post_id, CadenceContentRequest::META, true);
         return is_string($stored) && trim($stored) !== '';
+    }
+
+    /**
+     * DID *THIS* KEY CREATE THIS POST?
+     *
+     * The second half of the scope, and the one that separates two keys on one
+     * site. `scope_admits` asks whether Cadence made the post; on a site with
+     * one connector key those are the same question, and on a site with two --
+     * a client with two brands on one WordPress, an agency serving two tenants
+     * -- they are not: the first admits the other tenant's pieces, and a
+     * translation group written over them DESTROYS the relations they had.
+     *
+     * The stamp is `CadenceContentRequest::KEY_META`, written by `/content` in
+     * the same `wp_insert_post` call as the identifier, and it is the key's
+     * PUBLIC ID -- never its secret, which this class stores only a hash of and
+     * which must not end up in a meta row any database dump carries.
+     *
+     * THE NULL-IDENTITY PATH IS DELIBERATE, EXPLICIT, AND THE REASON THIS CAN
+     * SHIP. Every post Cadence has already created on every client's site
+     * carries no stamp, because the stamp did not exist when it was made.
+     * Refusing those would refuse every link over every piece already
+     * published -- an upgrade that breaks the working case, which is a worse
+     * outcome than the widening it closes. So an UNSTAMPED post stays inside
+     * the scope of any key that reaches it through `scope_admits`, exactly as
+     * before, and only a post that NAMES a key is compared against one.
+     *
+     * It is a path and not a falsy accident: the check is `is_string` plus a
+     * trimmed emptiness test on the stamp, so an absent row, a blank string and
+     * an array some other plugin wrote all take the same documented branch,
+     * and none of them is read as a key id that happens not to match.
+     *
+     * WHAT IT COSTS: two keys on one site do not separate over the posts that
+     * predate the stamp. That set never grows -- every post created from here
+     * on is stamped -- and the alternative was refusing all of it.
+     *
+     * A stamped post asked about by no key (`$key_id` null -- nothing
+     * presented, or a key that did not authenticate) is refused. Fail closed:
+     * "no identity" is not a wildcard.
+     */
+    public static function created_by(int $post_id, ?string $key_id): bool {
+        $stamp = get_post_meta($post_id, CadenceContentRequest::KEY_META, true);
+        if (!is_string($stamp) || trim($stamp) === '') {
+            return true;   // THE NULL-IDENTITY PATH -- see above.
+        }
+        return is_string($key_id) && $stamp === $key_id;
+    }
+
+    /**
+     * THE PUBLIC ID A PRESENTED KEY AUTHENTICATES AS, or null.
+     *
+     * The id and never the secret: this is what gets written into a post's meta
+     * and compared on a later request, so it has to be a value that is safe
+     * sitting in the option table's neighbour for the life of the post.
+     *
+     * Authentication comes FIRST -- `grant` verifies the hash before anything
+     * here reads the id off the presented string. Splitting the id out without
+     * that would let any caller claim any tenant's identity by spelling its id
+     * in front of a dot, which is the whole boundary handed away.
+     */
+    public static function key_id_for($presented): ?string {
+        if (self::grant($presented) === null) {
+            return null;
+        }
+        return explode('.', (string) $presented, 2)[0];
+    }
+
+    /**
+     * THE POST TYPES THIS KEY MAY CREATE IN, or null for ANY.
+     *
+     * `content.publish` cannot be scoped the way the other two capabilities are
+     * -- there is no post yet to ask meta about -- so the scope is declared on
+     * the key at issue time and validated there against the site's own
+     * registered types. `CadenceContentRequest` refuses a publish outside it
+     * with `post_type_out_of_scope`.
+     *
+     * NULL MEANS ANY, and that is the compatibility path. Keys are live on
+     * sites this repository does not control; a new required field would turn a
+     * working publish into a 403 the moment the plugin updated, for a key whose
+     * holder can neither see the field nor fill it in. A key issued before the
+     * field existed has no `post_types` at all and goes on publishing into
+     * every registered type exactly as it did. The admin screen marks those
+     * rows, and re-issuing is the operator's fix -- the same shape as the
+     * byline.
+     *
+     * AN ARRAY IS TAKEN LITERALLY, including an empty one. `issue` refuses an
+     * empty list, so a stored `[]` cannot have been issued here; read as "any"
+     * it would widen a key on corrupt data, and read as "none" it refuses every
+     * publish, which is visible and safe. Only the ABSENCE of the field means
+     * any.
+     *
+     * @return list<string>|null
+     */
+    public static function publish_types_for($presented): ?array {
+        $types = self::grant($presented)['post_types'] ?? null;
+        return is_array($types) ? array_values($types) : null;
     }
 
     /**
@@ -110,9 +214,13 @@ final class CadenceKey {
      *
      * @param list<string> $capabilities
      * @param int|string    $author the user id posts made with this key carry
+     * @param list<string>|null $post_types the post types `content.publish` may
+     *                          create in, or null for any -- see
+     *                          `publish_types_for` for why null is a path and
+     *                          not an oversight
      * @return array{id: string, secret: string}|string
      */
-    public static function issue(string $label, array $capabilities, $author) {
+    public static function issue(string $label, array $capabilities, $author, ?array $post_types = null) {
         if (trim($label) === '') {
             return 'a key needs a label, so a tenant can be told apart from another at revocation time';
         }
@@ -135,6 +243,33 @@ final class CadenceKey {
         if ($author === null) {
             return 'the author must be an id of a user this site has; a post this key creates carries it as its byline';
         }
+        // THE PUBLISH SCOPE, VALIDATED HERE AND NOT AT THE PUBLISH.
+        //
+        // `post_type_exists` is the SITE's answer, asked at the one moment a
+        // human is on the screen to fix a wrong one. A key naming `artcle` is
+        // otherwise stored, reads on the admin screen as a key that works, and
+        // fails every publish it is ever presented for -- with a 403 whose
+        // holder cannot see the typo that caused it. The capability names are
+        // refused above for the same reason and by the same argument.
+        if ($post_types !== null) {
+            if (!array_is_list($post_types) || $post_types === []) {
+                return 'the publish scope is a list of post types, or is left unset to mean any; '
+                     . 'an empty list is a key whose every publish is refused';
+            }
+            $scope = [];
+            foreach ($post_types as $type) {
+                if (!is_string($type) || trim($type) === '') {
+                    return 'each post type in the publish scope must be a non-blank string';
+                }
+                $type = trim($type);
+                if (!post_type_exists($type)) {
+                    return sprintf('this site registers no post type %s, so a key scoped to it '
+                                   . 'could never publish anything', $type);
+                }
+                $scope[] = $type;
+            }
+            $post_types = array_values(array_unique($scope));
+        }
         $id     = bin2hex(random_bytes(8));
         $secret = bin2hex(random_bytes(32));
         $keys   = self::records();
@@ -146,6 +281,13 @@ final class CadenceKey {
             'created'    => time(),
             'revoked_at' => null,
         ];
+        // ABSENT, not null, when the key is unscoped. The two read the same
+        // through `?? null`, and the admin screen's `isset` marks an unscoped
+        // key from the absence -- the same shape the byline already uses for a
+        // key issued before keys carried one.
+        if ($post_types !== null) {
+            $keys[$id]['post_types'] = $post_types;
+        }
         update_option(self::OPTION, $keys);
         return ['id' => $id, 'secret' => $id . '.' . $secret];
     }
@@ -234,7 +376,7 @@ final class CadenceKey {
      * no use for them and a template that prints one is a template that leaks
      * the only stored half of the credential.
      *
-     * @return array<string, array{label: string, caps: list<string>, author?: int, created: int, revoked_at: int|null}>
+     * @return array<string, array{label: string, caps: list<string>, author?: int, post_types?: list<string>, created: int, revoked_at: int|null}>
      */
     public static function all(): array {
         $out = [];
@@ -263,7 +405,7 @@ final class CadenceKey {
     /**
      * The record a presented key authenticates as, or null.
      *
-     * @return array{label: string, caps: list<string>, author?: int}|null
+     * @return array{label: string, caps: list<string>, author?: int, post_types?: list<string>}|null
      */
     private static function grant($presented): ?array {
         if (!is_string($presented)) {

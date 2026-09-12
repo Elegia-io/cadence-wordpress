@@ -84,6 +84,7 @@ final class CadenceLinkRequest {
         'source_group_unreadable',
         'wpml_unavailable',
         'post_out_of_scope',
+        'post_other_key',
     ];
 
     /** A bare lowercase WPML language code: `de`, `pt-br`, `zh-hant-hk`. */
@@ -107,10 +108,16 @@ final class CadenceLinkRequest {
      * both.
      *
      * @param array $plan the JSON body, already decoded
+     * @param string|null $key_id the public id of the presenting key. Null is
+     *                    a caller this route cannot name, and it reaches only
+     *                    the posts that carry no key stamp -- every post that
+     *                    names one is refused. Optional so that the default is
+     *                    the NARROW case rather than the wide one: no identity
+     *                    is not a wildcard.
      * @return array{ok: bool, code?: string, reason?: string, written?: int,
      *               report?: array}
      */
-    public static function run(array $plan): array {
+    public static function run(array $plan, ?string $key_id = null): array {
         // BEFORE ANYTHING ELSE, INCLUDING THE PLAN'S OWN SHAPE: a server that
         // cannot perform this request at all has no standing to tell the caller
         // its request is malformed.
@@ -160,7 +167,8 @@ final class CadenceLinkRequest {
         // WHAT IT NARROWS. `translation.link` used to authorise linking ANY
         // post on the site, because the per-post `current_user_can('edit_post')`
         // it replaced had no user to ask about. It now reaches only the posts
-        // this plugin created.
+        // this plugin created, and of those only the ones THIS key created --
+        // two predicates, refused separately, because they are two facts.
         //
         // AFTER EVERY `bad_plan` AND BEFORE EVERY OTHER CODE. A body this
         // cannot read is refused on its shape whichever posts it names, so
@@ -175,6 +183,12 @@ final class CadenceLinkRequest {
         // every post in the plan first, and the plan's own semantics -- which
         // group it names, and whether the site agrees -- are interpreted only
         // over posts this key may act on.
+        //
+        // TWO QUESTIONS, TWO CODES, AND NEITHER SENTENCE COVERS THE OTHER. A
+        // post nobody here published and a post a DIFFERENT key published are
+        // different facts about the caller's entitlement, and a single refusal
+        // spanning both would assert whichever one did not happen. Each branch
+        // below says only what its own predicate answered.
         foreach ($posts as $p) {
             if (!CadenceKey::scope_admits($p['post_id'])) {
                 // The id and the claim, and nothing else. Not the identifier
@@ -185,6 +199,22 @@ final class CadenceLinkRequest {
                 return ['ok' => false, 'code' => 'post_out_of_scope', 'reason' => sprintf(
                     'post %d is not a piece this connector published, and a key is scoped '
                     . 'to this connector\'s own posts; nothing was linked',
+                    $p['post_id'])];
+            }
+            // AND IT IS THIS KEY'S OWN PIECE, not merely one of Cadence's.
+            // `scope_admits` is the whole connector's scope, which on a site
+            // holding two keys -- two brands, or an agency serving two tenants
+            // -- is wider than the credential asking. A post carrying no key
+            // stamp predates the stamp and is admitted: see
+            // `CadenceKey::created_by` for why refusing those would be the
+            // worse outcome.
+            if (!CadenceKey::created_by($p['post_id'], $key_id)) {
+                // The id and the claim. NOT the key id the post carries, which
+                // is another tenant's identifier and is not this caller's to
+                // read off a refusal.
+                return ['ok' => false, 'code' => 'post_other_key', 'reason' => sprintf(
+                    'post %d was published through a different connector key, and a key is '
+                    . 'scoped to its own pieces; nothing was linked',
                     $p['post_id'])];
             }
         }

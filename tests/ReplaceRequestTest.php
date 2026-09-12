@@ -47,7 +47,10 @@ final class ReplaceRequestTest extends TestCase {
             // that withholds the revision from a key that could never act on
             // it is `content.replace`'s own concern, covered where that gate
             // lives (ContentRequestTest).
-            static fn (string $capability): bool => true);
+            static fn (string $capability): bool => true,
+            // Any post type: this file is about replacing, not about the
+            // publish scope, and `run` demands the argument either way.
+            null);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         return $r;
     }

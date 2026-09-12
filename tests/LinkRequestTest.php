@@ -294,8 +294,7 @@ final class LinkRequestTest extends TestCase {
     }
 
     /**
-     * EVERY REFUSAL CARRIES A STABLE CODE, and the seven causes carry seven
-     * different ones.
+     * EVERY REFUSAL CARRIES A STABLE CODE, and each cause carries its own.
      *
      * The reason is prose for a human reading a log. The caller is a program
      * deciding whether to re-read the site and retry or to stop and fix its own
@@ -355,21 +354,13 @@ final class LinkRequestTest extends TestCase {
                 $this->ours(1);
                 return $this->plan(['trid' => null, 'create_group' => true]);
             },
-            'post_other_key' => function () {
-                WpStub::add_post(1, 'page', 'en', null);
-                WpStub::add_post(2, 'page', 'de', null);
-                // BOTH are Cadence's, so `post_out_of_scope` does not fire and
-                // this code is reachable only through its own predicate. Post 2
-                // carries another key's stamp; the asking key is named below.
-                $this->ours(1, 2);
-                WpStub::$meta[2][CadenceContentRequest::KEY_META] = 'bbbb2222';
-                return $this->plan(['trid' => null, 'create_group' => true]);
-            },
         ];
 
-        // WHICH KEY IS ASKING, for the one cause that needs a caller with an
-        // identity. Every other cause is refused whoever asks.
-        $asking = ['post_other_key' => 'aaaa1111'];
+        // WHICH KEY IS ASKING. No cause here needs a caller with an identity
+        // any more: the second scope predicate no longer has a code of its own,
+        // and `test_a_plan_naming_a_post_a_different_key_published_writes_nothing`
+        // is where it is asked about instead.
+        $asking = [];
 
         // EVERY REFUSAL WRITES NOTHING, EXCEPT THE TWO THAT CANNOT. The create
         // path has no group id until its own first write, so its two refusals
@@ -387,16 +378,17 @@ final class LinkRequestTest extends TestCase {
             $this->assertSame($expected, $r['code'] ?? null, $expected);
             $seen[] = $r['code'];
         }
-        // Eleven causes, eleven codes: a mapping that collapsed two of them
-        // would still pass every assertion above if both expectations were
-        // changed together, and the caller could no longer tell them apart. The
-        // count is the union of branches that each added to it -- eight after
-        // the scope narrowing, ten after the create path's two, eleven once the
-        // scope split into "not this connector's" and "not this key's" -- so it
-        // is asserted against `REFUSAL_CODES` rather than retyped from any of
-        // them.
-        $this->assertCount(11, array_unique($seen));
-        $this->assertSame(11, count(CadenceLinkRequest::REFUSAL_CODES));
+        // Ten causes, ten codes: a mapping that collapsed two of them would
+        // still pass every assertion above if both expectations were changed
+        // together, and the caller could no longer tell them apart. The count
+        // is the union of branches that each added to it -- eight after the
+        // scope narrowing, ten after the create path's two, eleven once the
+        // scope split into "not this connector's" and "not this key's", and ten
+        // again once that split was merged back because the PAIR was a
+        // provenance oracle. So it is asserted against `REFUSAL_CODES` rather
+        // than retyped from any of them.
+        $this->assertCount(10, array_unique($seen));
+        $this->assertSame(10, count(CadenceLinkRequest::REFUSAL_CODES));
 
         // AND THE PUBLISHED LIST IS THAT LIST. `REFUSAL_CODES` is what the REST
         // layer maps to HTTP statuses; if a further refusal is added here and
@@ -802,8 +794,14 @@ final class LinkRequestTest extends TestCase {
      * already had one DESTROYS the relations they had.
      *
      * The refusal is over the TRANSLATION and both posts are Cadence's, so a
-     * check that fell back to `post_out_of_scope` would be refusing the wrong
-     * fact and a check that asked only about the source would pass this.
+     * check that asked only about the source would pass this.
+     *
+     * AND IT IS THE SAME REFUSAL a post this connector never published gets.
+     * The pair `post_out_of_scope` / `post_other_key` used to tell those apart,
+     * which sorted every id on the site into "another tenant's Cadence post"
+     * and "everything else" -- a provenance oracle behind a route that verifies
+     * no attestation. `CadenceKey::reaches` asks the conjunction now, so the
+     * branch that fired is "this key does not reach post 2" and nothing finer.
      */
     public function test_a_plan_naming_a_post_a_different_key_published_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', null);
@@ -815,15 +813,93 @@ final class LinkRequestTest extends TestCase {
         $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), 'aaaa1111');
 
         $this->assertFalse($r['ok'], "a second key's post was linked");
-        $this->assertSame('post_other_key', $r['code']);
+        $this->assertSame('post_out_of_scope', $r['code']);
         $this->assertSame([], WpStub::$writes, 'a refused plan wrote anyway');
-        // THE REFUSAL NAMES THE BRANCH THAT FIRED. Post 2 IS a piece this
-        // connector published; a caller told `post_out_of_scope` would be told
-        // something untrue about it, and would republish a piece that is
-        // already on the site rather than present the key that owns it.
-        $this->assertNotSame('post_out_of_scope', $r['code']);
         $this->assertStringNotContainsString('bbbb2222', $r['reason'],
             "the refusal handed this caller another tenant's key id");
+        // AND NOT A WORD THAT ONLY THIS BRANCH COULD HAVE PRODUCED. Asserted
+        // over the refusal's own vocabulary rather than over a substring some
+        // other sentence might also contain.
+        foreach (['different connector key', 'another key', 'this connector published'] as $tell) {
+            $this->assertStringNotContainsString($tell, $r['reason'], $tell);
+        }
+    }
+
+    /**
+     * THE ORACLE, PINNED: the three things a `translation.link` key may not
+     * tell apart give back ONE refusal, identical once the id is taken out.
+     *
+     *   - an id this site has no post for;
+     *   - a post this site has that this connector never published;
+     *   - a post this connector DID publish, through a different key.
+     *
+     * The third is what made the pair an oracle. A caller holding a leaked
+     * connector key and nothing else could walk integers and sort the site into
+     * the other tenant's Cadence pieces and everything else -- and provenance,
+     * which of two tenants published a given post, is the fact per-key scope
+     * exists to protect. This route verifies no attestation, so nothing costs
+     * that caller anything else.
+     *
+     * WHAT ELSE THIS FAILS UNDER, and why it is the ordering pin as well as the
+     * merge pin: move `validate_against_site` or the trid loop above the scope
+     * loop and the first case starts answering `bad_plan ... does not exist`
+     * while the other two do not. The digits are masked rather than compared
+     * away, so a refusal that named a trid, a key id or a second post id would
+     * not survive either.
+     */
+    public function test_the_three_cases_a_link_key_may_not_separate_answer_alike(): void {
+        $reasons = [];
+        $codes   = [];
+        foreach (['absent' => 7, 'not ours' => 8, "another key's" => 9] as $case => $probe) {
+            WpStub::reset();
+            WpStub::add_post(2, 'page', 'de', null);
+            $this->ours(2);
+            WpStub::$meta[2][CadenceContentRequest::KEY_META] = 'aaaa1111';
+            if ($case !== 'absent') {
+                WpStub::add_post($probe, 'page', 'en', null);
+            }
+            if ($case === "another key's") {
+                $this->ours($probe);
+                WpStub::$meta[$probe][CadenceContentRequest::KEY_META] = 'bbbb2222';
+            }
+            $plan = $this->plan(['trid' => null, 'create_group' => true]);
+            $plan['source']['post_id'] = $probe;
+
+            $r = CadenceLinkRequest::run($plan, 'aaaa1111');
+
+            $this->assertFalse($r['ok'], $case);
+            $this->assertSame([], WpStub::$writes, $case);
+            $codes[$case]   = $r['code'];
+            $reasons[$case] = preg_replace('/\d+/', '<n>', $r['reason']);
+        }
+        $this->assertSame(['post_out_of_scope'], array_values(array_unique($codes)),
+            'the three cases came back under more than one code: ' . implode(' ', $codes));
+        $this->assertCount(1, array_unique($reasons),
+            'the three cases came back with different sentences: ' . implode(' | ', $reasons));
+    }
+
+    /**
+     * THE TWIN, and it is what makes the test above an ordering pin rather than
+     * a route that never says anything.
+     *
+     * `does not exist` is still reachable -- for a post this key DOES reach.
+     * Without this, deleting the site reads from `validate_against_site`
+     * altogether would pass the pin above, and a plan naming an id this site
+     * has no post for would be written rather than refused.
+     */
+    public function test_a_post_this_key_reaches_is_still_told_the_site_has_no_such_post(): void {
+        WpStub::add_post(2, 'page', 'de', null);
+        $this->ours(2);
+        // Post 7 is absent, but it is INSIDE the scope: the stamp says so.
+        WpStub::$meta[7][CadenceContentRequest::META] = 'piece-7';
+        $plan = $this->plan(['trid' => null, 'create_group' => true]);
+        $plan['source']['post_id'] = 7;
+
+        $r = CadenceLinkRequest::run($plan, null);
+
+        $this->assertSame('bad_plan', $r['code'], $r['reason'] ?? '');
+        $this->assertStringContainsString('does not exist', $r['reason']);
+        $this->assertSame([], WpStub::$writes);
     }
 
     /**
@@ -843,7 +919,7 @@ final class LinkRequestTest extends TestCase {
         $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), 'aaaa1111');
 
         $this->assertFalse($r['ok']);
-        $this->assertSame('post_other_key', $r['code']);
+        $this->assertSame('post_out_of_scope', $r['code']);
         $this->assertSame([], WpStub::$writes);
     }
 
@@ -885,6 +961,50 @@ final class LinkRequestTest extends TestCase {
 
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertCount(2, WpStub::$writes);
+    }
+
+    /**
+     * AND THAT COMPATIBILITY PATH IS A MEASURED GAP, NOT A CLOSED ONE.
+     *
+     * The merge that removed `post_other_key` closes the oracle over STAMPED
+     * posts. Over unstamped ones there is nothing to close: a second key does
+     * not merely learn that the post is another tenant's, it LINKS it, exactly
+     * as it could before per-key scope existed. This test asserts the leak
+     * rather than asserting it away, so the day it is closed this fails and
+     * someone reads the denominator below before deciding.
+     *
+     * THE DENOMINATOR. Of the three predicates the connector scopes a key by --
+     * `scope_admits`, `created_by`, and the key's post-type list -- two
+     * separate two keys over a stamped post and NONE separates them over an
+     * unstamped one on this route: `translation.link` carries no type list.
+     * The set is every piece a site published before the stamp existed; it
+     * never grows, because `/content` has stamped every insert since, and it
+     * shrinks as those pieces are replaced. It is empty on a site that has only
+     * ever run a stamping connector.
+     *
+     * WHY IT IS NOT CLOSED. Refusing unstamped posts would refuse every link
+     * over content already live on every client's site -- an upgrade that
+     * breaks the working case to narrow a case the release bar does not yet
+     * have, which is one site per client holding one key.
+     */
+    public function test_a_second_keys_reach_over_pre_stamp_posts_is_a_measured_gap(): void {
+        WpStub::add_post(1, 'page', 'en', null);
+        WpStub::add_post(2, 'page', 'de', null);
+        $this->ours(1, 2);   // an identifier and no stamp, as 0.3.0 wrote them
+
+        // A key that published NEITHER of these, and says so.
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), 'bbbb2222');
+
+        $this->assertTrue($r['ok'], 'the pre-stamp gap has been closed; read this docblock');
+        $this->assertCount(2, WpStub::$writes);
+        // AND THE TWIN, so this cannot be satisfied by a route that admits
+        // everything: stamp ONE of the two and the same key is refused.
+        WpStub::$writes = [];
+        WpStub::$meta[2][CadenceContentRequest::KEY_META] = 'aaaa1111';
+        $refused = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]), 'bbbb2222');
+        $this->assertFalse($refused['ok']);
+        $this->assertSame('post_out_of_scope', $refused['code']);
+        $this->assertSame([], WpStub::$writes);
     }
 
     public static function unreadableIdentifiers(): array {

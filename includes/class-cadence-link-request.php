@@ -84,7 +84,6 @@ final class CadenceLinkRequest {
         'source_group_unreadable',
         'wpml_unavailable',
         'post_out_of_scope',
-        'post_other_key',
     ];
 
     /** A bare lowercase WPML language code: `de`, `pt-br`, `zh-hant-hk`. */
@@ -184,37 +183,54 @@ final class CadenceLinkRequest {
         // group it names, and whether the site agrees -- are interpreted only
         // over posts this key may act on.
         //
-        // TWO QUESTIONS, TWO CODES, AND NEITHER SENTENCE COVERS THE OTHER. A
-        // post nobody here published and a post a DIFFERENT key published are
-        // different facts about the caller's entitlement, and a single refusal
-        // spanning both would assert whichever one did not happen. Each branch
-        // below says only what its own predicate answered.
+        // ONE QUESTION, ONE CODE, AND THE MERGE IS THE POINT. This asks
+        // whether the presenting key REACHES the post, which is a single fact
+        // about this caller's entitlement, and the refusal asserts exactly that
+        // and nothing finer.
+        //
+        // IT USED TO BE TWO. `post_out_of_scope` said "not a piece this
+        // connector published" -- absent and not-ours together, which
+        // `get_post_meta` cannot tell apart anyway -- and `post_other_key` said
+        // "ours, but another key's". The second code therefore partitioned the
+        // id space into "another tenant's Cadence post" and everything else,
+        // and a key holding `translation.link` could walk it one 403 at a time.
+        // What that discloses is PROVENANCE -- which of two tenants on one site
+        // published a given post -- and per-key scope was added to protect
+        // precisely that. This route verifies no attestation, so the walk needs
+        // only a leaked connector key.
+        //
+        // AND IT IS NOT ONE SENTENCE OVER TWO DENY CLASSES, which is the defect
+        // the rest of this vocabulary avoids. There is one predicate here,
+        // `CadenceKey::reaches`, and one branch; the sentence names the branch
+        // that fired and asserts no access that never happened. Merging the
+        // MESSAGES while keeping two predicates would have been the defect;
+        // merging the QUESTION is what removes the oracle.
+        //
+        // WHAT A LEGITIMATE CALLER LOSES: it can no longer read "republish this
+        // through /content" against "present the key that owns it" off the
+        // code. It keeps the id it sent, the fact that this credential does not
+        // reach it, and the operator's own record of what it published. The
+        // one case that genuinely differs -- a rotated key over its own older
+        // pieces -- is answered by the admin screen, on the site, by someone
+        // entitled to both.
+        //
+        // WHAT IS STILL WIDE, deliberately, and measured rather than hidden: a
+        // post carrying no key stamp is admitted to ANY key that reaches it,
+        // because every piece published before the stamp existed carries none
+        // and refusing them would break every link over content already live.
+        // See `CadenceKey::created_by`. That set never grows, and
+        // `LinkRequestTest::test_a_second_keys_reach_over_pre_stamp_posts_is_a_measured_gap`
+        // asserts the gap rather than asserting it away.
         foreach ($posts as $p) {
-            if (!CadenceKey::scope_admits($p['post_id'])) {
-                // The id and the claim, and nothing else. Not the identifier
-                // the site stores for its own posts, not a title, not a status
-                // -- the same line `identifier_mismatch` draws one route over,
-                // for the same reason: a refusal that spelled out what the site
-                // holds would hand it to any caller holding a key.
+            if (!CadenceKey::reaches($p['post_id'], $key_id)) {
+                // The id and the claim, and nothing else. Not whether the site
+                // has such a post, not whether this connector published it, not
+                // the key id it carries, not its identifier, title, type or
+                // status -- the same line `identifier_mismatch` draws one route
+                // over, for the same reason: a refusal that spelled out what
+                // the site holds would hand it to any caller holding a key.
                 return ['ok' => false, 'code' => 'post_out_of_scope', 'reason' => sprintf(
-                    'post %d is not a piece this connector published, and a key is scoped '
-                    . 'to this connector\'s own posts; nothing was linked',
-                    $p['post_id'])];
-            }
-            // AND IT IS THIS KEY'S OWN PIECE, not merely one of Cadence's.
-            // `scope_admits` is the whole connector's scope, which on a site
-            // holding two keys -- two brands, or an agency serving two tenants
-            // -- is wider than the credential asking. A post carrying no key
-            // stamp predates the stamp and is admitted: see
-            // `CadenceKey::created_by` for why refusing those would be the
-            // worse outcome.
-            if (!CadenceKey::created_by($p['post_id'], $key_id)) {
-                // The id and the claim. NOT the key id the post carries, which
-                // is another tenant's identifier and is not this caller's to
-                // read off a refusal.
-                return ['ok' => false, 'code' => 'post_other_key', 'reason' => sprintf(
-                    'post %d was published through a different connector key, and a key is '
-                    . 'scoped to its own pieces; nothing was linked',
+                    'post %d is not one this key may link; nothing was linked',
                     $p['post_id'])];
             }
         }

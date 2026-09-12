@@ -182,26 +182,33 @@ final class CadenceRestRoute {
      * the request nor the site: it is that this credential does not reach that
      * post.
      *
-     * ALL FIVE 403s ARE SEPARATE CODES FOR THE SAME REASON THEY ARE SEPARATE
-     * BRANCHES. `post_out_of_scope` is a post this connector never published,
-     * `post_other_key` one a different key published,
-     * `post_type_out_of_scope` a post type this key may not create in, and
-     * `existing_post_type_out_of_scope` a piece this key already has, placed in
-     * a type it may no longer publish into. One code over all four would make a
-     * caller guess which of four unrelated fixes -- republish through this
-     * route, present the other tenant's key, correct the `post_type` it sent,
-     * re-issue this key with a wider scope -- its operator has to make. The
-     * last two are the pair most easily collapsed and least safely: one is the
-     * type the REQUEST names, which the caller can change, and the other the
-     * type a post it already owns was made in, which it cannot.
+     * THE 403s ARE SEPARATE CODES FOR THE SAME REASON THEY ARE SEPARATE
+     * BRANCHES. `post_out_of_scope` is a post the presenting key does not
+     * reach, `post_type_out_of_scope` a post type this key may not create in,
+     * and `existing_post_type_out_of_scope` a piece this key already has,
+     * placed in a type it may no longer publish into. One code over all three
+     * would make a caller guess which of three unrelated fixes -- name a post
+     * this key reaches, correct the `post_type` it sent, re-issue this key with
+     * a wider scope -- its operator has to make. The last two are the pair most
+     * easily collapsed and least safely: one is the type the REQUEST names,
+     * which the caller can change, and the other the type a post it already
+     * owns was made in, which it cannot.
      *
-     * `replace_other_key` IS THE FIFTH, AND IS NOT `post_other_key`. The
-     * predicate behind both is `CadenceKey::created_by`, and the act is not:
-     * one refusal ends "nothing was linked" and the other "nothing was
-     * written". A caller matching on the code to decide what did not happen
-     * would be told about an act it never asked for, and a refusal that names
-     * an act it was not asked to perform asserts an access that never
-     * happened. Two acts, two codes, one predicate.
+     * `post_out_of_scope` IS ONE CODE OVER ONE PREDICATE, not a merge of two.
+     * The linking route used to answer `post_other_key` beside it -- "this
+     * connector published that post and a different key did" -- and the pair
+     * was a provenance oracle: any id on the site sorted into another tenant's
+     * Cadence posts or everything else, behind a credential with no attestation
+     * in front of it. `CadenceKey::reaches` now asks the conjunction, so there
+     * is one branch and one sentence. See the comment at the scope loop in
+     * `CadenceLinkRequest::run` for what a legitimate caller gives up.
+     *
+     * `replace_other_key` IS ITS OWN CODE and lives on `/content/replace`,
+     * which verifies the request's attestation before it reads anything about
+     * the post -- so its finer answer costs a signing key, not merely a leaked
+     * connector key. It also says "nothing was written" where the linking
+     * route says "nothing was linked": a caller matching on a code to decide
+     * what did not happen must not be told about an act it never asked for.
      *
      * `source_group_unset` and `source_group_unreadable` are 500s and NOT 409s,
      * though a re-read is the caller's next step for both. A 409 invites the
@@ -218,7 +225,6 @@ final class CadenceRestRoute {
         'bad_request'                => 400,
         'bad_replacement'            => 400,
         'post_out_of_scope'          => 403,
-        'post_other_key'             => 403,
         'replace_other_key'          => 403,
         'post_type_out_of_scope'     => 403,
         'existing_post_type_out_of_scope' => 403,

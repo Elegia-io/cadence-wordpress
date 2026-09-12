@@ -17,6 +17,14 @@
  * names the post AND the revision it believes that post holds, and this runs
  * where the truth is: it re-reads the post and refuses when the two disagree.
  *
+ * AND WHOSE POST IT IS IS A SEPARATE QUESTION FROM WHICH POST IT IS. The
+ * identifier answers the second; it is not a secret -- it travels in plan
+ * payloads, ledger rows and operator surfaces -- so a key holding
+ * `content.replace` on a site that holds two keys can name another tenant's
+ * piece and have every other check agree. The creating key's public id is
+ * stamped on the post by `/content`, and `CadenceKey::created_by` is asked
+ * here before anything is decided about the text.
+ *
  * DIRECTION OF ERROR. A refused rewrite costs the caller one re-read. An
  * applied one costs a human work they cannot get back from here. Every refusal
  * below therefore writes nothing, and every precondition is checked before the
@@ -61,7 +69,9 @@ final class CadenceReplaceRequest {
     public const REFUSAL_CODES = [
         'bad_replacement',
         'post_missing',
+        'replace_other_key',
         'identifier_mismatch',
+        'existing_post_type_out_of_scope',
         'revision_mismatch',
         'update_failed',
         'no_row_lock',
@@ -78,9 +88,24 @@ final class CadenceReplaceRequest {
      * request is wrong.
      *
      * @param array $body the JSON body, already decoded
+     * @param list<string>|null $post_types the post types the presenting key
+     *                    names, or null for a key that names none -- which is
+     *                    ANY registered type, the compatibility value a key
+     *                    issued before the field existed carries. Required
+     *                    rather than defaulted for the reason `/content` makes
+     *                    it required: null is the WIDE case, so a default
+     *                    would let a call site's omission read as a key that
+     *                    deliberately named no type.
+     * @param string|null $key_id the public id of the presenting key. Null is
+     *                    a caller this route cannot name, and it reaches only
+     *                    the posts that carry no key stamp -- every post that
+     *                    names a key is refused. Required for the same reason,
+     *                    from the other direction: a call site that forgot it
+     *                    would be refusing writes rather than admitting them,
+     *                    but it would be doing so silently.
      * @return array{ok: bool, created?: bool, post_id?: int, revision?: string, code?: string, reason?: string}
      */
-    public static function run(array $body): array {
+    public static function run(array $body, ?array $post_types, ?string $key_id): array {
         $fields = self::validate($body);
         if (is_string($fields)) {
             return ['ok' => false, 'code' => 'bad_replacement', 'reason' => $fields];
@@ -94,6 +119,45 @@ final class CadenceReplaceRequest {
         if (!$post instanceof WP_Post) {
             return ['ok' => false, 'code' => 'post_missing', 'reason' => sprintf(
                 'this site has no readable post %d, so there is nothing here to replace',
+                $fields['post_id'])];
+        }
+
+        // AND IT HAS TO BE THIS KEY'S POST, ASKED BEFORE ANYTHING ELSE ABOUT
+        // IT. `identifier_mismatch` below answers "is this the post you say it
+        // is"; this answers "is this post yours", and they are different
+        // questions -- a key holding `content.replace` that learns another
+        // tenant's `piece_id` from its own operator surface satisfies the
+        // first over a post it has nothing to do with, and a replace
+        // overwrites a published title and body.
+        //
+        // THE ORDER IS THE GUARD, NOT MERELY THE PLACE THE LINE SITS.
+        // `identifier_mismatch` fires on a post that exists and tells the two
+        // cases apart -- "a different piece this connector published" against
+        // "not a piece this connector published". Run first, it would answer
+        // for every post another tenant holds whose identifier is not the one
+        // named, and only the post that DOES carry the named identifier would
+        // reach this branch: the pair of cases the refusal must not separate
+        // would then be separated by which refusal came back. Asked first,
+        // every post that names another key gets this one sentence whatever
+        // identifier it carries, and `identifier_mismatch`'s finer answer is
+        // only ever shown for a post this key already reaches.
+        //
+        // A post carrying NO stamp takes the documented null-identity path in
+        // `CadenceKey::created_by` and is admitted, exactly as on the other two
+        // routes: every piece already on a client's site predates the stamp,
+        // and refusing those would break every rewrite of work the pipeline
+        // has already done. A STAMPED post asked about by no key at all
+        // (`$key_id` null) is refused there -- no identity is not a wildcard.
+        if (!CadenceKey::created_by($fields['post_id'], $key_id)) {
+            // The id and the claim, and nothing else: not the key id the post
+            // carries, which is another tenant's identifier; not the post's
+            // type, its title, its author or its revision. Its own sentence
+            // and its own code, never `post_other_key`'s -- that one says
+            // nothing was LINKED, and a caller matching on it would be told
+            // about an act it did not ask for.
+            return ['ok' => false, 'code' => 'replace_other_key', 'reason' => sprintf(
+                'post %d was published through a different connector key, and a key may '
+                . 'replace only its own pieces; nothing was written',
                 $fields['post_id'])];
         }
 
@@ -119,6 +183,45 @@ final class CadenceReplaceRequest {
                 is_string($stored) && $stored !== ''
                     ? 'a different piece this connector published'
                     : 'not a piece this connector published')];
+        }
+
+        // AND THE PIECE IS IN A TYPE THIS KEY STILL REACHES.
+        //
+        // WHAT IT PROTECTS, which is the only reason it is here: the
+        // null-identity path above admits every post that predates the stamp,
+        // and over that set two keys on one site do not separate at all. The
+        // type scope is the one narrowing still available there -- a key that
+        // names `post` cannot rewrite an unstamped `page`, so a tenant that
+        // publishes posts does not reach the pre-stamp pages of a tenant that
+        // publishes pages. It also makes an operator's narrowing of a live key
+        // effective over the pieces that key already has: `/content` refuses
+        // to hand out the id and the revision of such a piece
+        // (`existing_post_type_out_of_scope`), but a caller that recorded the
+        // pair before the scope was narrowed keeps it forever, so withholding
+        // it is a disclosure control and not a door.
+        //
+        // THE SAME CODE AS `/content`'s, deliberately: it is the same fact --
+        // this key's own piece sits in a type the key does not publish into --
+        // and the operator's fix is the same one, re-issue the key wider. The
+        // sentence differs because the act does; the code is the API and the
+        // reason is prose.
+        //
+        // AFTER the identity check and after `identifier_mismatch`, so it can
+        // only ever fire over a post this key reaches and that IS the piece
+        // named. Asked earlier it would answer whether another tenant's post,
+        // or any post on the site, is inside this key's type scope -- naming
+        // the target's type is exactly what the refusals here must not do.
+        //
+        // `null` names no type and means ANY, so a key issued before the field
+        // existed replaces what it always replaced.
+        if ($post_types !== null && !in_array(get_post_type($fields['post_id']), $post_types, true)) {
+            // The key's own scope and the identifier the caller sent, neither
+            // of which is the site's to disclose -- and NOT the type the post
+            // is in, which is.
+            return ['ok' => false, 'code' => 'existing_post_type_out_of_scope', 'reason' => sprintf(
+                'the piece %s is on a post of a type this key does not publish into; '
+                . 'this key publishes into %s, and nothing was written',
+                $fields['piece_id'], implode(', ', $post_types))];
         }
 
         // FROM HERE THE ROW IS HELD. Everything above is decided from copies

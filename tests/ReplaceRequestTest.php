@@ -28,7 +28,8 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     /** Publish a piece the way the pipeline does, and hand back what it was told. */
-    private function publish(array $over = []): array {
+    private function publish(array $over = [], ?string $key_id = null,
+                             ?array $post_types = null): array {
         $r = CadenceContentRequest::run(array_merge([
             'piece_id' => 'piece-1',
             'language'    => 'en',
@@ -48,11 +49,33 @@ final class ReplaceRequestTest extends TestCase {
             // it is `content.replace`'s own concern, covered where that gate
             // lives (ContentRequestTest).
             static fn (string $capability): bool => true,
-            // Any post type: this file is about replacing, not about the
-            // publish scope, and `run` demands the argument either way.
-            null);
+            // Any post type unless a test says otherwise: most of this file
+            // is about replacing, not about the publish scope, and `run`
+            // demands the argument either way.
+            $post_types,
+            // No byline.
+            null,
+            // AND THE STAMP, or none. Written by `/content` in the same call
+            // as the identifier, so a test that wants a post belonging to a
+            // named key gets one the way the pipeline makes it rather than by
+            // writing the meta row by hand.
+            $key_id);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         return $r;
+    }
+
+    /**
+     * `run` as this file's tests mean it: any post type, and no key id.
+     *
+     * BOTH ARGUMENTS ARE REQUIRED ON `run` ITSELF -- null is the wide case for
+     * the first and the narrow one for the second, and a call site that forgot
+     * either would be silently wrong in opposite directions. They are defaulted
+     * HERE because these tests are about the rewrite, and a key id is only
+     * meaningful against a post that carries a stamp, which `publish` does not
+     * write. The tests that are about the scope pass both explicitly.
+     */
+    private function replace(array $body, ?array $post_types = null, ?string $key_id = null): array {
+        return CadenceReplaceRequest::run($body, $post_types, $key_id);
     }
 
     /** The statements `$wpdb` was given, in order. */
@@ -115,7 +138,7 @@ final class ReplaceRequestTest extends TestCase {
 
     public function test_a_replacement_naming_the_current_revision_rewrites_the_post(): void {
         $published = $this->publish();
-        $r = CadenceReplaceRequest::run($this->body($published));
+        $r = $this->replace($this->body($published));
 
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertFalse($r['created'], 'a replacement reported creating something');
@@ -143,7 +166,7 @@ final class ReplaceRequestTest extends TestCase {
         $edited = '<p>Original body, corrected by hand.</p>';
         WpStub::$posts[$published['post_id']]['post_content'] = $edited;
 
-        $r = CadenceReplaceRequest::run($this->body($published));
+        $r = $this->replace($this->body($published));
 
         $this->assertFalse($r['ok'], 'a hand edit was overwritten');
         $this->assertSame('revision_mismatch', $r['code']);
@@ -160,7 +183,7 @@ final class ReplaceRequestTest extends TestCase {
      */
     public function test_the_same_replacement_against_an_untouched_post_is_written(): void {
         $published = $this->publish();
-        $r = CadenceReplaceRequest::run($this->body($published));
+        $r = $this->replace($this->body($published));
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertCount(1, WpStub::$updated);
     }
@@ -174,10 +197,10 @@ final class ReplaceRequestTest extends TestCase {
      */
     public function test_replaying_a_replacement_that_already_landed_is_refused(): void {
         $published = $this->publish();
-        $first = CadenceReplaceRequest::run($this->body($published));
+        $first = $this->replace($this->body($published));
         $this->assertTrue($first['ok'], $first['reason'] ?? '');
 
-        $replay = CadenceReplaceRequest::run($this->body($published));
+        $replay = $this->replace($this->body($published));
         $this->assertFalse($replay['ok']);
         $this->assertSame('revision_mismatch', $replay['code']);
         $this->assertCount(1, WpStub::$updated, 'the replay rewrote the post a second time');
@@ -191,7 +214,7 @@ final class ReplaceRequestTest extends TestCase {
      */
     public function test_a_replacement_for_a_post_this_site_does_not_have_is_refused(): void {
         $published = $this->publish();
-        $r = CadenceReplaceRequest::run($this->body($published, ['post_id' => 4242]));
+        $r = $this->replace($this->body($published, ['post_id' => 4242]));
 
         $this->assertFalse($r['ok']);
         $this->assertSame('post_missing', $r['code']);
@@ -213,7 +236,7 @@ final class ReplaceRequestTest extends TestCase {
         $two = $this->publish(['piece_id' => 'piece-2']);
         $this->assertSame($one['revision'], $two['revision'], 'the two pieces must be indistinguishable by revision');
 
-        $r = CadenceReplaceRequest::run($this->body($one, ['post_id' => $two['post_id']]));
+        $r = $this->replace($this->body($one, ['post_id' => $two['post_id']]));
 
         $this->assertFalse($r['ok'], 'a replacement was written over a different piece');
         $this->assertSame('identifier_mismatch', $r['code']);
@@ -238,7 +261,7 @@ final class ReplaceRequestTest extends TestCase {
      */
     public function test_a_replacement_for_a_post_this_connector_never_published_is_refused(): void {
         WpStub::add_post(7, 'post');
-        $r = CadenceReplaceRequest::run([
+        $r = $this->replace([
             'piece_id' => 'piece-1',
             'post_id'     => 7,
             // The revision the site does hold for it, so nothing but the
@@ -266,7 +289,7 @@ final class ReplaceRequestTest extends TestCase {
      */
     public function test_a_replacement_does_not_change_whether_the_post_is_published(): void {
         $published = $this->publish(['status' => 'draft']);
-        $r = CadenceReplaceRequest::run($this->body($published));
+        $r = $this->replace($this->body($published));
 
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertArrayNotHasKey('post_status', WpStub::$updated[0],
@@ -277,7 +300,7 @@ final class ReplaceRequestTest extends TestCase {
     /** And the piece keeps the identifier it is known by. */
     public function test_the_piece_keeps_its_identifier(): void {
         $published = $this->publish();
-        CadenceReplaceRequest::run($this->body($published));
+        $this->replace($this->body($published));
         $this->assertSame('piece-1',
             WpStub::$meta[$published['post_id']][CadenceContentRequest::META] ?? null);
     }
@@ -296,7 +319,7 @@ final class ReplaceRequestTest extends TestCase {
         $body['external_id'] = $body['piece_id'];
         unset($body['piece_id']);
 
-        $r = CadenceReplaceRequest::run($body);
+        $r = $this->replace($body);
         $this->assertTrue($r['ok'], 'the 0.1.0 spelling no longer identifies a piece');
     }
 
@@ -318,7 +341,7 @@ final class ReplaceRequestTest extends TestCase {
             'title is an array'     => ['title' => ['a']],
             'content is an int'     => ['content' => 3],
         ] as $why => $over) {
-            $r = CadenceReplaceRequest::run($this->body($published, $over));
+            $r = $this->replace($this->body($published, $over));
             $this->assertFalse($r['ok'], $why);
             $this->assertSame('bad_replacement', $r['code'], $why);
             $this->assertSame([], WpStub::$updated, $why);
@@ -332,7 +355,7 @@ final class ReplaceRequestTest extends TestCase {
     public function test_an_update_that_fails_is_reported_as_a_failure(): void {
         $published = $this->publish();
         WpStub::$update_fails = 'database is on fire';
-        $r = CadenceReplaceRequest::run($this->body($published));
+        $r = $this->replace($this->body($published));
 
         $this->assertFalse($r['ok']);
         $this->assertSame('update_failed', $r['code']);
@@ -349,7 +372,7 @@ final class ReplaceRequestTest extends TestCase {
     public function test_a_zero_with_no_error_is_reported_as_a_failure(): void {
         $published = $this->publish();
         WpStub::$update_returns_zero = true;
-        $r = CadenceReplaceRequest::run($this->body($published));
+        $r = $this->replace($this->body($published));
 
         $this->assertFalse($r['ok']);
         $this->assertSame('update_failed', $r['code']);
@@ -379,17 +402,31 @@ final class ReplaceRequestTest extends TestCase {
                 return $this->body($p);
             },
         ];
+        // The two that need the call itself narrowed rather than the body
+        // changed: a scope is a property of the asking key, not of the request.
+        $scoped = [
+            'replace_other_key' => [null, 'key-b'],
+            'existing_post_type_out_of_scope' => [['page'], 'key-a'],
+        ];
 
         $seen = [];
         foreach ($causes as $expected => $arrange) {
             WpStub::reset();
-            $r = CadenceReplaceRequest::run($arrange($this->publish()));
+            $r = $this->replace($arrange($this->publish()));
             $this->assertFalse($r['ok'], $expected . ' was supposed to be refused');
             $this->assertSame([], WpStub::$updated, $expected);
             $this->assertSame($expected, $r['code'] ?? null, $expected);
             $seen[] = $r['code'];
         }
-        $this->assertCount(6, array_unique($seen));
+        foreach ($scoped as $expected => [$types, $asking]) {
+            WpStub::reset();
+            $r = $this->replace($this->body($this->publish([], 'key-a')), $types, $asking);
+            $this->assertFalse($r['ok'], $expected . ' was supposed to be refused');
+            $this->assertSame([], WpStub::$updated, $expected);
+            $this->assertSame($expected, $r['code'] ?? null, $expected);
+            $seen[] = $r['code'];
+        }
+        $this->assertCount(8, array_unique($seen));
 
         // AND THE PUBLISHED LIST IS THAT LIST, so the coverage test over in
         // RestRouteTest has something real to be measured against: a code added
@@ -438,7 +475,7 @@ final class ReplaceRequestTest extends TestCase {
         // `get_post` still answers the pre-edit text; the row does not.
         WpStub::$row_override[$id] = ['post_content' => $edited];
 
-        $r = CadenceReplaceRequest::run($this->body($published));
+        $r = $this->replace($this->body($published));
 
         $this->assertFalse($r['ok'], 'a hand edit that landed mid-request was overwritten');
         $this->assertSame('revision_mismatch', $r['code']);
@@ -457,7 +494,7 @@ final class ReplaceRequestTest extends TestCase {
         WpStub::$row_override[$published['post_id']] =
             ['post_title' => 'The original', 'post_content' => '<p>Original body.</p>'];
 
-        $r = CadenceReplaceRequest::run($this->body($published));
+        $r = $this->replace($this->body($published));
 
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertCount(1, WpStub::$updated);
@@ -472,7 +509,7 @@ final class ReplaceRequestTest extends TestCase {
         $published = $this->publish();
         WpStub::$row_override[$published['post_id']] = ['post_title' => 'Retitled by hand'];
 
-        $r = CadenceReplaceRequest::run($this->body($published));
+        $r = $this->replace($this->body($published));
 
         $this->assertFalse($r['ok'], 'a hand-edited title was overwritten');
         $this->assertSame('revision_mismatch', $r['code']);
@@ -487,7 +524,7 @@ final class ReplaceRequestTest extends TestCase {
      */
     public function test_the_text_is_read_under_a_lock_the_write_happens_inside(): void {
         $published = $this->publish();
-        $r = CadenceReplaceRequest::run($this->body($published));
+        $r = $this->replace($this->body($published));
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
 
         $log = $this->statements();
@@ -512,7 +549,7 @@ final class ReplaceRequestTest extends TestCase {
         $published = $this->publish();
         WpStub::$row_override[$published['post_id']] = ['post_content' => 'edited by hand'];
 
-        $r = CadenceReplaceRequest::run($this->body($published));
+        $r = $this->replace($this->body($published));
 
         $this->assertSame('revision_mismatch', $r['code']);
         $log = $this->statements();
@@ -533,7 +570,7 @@ final class ReplaceRequestTest extends TestCase {
             'identifier_mismatch' => ['piece_id' => 'piece-9'],
         ] as $code => $over) {
             $GLOBALS['wpdb']->log = [];
-            $r = CadenceReplaceRequest::run($this->body($published, $over));
+            $r = $this->replace($this->body($published, $over));
             $this->assertSame($code, $r['code'] ?? null);
             $this->assertSame([], $this->statements(), $code . ' locked a row to refuse');
         }
@@ -550,7 +587,7 @@ final class ReplaceRequestTest extends TestCase {
         $published = $this->publish();
         $GLOBALS['wpdb']->fails_on = 'START TRANSACTION';
 
-        $r = CadenceReplaceRequest::run($this->body($published));
+        $r = $this->replace($this->body($published));
 
         $this->assertFalse($r['ok'], 'a rewrite was written with no lock over it');
         $this->assertSame('no_row_lock', $r['code']);
@@ -568,7 +605,7 @@ final class ReplaceRequestTest extends TestCase {
         $published = $this->publish();
         WpStub::$rows_gone = [$published['post_id']];
 
-        $r = CadenceReplaceRequest::run($this->body($published));
+        $r = $this->replace($this->body($published));
 
         $this->assertFalse($r['ok']);
         $this->assertSame('post_missing', $r['code']);
@@ -588,7 +625,7 @@ final class ReplaceRequestTest extends TestCase {
         WpStub::$update_throws = 'a save_post hook exploded';
 
         try {
-            CadenceReplaceRequest::run($this->body($published));
+            $this->replace($this->body($published));
             $this->fail('the exception was swallowed');
         } catch (RuntimeException $e) {
             $this->assertSame('a save_post hook exploded', $e->getMessage());
@@ -596,6 +633,174 @@ final class ReplaceRequestTest extends TestCase {
         $log = $this->statements();
         $this->assertSame('ROLLBACK', end($log), 'the lock survived the exception');
         $this->assertNotContains('COMMIT', $log);
+    }
+
+    /**
+     * WHOSE POST IT IS, WHICH IS NOT WHICH POST IT IS.
+     *
+     * `identifier_mismatch` answers "is this the post you say it is". The
+     * identifier is not a secret -- it travels in plan payloads, ledger rows
+     * and operator surfaces -- so on a site holding two keys a caller that
+     * learns another tenant's `piece_id` satisfies that check over an article
+     * it has nothing to do with, and a replace overwrites a published title
+     * and body.
+     */
+    public function test_a_post_another_key_published_is_not_rewritten(): void {
+        $published = $this->publish([], 'key-a');
+        $r = $this->replace($this->body($published), null, 'key-b');
+
+        $this->assertFalse($r['ok'], "a second key rewrote the first key's post");
+        $this->assertSame('replace_other_key', $r['code']);
+        $this->assertSame([], WpStub::$updated);
+        $this->assertSame('The original', WpStub::$posts[$published['post_id']]['post_title']);
+    }
+
+    /**
+     * AND THE REFUSAL IS DECIDED BEFORE THE ROW IS TOUCHED. A refusal over the
+     * credential has no reason to make every other writer of that post wait on
+     * a request that already decided to do nothing.
+     */
+    public function test_the_identity_refusal_opens_no_transaction(): void {
+        $this->replace($this->body($this->publish([], 'key-a')), null, 'key-b');
+        $this->assertSame([], $this->statements(), 'the row was held for a refusal decided off it');
+    }
+
+    /**
+     * THE REFUSAL IS NOT AN ORACLE ABOUT THE TARGET, AND THAT IS THE ORDERING.
+     *
+     * Two posts another key published: one carrying the identifier the request
+     * names, one carrying a different one. `identifier_mismatch` tells those
+     * apart -- it has to, for a caller debugging a stale map -- so had it been
+     * asked first, only the post that DOES carry the named identifier would
+     * ever have reached the identity branch, and which refusal came back would
+     * say which case it was. Asked first, identity answers both with one
+     * sentence.
+     *
+     * The reasons are compared as whole strings rather than for a substring:
+     * a check that both merely CONTAIN the same clause passes while one of
+     * them appends the fact that separates them.
+     */
+    public function test_the_identity_refusal_cannot_tell_the_two_targets_apart(): void {
+        $reasons = [];
+        foreach (['piece-1' => 'names the identifier the post carries',
+                  'piece-9' => 'names a different identifier'] as $named => $case) {
+            WpStub::reset();
+            $published = $this->publish([], 'key-a');
+            $r = $this->replace($this->body($published, ['piece_id' => $named]), null, 'key-b');
+            $this->assertSame('replace_other_key', $r['code'] ?? null, $case);
+            $reasons[] = $r['reason'];
+        }
+        $this->assertSame($reasons[0], $reasons[1],
+            'the refusal says which of the two cases the target is');
+    }
+
+    /**
+     * AND IT NAMES NOTHING ABOUT THE POST BUT THE ID THE CALLER ALREADY SENT.
+     *
+     * Not the key id the post carries -- another tenant's identifier -- and
+     * not the post's type, title, author or revision. Asserted against the
+     * values this test put on the site, so a refusal that started quoting any
+     * of them fails here rather than being read past.
+     */
+    public function test_the_identity_refusal_names_nothing_the_caller_did_not_send(): void {
+        $published = $this->publish(['title' => 'A secret headline',
+                                     'content' => '<p>A secret body.</p>',
+                                     // A type the sentence cannot name by
+                                     // accident: `post` is a word the refusal
+                                     // uses for the row itself, so a check
+                                     // over it could not fail.
+                                     'post_type' => 'page'], 'key-a');
+        $r = $this->replace($this->body($published), null, 'key-b');
+
+        foreach (['key-a', 'A secret headline', 'A secret body', 'page',
+                  $published['revision']] as $withheld) {
+            $this->assertStringNotContainsString($withheld, $r['reason'], $withheld);
+        }
+        // And it is a sentence about THIS act: a caller matching on the code to
+        // decide what did not happen is not told about linking.
+        $this->assertStringContainsString('nothing was written', $r['reason']);
+        $this->assertStringNotContainsString('linked', $r['reason']);
+    }
+
+    /** THE ACCEPT-PROOF: a key rewrites the piece it published itself. */
+    public function test_a_key_rewrites_its_own_piece(): void {
+        $published = $this->publish([], 'key-a');
+        $r = $this->replace($this->body($published), null, 'key-a');
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('The rewrite', WpStub::$posts[$published['post_id']]['post_title']);
+    }
+
+    /**
+     * THE COMPATIBILITY PATH, AND THE SECOND HALF OF THE ACCEPT-PROOF. Every
+     * piece already on a client's site was created before the stamp existed
+     * and carries none. Refusing those would turn a working rewrite into a 403
+     * the moment the plugin updated under it, for a holder who can neither see
+     * the stamp nor add it.
+     */
+    public function test_a_piece_that_predates_the_key_stamp_is_rewritten_by_any_key(): void {
+        $published = $this->publish();
+        $this->assertArrayNotHasKey(CadenceContentRequest::KEY_META,
+            WpStub::$meta[$published['post_id']], 'this post was stamped, so it proves nothing');
+
+        $r = $this->replace($this->body($published), null, 'key-b');
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('The rewrite', WpStub::$posts[$published['post_id']]['post_title']);
+    }
+
+    /**
+     * AND NO IDENTITY IS NOT A WILDCARD. A stamped post asked about by a caller
+     * this route cannot name -- nothing presented, or a key that did not
+     * authenticate -- is refused. The compatibility path is a property of the
+     * POST, never of the caller.
+     */
+    public function test_a_stamped_piece_is_not_rewritten_by_a_caller_with_no_identity(): void {
+        $published = $this->publish([], 'key-a');
+        $r = $this->replace($this->body($published), null, null);
+
+        $this->assertFalse($r['ok'], 'an unnamed caller rewrote a stamped post');
+        $this->assertSame('replace_other_key', $r['code']);
+        $this->assertSame([], WpStub::$updated);
+    }
+
+    /**
+     * THE TYPE SCOPE, AND WHAT IT IS FOR HERE. `created_by` admits every post
+     * that predates the stamp, and over that set two keys on one site do not
+     * separate at all -- so the post types named on the key are the only
+     * narrowing left there, and they narrow the stamped case too: an operator
+     * who takes `page` off a live key stops that key rewriting the pages it
+     * already made, rather than only stopping `/content` telling it their
+     * revisions.
+     */
+    public function test_a_piece_in_a_type_this_key_does_not_reach_is_not_rewritten(): void {
+        // The piece is a PAGE and the key names `post`, so the two type names
+        // are different strings and the pair of assertions below can each
+        // fail: the sentence has to carry one and not the other.
+        $published = $this->publish(['post_type' => 'page'], 'key-a');
+        $r = $this->replace($this->body($published), ['post'], 'key-a');
+
+        $this->assertFalse($r['ok'], 'a key rewrote a piece in a type it does not reach');
+        $this->assertSame('existing_post_type_out_of_scope', $r['code']);
+        $this->assertSame([], WpStub::$updated);
+        $this->assertSame([], $this->statements(), 'the row was held for a refusal decided off it');
+        // The key's own scope is the caller's to know; the type the post is
+        // actually in is the site's, and is not in the sentence.
+        $this->assertStringContainsString('post', $r['reason']);
+        $this->assertStringNotContainsString('page', $r['reason']);
+    }
+
+    /** THE ACCEPT-PROOFS EITHER SIDE OF IT: the named type, and no type named. */
+    public function test_a_piece_in_a_type_the_key_names_is_rewritten(): void {
+        $published = $this->publish([], 'key-a');
+        $r = $this->replace($this->body($published), ['post'], 'key-a');
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('The rewrite', WpStub::$posts[$published['post_id']]['post_title']);
+    }
+
+    public function test_a_key_that_names_no_type_rewrites_in_any_type(): void {
+        $published = $this->publish([], 'key-a');
+        $r = $this->replace($this->body($published), null, 'key-a');
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
     }
 
 }

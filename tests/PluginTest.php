@@ -553,9 +553,12 @@ final class PluginTest extends TestCase {
         $this->assertSame("A's title", WpStub::$posts[$mine]['post_title']);
 
         // AND THE PAIR B HOLDS DOES NOT REWRITE A'S POST. Even handed the id
-        // by this test -- which the route no longer discloses -- the revision
-        // B has is a hash of B's own text, so the replacement is refused and
-        // nothing on the site is rewritten.
+        // by this test -- which the route no longer discloses -- the post is
+        // not B's, and the replace route now asks that before it compares any
+        // text: a 403 over the credential rather than the 409 the revision
+        // would have produced. Both refuse, and they are not the same fact --
+        // a revision the caller re-read would satisfy the second and can never
+        // satisfy the first.
         $replace = $this->routes['/content/replace'];
         $rewrite = ['piece_id' => 'shared-slug', 'post_id' => $mine,
                     'revision' => $repeat->get_data()['revision'],
@@ -563,9 +566,100 @@ final class PluginTest extends TestCase {
         $this->assertTrue(($replace['permission_callback'])(new WP_REST_Request($rewrite, $this->key($b))));
         $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($b)));
 
-        $this->assertSame(409, $refused->get_status());
-        $this->assertSame('revision_mismatch', $refused->get_data()['code']);
+        $this->assertSame(403, $refused->get_status());
+        $this->assertSame('replace_other_key', $refused->get_data()['code']);
         $this->assertSame([], WpStub::$updated, "A's post was rewritten anyway");
         $this->assertSame($a['id'], WpStub::$meta[$mine][CadenceContentRequest::KEY_META]);
+    }
+
+    /**
+     * ONE TENANT'S KEY DOES NOT REWRITE ANOTHER TENANT'S POST, EVEN HOLDING
+     * THE IDENTIFIER AND THE REVISION.
+     *
+     * The identifier is not a secret: it travels in plan payloads, ledger rows
+     * and the tenant's own operator surface. This test hands B both -- the
+     * `piece_id` and the revision read off A's live post -- so nothing but the
+     * key identity is left to refuse on, and a replace overwrites a published
+     * title and body.
+     *
+     * DRIVEN THROUGH THE REGISTERED ROUTE, and that is the point rather than a
+     * style: `CadenceReplaceRequest` can ask `created_by` perfectly while the
+     * route passes it no key id, and every handler test would still pass.
+     */
+    public function test_one_tenants_key_cannot_replace_another_tenants_post(): void {
+        $a = CadenceKey::issue('tenant-a', ['content.publish', 'content.replace'], 7);
+        $b = CadenceKey::issue('tenant-b', ['content.publish', 'content.replace'], 7);
+        $this->assertIsArray($a, is_string($a) ? $a : '');
+        $this->assertIsArray($b, is_string($b) ? $b : '');
+
+        $made = ($this->routes['/content']['callback'])(new WP_REST_Request([
+            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'publish',
+            'title' => "A's title", 'content' => "<p>A's body.</p>", 'language' => 'en',
+            'declared' => ['multilingual' => true, 'languages' => ['en']]], $this->key($a)));
+        $this->assertSame(201, $made->get_status(), (string) ($made->get_data()['reason'] ?? ''));
+        $mine = $made->get_data()['post_id'];
+
+        $replace = $this->routes['/content/replace'];
+        $rewrite = ['piece_id' => 'piece-a', 'post_id' => $mine,
+                    'revision' => $made->get_data()['revision'],
+                    'title' => 'B took it', 'content' => '<p>B body.</p>'];
+
+        // B's key is genuine and carries `content.replace`, so the capability
+        // tripwire says yes -- which is the point: the boundary is at the
+        // write, and `identifier_mismatch` agrees with B, because B named the
+        // identifier the post really carries.
+        $this->assertTrue(($replace['permission_callback'])(new WP_REST_Request($rewrite, $this->key($b))));
+        $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($b)));
+        $this->assertSame(403, $refused->get_status(), (string) ($refused->get_data()['reason'] ?? ''));
+        $this->assertSame('replace_other_key', $refused->get_data()['code']);
+        $this->assertSame([], WpStub::$updated, "a second tenant's key rewrote the post anyway");
+        $this->assertSame("A's title", WpStub::$posts[$mine]['post_title']);
+
+        // THE ACCEPT-PROOF: tenant A sends the identical body through the same
+        // route and its own post is rewritten.
+        $written = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($a)));
+        $this->assertSame(200, $written->get_status(), (string) ($written->get_data()['reason'] ?? ''));
+        $this->assertSame('B took it', WpStub::$posts[$mine]['post_title']);
+    }
+
+    /**
+     * AND THE TYPE SCOPE REACHES THE POSTS THAT PREDATE THE STAMP, which is
+     * the set `created_by` admits to everybody and the only narrowing left
+     * over it. A piece this connector published before it recorded which key
+     * made it is reachable by any key -- deliberately, or an upgrade would
+     * break every rewrite of work already done -- so a key that names `post`
+     * must not reach such a `page`.
+     *
+     * At the route, for the same reason as above: the handler cannot apply a
+     * scope the route never hands it.
+     */
+    public function test_a_key_does_not_rewrite_a_pre_stamp_piece_outside_its_types(): void {
+        $narrow = CadenceKey::issue('tenant-narrow', ['content.replace'], 7, ['post']);
+        $this->assertIsArray($narrow, is_string($narrow) ? $narrow : '');
+        // A page this connector published before the stamp existed: the
+        // identifier is there and no key id is.
+        WpStub::add_post(41, 'page');
+        WpStub::cadence_published(41, 'piece-old');
+        $this->assertArrayNotHasKey(CadenceContentRequest::KEY_META, WpStub::$meta[41]);
+
+        $replace = $this->routes['/content/replace'];
+        $rewrite = ['piece_id' => 'piece-old', 'post_id' => 41,
+                    'revision' => CadenceRevision::of('', ''),
+                    'title' => 'Rewritten', 'content' => '<p>Rewritten.</p>'];
+        $this->assertTrue(($replace['permission_callback'])(
+            new WP_REST_Request($rewrite, $this->key($narrow))));
+
+        $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($narrow)));
+        $this->assertSame(403, $refused->get_status(), (string) ($refused->get_data()['reason'] ?? ''));
+        $this->assertSame('existing_post_type_out_of_scope', $refused->get_data()['code']);
+        $this->assertSame([], WpStub::$updated);
+
+        // THE ACCEPT-PROOF: a key that names no type is the compatibility case
+        // and rewrites exactly what it always rewrote.
+        $wide = CadenceKey::issue('tenant-wide', ['content.replace'], 7);
+        $this->assertIsArray($wide, is_string($wide) ? $wide : '');
+        $written = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($wide)));
+        $this->assertSame(200, $written->get_status(), (string) ($written->get_data()['reason'] ?? ''));
+        $this->assertSame('Rewritten', WpStub::$posts[41]['post_title']);
     }
 }

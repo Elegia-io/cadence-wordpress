@@ -188,6 +188,20 @@ final class WpStub {
         self::$posts[$id] = ['post_type' => $post_type, 'language' => $language,
                              'trid' => $trid, 'wpml_knows' => $wpml_knows];
     }
+
+    /**
+     * MARK A POST AS ONE THIS CONNECTOR PUBLISHED, i.e. inside the scope
+     * `translation.link` reaches.
+     *
+     * Separate from `add_post` and never its default, deliberately: a post on
+     * the site is not a post this plugin made, and a stub whose every post was
+     * one would make the scope check unreachable while every test passed. The
+     * value is what `/content` would have written -- the caller's identifier
+     * for the piece -- and only its non-blankness is read.
+     */
+    public static function cadence_published(int $id, ?string $piece_id = null): void {
+        self::$meta[$id][CadenceContentRequest::META] = $piece_id ?? 'piece-' . $id;
+    }
 }
 
 /**

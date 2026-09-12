@@ -42,11 +42,60 @@ final class CadenceKey {
      * writes a post nobody has seen yet; replacing destroys text a human may
      * have hand-edited since. A pipeline that needs both holds both, granted
      * as two ticks on the same key -- but one is never implied by the other.
+     *
+     * WHAT EACH ONE MAY ACT ON, which is a second question from what it may do.
+     * `translation.link` and `content.replace` are scoped to this plugin's own
+     * posts: the first by `scope_admits`, the second by the stricter comparison
+     * behind `identifier_mismatch`, which demands the stored identifier BE the
+     * one named. `content.publish` is NOT scoped, and is the widening left
+     * standing: it may create in any post type this site registers. Narrowing
+     * it needs a post type named on the key, which is configuration this
+     * plugin does not have and an operator would have to keep current.
      */
     public const CAPABILITIES = ['content.publish', 'content.replace', 'translation.link'];
 
     /** The request header the key is presented in. */
     public const HEADER = 'X-Cadence-Key';
+
+    /**
+     * IS THIS POST INSIDE WHAT A KEY MAY ACT ON?
+     *
+     * THE SCOPE IS THIS PLUGIN'S OWN POSTS -- the ones it created, identified
+     * by the `_cadence_external_id` it writes in the same `wp_insert_post` call
+     * that makes the row. Nothing else on the site is in scope, so a page a
+     * human wrote, a shop product, the site's front page and every draft
+     * somebody has not finished are all outside it.
+     *
+     * WHY THIS SET AND NOT A POST TYPE OR A LIST OF IDS. It is exactly the set
+     * Cadence created, so it needs no configuration on the client's site and
+     * nothing for an operator to keep current: a key issued today covers the
+     * posts the pipeline makes tomorrow and never covers anything else. A post
+     * type would cover every `page` on the site including the ones a human
+     * wrote; a list of ids would have to be edited on every publish.
+     *
+     * IT FAILS CLOSED, AND THE DIRECTION IS THE POINT. Meta this cannot read as
+     * a non-blank string -- absent, blank, an array something else wrote -- is
+     * not in scope. `/content` refuses a blank `piece_id`, so a blank stored
+     * value cannot have come from this plugin, and admitting it would put every
+     * post carrying an empty `_cadence_external_id` inside the grant.
+     *
+     * WHAT THIS DOES NOT SEPARATE: two keys on one site. Both hold the same
+     * scope, so tenant A's key may link tenant B's Cadence posts. That is
+     * narrower than the whole site and is still wider than one tenant --
+     * tracked, and the release bar is one vault and one site per client.
+     *
+     * NOT ASKED OF `content.publish`. Creating a post cannot be scoped by meta
+     * the post does not have yet, and that capability is still as wide as the
+     * site's registered post types -- see the note in `CAPABILITIES`.
+     */
+    public static function scope_admits(int $post_id): bool {
+        // `get_post_meta(..., true)` answers `''` for meta that is not there,
+        // which is indistinguishable from a stored empty string -- so both are
+        // refused rather than told apart, because neither is a piece this
+        // plugin published.
+        $stored = get_post_meta($post_id, CadenceContentRequest::META, true);
+        return is_string($stored) && trim($stored) !== '';
+    }
 
     /**
      * ISSUE ONE. Returns `['id' => ..., 'secret' => ...]`, or a string saying

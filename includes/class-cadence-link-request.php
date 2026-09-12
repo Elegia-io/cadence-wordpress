@@ -50,6 +50,7 @@ final class CadenceLinkRequest {
         'already_grouped',
         'group_disagreement',
         'wpml_unavailable',
+        'post_out_of_scope',
     ];
 
     /** A bare lowercase WPML language code: `de`, `pt-br`, `zh-hant-hk`. */
@@ -105,6 +106,47 @@ final class CadenceLinkRequest {
         if ($piece_id !== null && (!is_string($piece_id) || trim($piece_id) === '')) {
             return ['ok' => false, 'code' => 'bad_plan',
                     'reason' => 'piece_id is present but is not a non-blank string'];
+        }
+        // THIS IS THE AUTHORISATION BOUNDARY, and it is here rather than in the
+        // route's `permission_callback` for two reasons. It is the layer the
+        // write cannot be reached without -- anything calling `run` passes
+        // through it, including a future second caller that never registers a
+        // route -- and a `permission_callback` can only answer true or false,
+        // which WordPress turns into its own `rest_forbidden` with no code the
+        // caller can match on. `CadenceKey::authorises` up at the route is the
+        // TRIPWIRE: it refuses a key that holds nothing here, earlier and
+        // cheaper, and this refuses regardless of whether it ran.
+        //
+        // WHAT IT NARROWS. `translation.link` used to authorise linking ANY
+        // post on the site, because the per-post `current_user_can('edit_post')`
+        // it replaced had no user to ask about. It now reaches only the posts
+        // this plugin created.
+        //
+        // AFTER EVERY `bad_plan` AND BEFORE EVERY OTHER CODE. A body this
+        // cannot read is refused on its shape whichever posts it names, so
+        // "fix your JSON" never depends on which credential asked -- and a
+        // caller fixing a malformed body is not sent chasing a scope that was
+        // never the problem.
+        //
+        // BEFORE ANY GROUP IS READ, not merely before any is written. A
+        // `group_disagreement` names the trid the site holds for a post, which
+        // is a row id in the client's database; a caller that may not touch the
+        // post may not learn that about it either. So scope is settled for
+        // every post in the plan first, and the plan's own semantics -- which
+        // group it names, and whether the site agrees -- are interpreted only
+        // over posts this key may act on.
+        foreach ($posts as $p) {
+            if (!CadenceKey::scope_admits($p['post_id'])) {
+                // The id and the claim, and nothing else. Not the identifier
+                // the site stores for its own posts, not a title, not a status
+                // -- the same line `identifier_mismatch` draws one route over,
+                // for the same reason: a refusal that spelled out what the site
+                // holds would hand it to any caller holding a key.
+                return ['ok' => false, 'code' => 'post_out_of_scope', 'reason' => sprintf(
+                    'post %d is not a piece this connector published, and a key is scoped '
+                    . 'to this connector\'s own posts; nothing was linked',
+                    $p['post_id'])];
+            }
         }
 
         $create = $plan['create_group'];

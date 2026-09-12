@@ -137,6 +137,26 @@ final class RestRouteTest extends TestCase {
     }
 
     /**
+     * A POST THE CREDENTIAL DOES NOT REACH IS A 403, and is neither of the two
+     * answers it would otherwise collapse into.
+     *
+     * Not 400: the body is well formed, and a caller told its request is wrong
+     * re-reads its own JSON forever over a request that will never be the
+     * problem. Not 409 either, which means "re-read this site and try again" --
+     * a post does not become one this connector published by being asked about
+     * twice, so that retry is one the status invited and cannot succeed.
+     */
+    public function test_a_post_outside_the_scope_is_403_and_not_400_or_409(): void {
+        $r = CadenceRestRoute::respond(
+            ['ok' => false, 'code' => 'post_out_of_scope', 'reason' => 'x']);
+        $this->assertSame(403, $r['status']);
+        $this->assertSame('post_out_of_scope', $r['body']['code']);
+        $this->assertFalse($r['body']['ok']);
+        $this->assertNotSame(400, $r['status']);
+        $this->assertNotSame(409, $r['status']);
+    }
+
+    /**
      * A SITE THAT CANNOT DO THIS AT ALL IS A 503, not a 400 blaming the request
      * and not a 409 inviting a retry that cannot succeed until someone installs
      * WPML.
@@ -284,6 +304,13 @@ final class RestRouteTest extends TestCase {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
         WpStub::add_post(3, 'page', 'fr', null);
+        // Posts this connector published: what `translation.link` reaches. The
+        // comparison below is between the ids the boundary READS and the ids
+        // the writer WRITES, and it is the write side that the scope gates --
+        // so without this the writer refuses and there is nothing to compare.
+        foreach ([1, 2, 3] as $id) {
+            WpStub::cadence_published($id);
+        }
         $body = $this->body([1, 2, 3]);
 
         $this->assertTrue(CadenceRestRoute::names_posts($body));

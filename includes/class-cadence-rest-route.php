@@ -25,9 +25,13 @@ final class CadenceRestRoute {
      * cannot read must be refused before the handler reads it, and because the
      * ids it extracts are compared by test against the ids the handler writes.
      *
-     * Widening recorded rather than hidden: `translation.link` authorises
-     * linking ANY post on the site, where `edit_post` authorised named ones.
-     * Narrowing a key to a post type or a section is tracked upstream.
+     * AND IT IS NOT THE AUTHORISATION EITHER, still. `translation.link` no
+     * longer reaches any post on the site -- `CadenceKey::scope_admits`, called
+     * from `CadenceLinkRequest::run`, refuses a post this plugin did not create
+     * -- but that check is deliberately NOT duplicated here: this callback can
+     * only answer true or false, and WordPress turns false into its own
+     * `rest_forbidden` with no code a caller can match on. The refusal that
+     * carries `post_out_of_scope` is the one at the write.
      */
     public static function names_posts(array $body): bool {
         $ids = self::post_ids($body);
@@ -99,9 +103,18 @@ final class CadenceRestRoute {
      * nobody classified.
      *
      * 400 -- the request is wrong however many times it is sent.
+     * 403 -- the key is genuine and may not act on what the request names.
      * 409 -- the request disagrees with this site; re-read and it may not.
      * 503 -- the site cannot do this at all; nothing about the request is wrong.
      * 500 -- this server tried and failed.
+     *
+     * 403 IS ITS OWN CLASS, not a 400 and not a 409. A 400 says the body is
+     * wrong, which sends a caller to re-read its own JSON over a body that is
+     * perfectly well formed; a 409 says re-read this site and try again, and
+     * the retry can never succeed -- the post will not become one this
+     * connector published by being asked about twice. What is wrong is neither
+     * the request nor the site: it is that this credential does not reach that
+     * post.
      */
     public const STATUS = [
         'bad_plan'                   => 400,
@@ -109,6 +122,7 @@ final class CadenceRestRoute {
         'no_group_named'             => 400,
         'bad_request'                => 400,
         'bad_replacement'            => 400,
+        'post_out_of_scope'          => 403,
         'capability_mismatch'        => 409,
         'unsupported_language'       => 409,
         'group_unknown'              => 409,

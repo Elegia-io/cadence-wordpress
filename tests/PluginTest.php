@@ -263,6 +263,8 @@ final class PluginTest extends TestCase {
     public function test_a_refused_plan_comes_back_as_the_refusals_own_status(): void {
         WpStub::add_post(1, 'page', 'en', 9);
         WpStub::add_post(2, 'page', 'de', 9);
+        WpStub::cadence_published(1);
+        WpStub::cadence_published(2);
         $response = ($this->route[2]['callback'])(new WP_REST_Request([
             'trid' => 5, 'create_group' => false,
             'source' => ['post_id' => 1, 'language_code' => 'en',
@@ -278,6 +280,8 @@ final class PluginTest extends TestCase {
     public function test_a_written_plan_comes_back_200(): void {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'page', 'de', 5);
+        WpStub::cadence_published(1);
+        WpStub::cadence_published(2);
         $response = ($this->route[2]['callback'])(new WP_REST_Request([
             'trid' => 5, 'create_group' => false,
             'source' => ['post_id' => 1, 'language_code' => 'en',
@@ -327,5 +331,74 @@ final class PluginTest extends TestCase {
         $response = ($this->route[2]['callback'])(new WP_REST_Request(null));
         $this->assertSame(400, $response->get_status());
         $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * THE ORDINARY FLOW, END TO END THROUGH THE REGISTERED ROUTES: publish each
+     * language with `/content`, then link them with `/translation-group`.
+     *
+     * THE ACCEPT-PROOF FOR THE NARROWING. A scope is only safe if the work it
+     * is supposed to permit still happens, and this is the shape the pipeline
+     * actually sends -- every member of the link plan is composed from what
+     * `/content` answered, so every member carries the identifier the scope
+     * reads. Nothing here writes the meta by hand: the two routes are asked in
+     * the order a publish run asks them, which is what makes this a proof that
+     * the ordinary request passes rather than that the fixture does.
+     */
+    public function test_publishing_two_languages_then_linking_them_still_succeeds(): void {
+        $publish = $this->routes['/content']['callback'];
+        $ids = [];
+        foreach (['en' => 'piece-en', 'de' => 'piece-de'] as $language => $piece) {
+            $made = $publish(new WP_REST_Request([
+                'piece_id' => $piece, 'post_type' => 'post', 'status' => 'publish',
+                'title' => 'T-' . $language, 'content' => 'C', 'language' => $language,
+                'declared' => ['multilingual' => true, 'languages' => ['en', 'de']]]));
+            $this->assertSame(201, $made->get_status(), $language);
+            $ids[$language] = $made->get_data()['post_id'];
+        }
+
+        $linked = ($this->route[2]['callback'])(new WP_REST_Request([
+            'piece_id' => 'piece-en', 'trid' => null, 'create_group' => true,
+            'source' => ['post_id' => $ids['en'], 'language_code' => 'en',
+                         'element_type' => 'post_post', 'source_language_code' => null],
+            'translations' => [['post_id' => $ids['de'], 'language_code' => 'de',
+                                'element_type' => 'post_post', 'source_language_code' => 'en']],
+        ]));
+
+        $this->assertSame(200, $linked->get_status(), (string) ($linked->get_data()['reason'] ?? ''));
+        $this->assertSame(2, $linked->get_data()['written']);
+        $this->assertCount(2, WpStub::$writes);
+    }
+
+    /**
+     * AND THE SAME ROUTE REFUSES A POST THIS CONNECTOR NEVER PUBLISHED, with a
+     * code and a status rather than WordPress's own `rest_forbidden`.
+     *
+     * The key is genuine and carries `translation.link`, so the tripwire at the
+     * `permission_callback` says yes -- which is the point: the boundary is at
+     * the write, and it is what a caller can read an answer off. Before this,
+     * `translation.link` authorised linking any post on the site, and the site
+     * ITSELF is what a wrong group destroys the translation relations of.
+     */
+    public function test_a_linking_key_cannot_reach_a_post_this_connector_never_published(): void {
+        WpStub::add_post(41, 'page', 'en', null);
+        WpStub::add_post(42, 'page', 'de', null);
+        WpStub::cadence_published(41);
+        $header = $this->key(CadenceKey::issue('tenant-a', ['translation.link'], 7));
+        $body = ['trid' => null, 'create_group' => true,
+                 'source' => ['post_id' => 41, 'language_code' => 'en',
+                              'element_type' => 'post_page', 'source_language_code' => null],
+                 'translations' => [['post_id' => 42, 'language_code' => 'de',
+                                     'element_type' => 'post_page', 'source_language_code' => 'en']]];
+
+        // The capability tripwire permits it -- a key holding this grant, a body
+        // whose shape reads. Nothing about the request is wrong.
+        $this->assertTrue(($this->route[2]['permission_callback'])(new WP_REST_Request($body, $header)));
+
+        $response = ($this->route[2]['callback'])(new WP_REST_Request($body, $header));
+        $this->assertSame(403, $response->get_status());
+        $this->assertSame('post_out_of_scope', $response->get_data()['code']);
+        $this->assertFalse($response->get_data()['ok']);
+        $this->assertSame([], WpStub::$writes, 'a post outside the scope was linked anyway');
     }
 }

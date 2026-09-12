@@ -51,17 +51,41 @@ X-Cadence-Key: <the key>
 
 Three capabilities exist, and a key carries only the ones it was issued for:
 
-| Capability | Opens |
-|---|---|
-| `content.publish` | `POST /content` |
-| `content.replace` | `POST /content/replace` |
-| `translation.link` | `POST /translation-group` |
+| Capability | Opens | May act on |
+|---|---|---|
+| `content.publish` | `POST /content` | any post type this site registers |
+| `content.replace` | `POST /content/replace` | the post carrying the `piece_id` named |
+| `translation.link` | `POST /translation-group` | posts this connector published |
 
 `content.publish` and `content.replace` are separate on purpose: a key that may
 create must not silently also be able to overwrite. A pipeline that both
 publishes and revises holds both, ticked on the same key; a pipeline that only
 ever publishes cannot rewrite anything, even its own posts, without this being
 granted separately.
+
+**What a capability may act on is a second question from what it may do.**
+`translation.link` reaches the posts this connector created and nothing else, so
+a key cannot write a translation group over a page a human wrote, a shop product
+or the site's front page — and a group written over posts that already had one
+*destroys* the relations they had, including ones made by hand in wp-admin. The
+set is identified by the `_cadence_external_id` this plugin writes in the same
+call that creates a post, so it needs no configuration here and stays current by
+itself: a key issued today covers the posts the pipeline makes tomorrow and never
+covers anything else. A post outside it is refused with `post_out_of_scope` and a
+`403`. `content.replace` is narrower still — the stored identifier must *be* the
+`piece_id` the request names.
+
+**`content.publish` is not scoped, and that is worth saying plainly.** A key
+carrying it may create a post in any post type this site registers. Creating
+cannot be scoped by an identifier the post does not have yet, so narrowing it
+needs a post type named on the key — configuration this version does not have.
+A key is worth what its widest grant is worth: issue `content.publish` only to a
+pipeline that is meant to publish here, and revoke it when that stops being true.
+
+**Registering a post this connector did not create is not possible**, and a link
+request naming one is refused. A translation group whose source is a
+hand-written post therefore cannot be written through this route; the group has
+to be made in wp-admin, or the source republished through `/content`.
 
 **The byline** is a WordPress user on this site, defaulting to whoever is
 issuing the key. It fills `post_author` on the posts this key creates and does
@@ -325,6 +349,13 @@ Requires a key carrying `translation.link`. Once the key answers,
 shape it cannot read — an empty request authorises nothing, so there is nothing
 there to say yes to.
 
+**Every post the plan names must be one this connector published.** The
+capability answers for the route; this answers for the posts, and it is checked
+before the plan's own group logic is interpreted — so a caller that may not touch
+a post does not learn that post's translation group from a `group_disagreement`
+either. One post outside the scope refuses the whole plan: this route writes
+every member, and a partly-written group has one member in it.
+
 ```json
 {
   "piece_id": "piece-2026-08-31-en",
@@ -356,6 +387,7 @@ its last post writes nothing about its first.
 |---|---|---|
 | `200` | Written. `written` is how many, and the report below says which. | Nothing. |
 | `400` | The request is wrong on its face. | Fix it; re-sending cannot help. |
+| `403` | The key is genuine and does not reach what the request names. | Nothing here can help; the post is not this connector's. |
 | `409` | The site disagrees with the request. | Re-read the site and try again. |
 | `503` | The site cannot do this at all. | Fix the site; the request is fine. |
 | `500` | Refused for a reason this version cannot classify. | Report it. |
@@ -410,6 +442,7 @@ the reason is prose and changes freely.
 | `group_unknown` | 409 | WPML returned nothing usable for a post, which is not "in no group" |
 | `already_grouped` | 409 | a post is already in a group, and creating one would detach it |
 | `group_disagreement` | 409 | the site's group for a post is not the one named |
+| `post_out_of_scope` | 403 | a post the plan names is not one this connector published |
 | `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks |
 | `bad_request` | 400 | the content body is not the shape it claims |
 | `capability_mismatch` | 409 | the declaration and the site disagree about WPML |

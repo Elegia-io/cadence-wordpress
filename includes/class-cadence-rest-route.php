@@ -22,7 +22,7 @@ final class CadenceRestRoute {
      * which reads the header directly and fails the moment a release bumps one
      * without the other, so drift is caught rather than merely discouraged.
      */
-    public const VERSION = '0.4.0';
+    public const VERSION = '0.5.0';
 
     /**
      * THE REPLY'S OWN SHAPE, as a number the spine can compare with `<=`
@@ -170,7 +170,7 @@ final class CadenceRestRoute {
      * the request nor the site: it is that this credential does not reach that
      * post.
      *
-     * ALL FOUR 403s ARE SEPARATE CODES FOR THE SAME REASON THEY ARE SEPARATE
+     * ALL FIVE 403s ARE SEPARATE CODES FOR THE SAME REASON THEY ARE SEPARATE
      * BRANCHES. `post_out_of_scope` is a post this connector never published,
      * `post_other_key` one a different key published,
      * `post_type_out_of_scope` a post type this key may not create in, and
@@ -182,6 +182,14 @@ final class CadenceRestRoute {
      * last two are the pair most easily collapsed and least safely: one is the
      * type the REQUEST names, which the caller can change, and the other the
      * type a post it already owns was made in, which it cannot.
+     *
+     * `replace_other_key` IS THE FIFTH, AND IS NOT `post_other_key`. The
+     * predicate behind both is `CadenceKey::created_by`, and the act is not:
+     * one refusal ends "nothing was linked" and the other "nothing was
+     * written". A caller matching on the code to decide what did not happen
+     * would be told about an act it never asked for, and a refusal that names
+     * an act it was not asked to perform asserts an access that never
+     * happened. Two acts, two codes, one predicate.
      *
      * `source_group_unset` and `source_group_unreadable` are 500s and NOT 409s,
      * though a re-read is the caller's next step for both. A 409 invites the
@@ -199,6 +207,7 @@ final class CadenceRestRoute {
         'bad_replacement'            => 400,
         'post_out_of_scope'          => 403,
         'post_other_key'             => 403,
+        'replace_other_key'          => 403,
         'post_type_out_of_scope'     => 403,
         'existing_post_type_out_of_scope' => 403,
         'capability_mismatch'        => 409,

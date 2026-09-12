@@ -240,10 +240,12 @@ final class CadenceContentRequest {
         // Null is the pre-existing key, and omits the field exactly as this
         // insert did before the field existed -- see `CadenceKey::author_for`.
         //
-        // This is the one place the connector creates a post. There is no
-        // /content/replace route and nothing here calls `wp_update_post`: an
-        // identifier already on a post is answered with that post, never a
-        // rewrite of it, so no second route has an author to set.
+        // This is the one place the connector creates a post, and the only
+        // place an author is set. `/content/replace` does call
+        // `wp_update_post`, but it overwrites the title and the content and
+        // nothing else -- a rewrite never moves a post to another author --
+        // and an identifier already on a post is answered here with that post,
+        // never a rewrite of it.
         if ($author !== null) {
             $postarr['post_author'] = $author;
         }

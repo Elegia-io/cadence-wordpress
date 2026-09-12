@@ -3,7 +3,7 @@
  * Plugin Name:       Cadence Connector
  * Plugin URI:        https://github.com/Elegia-io/cadence-wordpress
  * Description:       Lets an external content pipeline publish posts into WordPress, replace the ones it published, and link them into WPML translation groups, refusing any request that disagrees with the site's own state.
- * Version:           0.4.0
+ * Version:           0.5.0
  * Requires at least: 6.4
  * Requires PHP:      8.1
  * Author:            Elegia
@@ -116,7 +116,18 @@ add_action('rest_api_init', static function (): void {
     register_rest_route('cadence/v1', '/content/replace', [
         'methods'  => 'POST',
         'callback' => static function ($request) {
-            $result = CadenceReplaceRequest::run((array) $request->get_json_params());
+            $result = CadenceReplaceRequest::run(
+                (array) $request->get_json_params(),
+                // THE POST TYPES THIS KEY REACHES, or null for a key issued
+                // before the field existed -- which rewrites in any type,
+                // exactly as it did before the plugin was updated under it.
+                CadenceKey::publish_types_for($request->get_header(CadenceKey::HEADER)),
+                // AND WHICH KEY IS ASKING, so the post can be checked against
+                // the key that made it rather than against this connector as a
+                // whole. The public id and never the secret: it is compared
+                // against what `/content` stamped on the post.
+                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER))
+            );
             $answer = CadenceRestRoute::respond($result);
             return new WP_REST_Response($answer['body'], $answer['status']);
         },

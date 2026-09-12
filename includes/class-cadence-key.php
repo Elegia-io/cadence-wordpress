@@ -45,11 +45,15 @@ final class CadenceKey {
      *
      * WHAT EACH ONE MAY ACT ON, which is a second question from what it may do.
      * `translation.link` is scoped to this plugin's own posts by `scope_admits`
-     * AND to the posts THIS key created by `created_by`; `content.replace` by
-     * the stricter comparison behind `identifier_mismatch`, which demands the
-     * stored identifier BE the one named.
+     * AND to the posts THIS key created by `created_by`. `content.replace` is
+     * scoped by `created_by` too -- the identifier is not a secret, so "is this
+     * the post you name" was never the same question as "is this post yours"
+     * -- and then by the stricter comparison behind `identifier_mismatch`,
+     * which demands the stored identifier BE the one named.
      *
-     * `content.publish` IS SCOPED BY THE POST TYPES NAMED ON THE KEY, and it is
+     * `content.publish` IS SCOPED BY THE POST TYPES NAMED ON THE KEY -- and so
+     * is `content.replace`, which is the one narrowing available over the posts
+     * that predate the key stamp, where `created_by` admits everything. It is
      * the one scope an operator has to keep current: creating cannot be scoped
      * by meta the post does not have yet, so there is nothing on the site to
      * derive it from. `null` -- a key issued before the field existed, or one
@@ -177,7 +181,16 @@ final class CadenceKey {
      * -- there is no post yet to ask meta about -- so the scope is declared on
      * the key at issue time and validated there against the site's own
      * registered types. `CadenceContentRequest` refuses a publish outside it
-     * with `post_type_out_of_scope`.
+     * with `post_type_out_of_scope`, and a repeat over a piece already placed
+     * outside it with `existing_post_type_out_of_scope`.
+     *
+     * AND THE SAME LIST SCOPES `content.replace`, which CAN be scoped by meta
+     * and is, by `created_by` -- but that predicate admits every post made
+     * before the stamp existed, and over that set two keys on one site do not
+     * separate. The type list is the only narrowing left there.
+     * `CadenceReplaceRequest` refuses a rewrite outside it with
+     * `existing_post_type_out_of_scope`, the same code and the same operator
+     * fix as the repeat above.
      *
      * NULL MEANS ANY, and that is the compatibility path. Keys are live on
      * sites this repository does not control; a new required field would turn a

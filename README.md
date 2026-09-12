@@ -54,7 +54,7 @@ Three capabilities exist, and a key carries only the ones it was issued for:
 | Capability | Opens | May act on |
 |---|---|---|
 | `content.publish` | `POST /content` | the post types named on the key |
-| `content.replace` | `POST /content/replace` | the post carrying the `piece_id` named |
+| `content.replace` | `POST /content/replace` | the posts **this key** published, and the ones that predate the stamp, in the post types named on the key, carrying the `piece_id` named |
 | `translation.link` | `POST /translation-group` | the posts **this key** published, and the ones that predate the stamp |
 
 `content.publish` and `content.replace` are separate on purpose: a key that may
@@ -72,8 +72,8 @@ set is identified by the `_cadence_external_id` this plugin writes in the same
 call that creates a post, so it needs no configuration here and stays current by
 itself: a key issued today covers the posts the pipeline makes tomorrow and never
 covers anything else. A post outside it is refused with `post_out_of_scope` and a
-`403`. `content.replace` is narrower still — the stored identifier must *be* the
-`piece_id` the request names.
+`403`. `content.replace` adds a stricter comparison on top — the stored
+identifier must *be* the `piece_id` the request names.
 
 **And of those, only the posts the asking key itself published.** "Cadence made
 this" and "you made this" are the same question on a site holding one connector
@@ -84,8 +84,22 @@ request naming a post another key published is refused with `post_other_key` and
 a `403`. The id and never the secret: the site stores only a SHA-256 of that, and
 a meta row travels in every database dump.
 
+**A replacement is asked the same question, and asked it first.** The
+`piece_id` is not a secret — it travels in plan payloads, ledger rows and a
+tenant's own operator surface — so "is this the post you name" was never the
+same question as "is this post yours", and a replacement *overwrites a
+published title and body*. A replace naming a post another key published is
+refused with `replace_other_key` and a `403`, before the identifier is compared
+and before the row is touched. It is its own code and not `post_other_key`: one
+refusal ends *nothing was linked* and the other *nothing was written*, and a
+caller matching on the code to decide what did not happen must not be told
+about an act it never asked for. The refusal names the post id the caller
+already sent and nothing else — not the key that holds the post, not its type,
+title, author or revision — and it is the same sentence whether or not the post
+carries the identifier named, so it cannot be used to ask which.
+
 **A post published before this version carries no key stamp, and stays reachable
-by any key that reaches it.** That is deliberate, and it is what makes the change
+by any key that reaches it**, on both routes. That is deliberate, and it is what makes the change
 safe to install over content that is already live: refusing every piece already
 on a client's site would break every link over work the pipeline has already
 done, which is worse than the widening it closes. The set never grows — every
@@ -101,6 +115,17 @@ rather than 403-ing every publish afterwards. A request for a type the key does
 not name is refused with `post_type_out_of_scope` and a `403`, and that refusal
 says nothing about whether the site registers the type: a key is told what this
 site has only for the types it already names.
+
+**The same list scopes `content.replace`.** It is the one narrowing available
+over the posts that predate the key stamp, where "did *you* make this" admits
+everything: a key that names `post` does not rewrite a `page` this connector
+published before it recorded which key made it. It also makes a narrowing
+effective over the pieces a key already has — `/content` refuses to hand out
+the id and the revision of such a piece, but a caller that recorded the pair
+before the scope changed keeps it, so withholding it is a disclosure control
+and not a door. A rewrite outside the list is refused with
+`existing_post_type_out_of_scope` and a `403`, the same code and the same fix —
+re-issue the key wider — as the repeat on `/content`.
 
 **Leave the field blank and the key publishes into any registered type**, which
 is what every key issued before this version does — they carry no post types at
@@ -310,7 +335,9 @@ POST /wp-json/cadence/v1/content/replace
 
 Requires a key carrying `content.replace`. `content.publish` alone does not
 open this route — a key that may create must not silently also be able to
-overwrite.
+overwrite. And it reaches only the posts that key itself published, plus the
+ones that predate the key stamp, within the post types named on the key: whose
+post it is is asked before which post it is, and before the row is touched.
 
 ```json
 {
@@ -347,6 +374,8 @@ something a human took down is the same destruction one field across.
 | Status | | |
 |---|---|---|
 | `200` | rewritten | `created: false`, with `post_id` and the new `revision` |
+| `400` | the body is wrong | `bad_replacement`; re-sending cannot help |
+| `403` | the key does not reach this post: another key published it (`replace_other_key`), or it sits in a type this key does not name (`existing_post_type_out_of_scope`) | nothing was written; re-reading cannot help |
 | `409` | the site disagrees | nothing was written; re-read and try again |
 | `503` | the site would not open a transaction | nothing was attempted |
 
@@ -437,7 +466,7 @@ every post is in no group to begin with.
 |---|---|---|
 | `200` | Written. `written` is how many, and the report below says which. | Nothing. |
 | `400` | The request is wrong on its face. | Fix it; re-sending cannot help. |
-| `403` | The key is genuine and does not reach what the request names. | Read `code`: it names which. `post_out_of_scope` — the post is not this connector's, so republish it through `/content`. `post_other_key` — it is, but another key made it. `post_type_out_of_scope` — the type the request names is not on this key; `existing_post_type_out_of_scope` — the piece is already placed in a type that is not. The last two are re-issued keys, not requests to re-send. |
+| `403` | The key is genuine and does not reach what the request names. | Read `code`: it names which. `post_out_of_scope` — the post is not this connector's, so republish it through `/content`. `post_other_key` — it is, but another key made it; `replace_other_key` — the same fact about a replacement rather than a link. `post_type_out_of_scope` — the type the request names is not on this key; `existing_post_type_out_of_scope` — the piece is already placed in a type that is not. The last two are re-issued keys, not requests to re-send. |
 | `409` | The site disagrees with the request. | Re-read the site and try again. |
 | `503` | The site cannot do this at all. | Fix the site; the request is fine. |
 | `500` | This server tried and failed — including a `create_group` that wrote the source and could not finish — or refused for a reason this version cannot classify. | Read the body: `written` says what was applied. |
@@ -494,7 +523,9 @@ the reason is prose and changes freely.
 | `group_disagreement` | 409 | the site's group for a post is not the one named |
 | `post_out_of_scope` | 403 | a post the plan names is not one this connector published |
 | `post_other_key` | 403 | a post the plan names was published through a different connector key |
+| `replace_other_key` | 403 | the post a replacement names was published through a different connector key |
 | `post_type_out_of_scope` | 403 | the post type named is not one this key may create in |
+| `existing_post_type_out_of_scope` | 403 | the piece is already on a post of a type this key does not name — on a `/content` repeat, or on a replacement |
 | `source_group_unset` | 500 | the source was written and the site still puts it in no group, so there was no group for the translations to join. **The source was written**; the translations were not |
 | `source_group_unreadable` | 500 | the source was written and WPML then said nothing usable about it, so its group cannot be named. **The source was written**; the translations were not |
 | `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks |

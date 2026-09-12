@@ -35,6 +35,19 @@ final class LinkRequestTest extends TestCase {
     private function twoPosts(?int $trid = 5): void {
         WpStub::add_post(1, 'page', 'en', $trid);
         WpStub::add_post(2, 'page', 'de', $trid);
+        $this->ours(1, 2);
+    }
+
+    /**
+     * The named posts are ones THIS CONNECTOR PUBLISHED, which is what the
+     * scope `translation.link` carries reaches. Called explicitly and never
+     * folded into `add_post`: a plan over posts nobody marked is refused
+     * before its group logic runs, and that refusal is a test of its own.
+     */
+    private function ours(int ...$ids): void {
+        foreach ($ids as $id) {
+            WpStub::cadence_published($id);
+        }
     }
 
     public function test_a_well_formed_plan_over_agreeing_posts_writes_both(): void {
@@ -59,6 +72,7 @@ final class LinkRequestTest extends TestCase {
     public function test_a_plan_disagreeing_with_the_sites_own_group_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'page', 'de', 9);   // the site says 9, the plan says 5
+        $this->ours(1, 2);
         $r = CadenceLinkRequest::run($this->plan());
         $this->assertFalse($r['ok']);
         $this->assertStringContainsString('9', $r['reason']);
@@ -68,6 +82,7 @@ final class LinkRequestTest extends TestCase {
     public function test_creating_a_group_requires_every_post_to_be_in_none(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', 7);   // already grouped
+        $this->ours(1, 2);
         $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
         $this->assertFalse($r['ok']);
         $this->assertSame([], WpStub::$writes);
@@ -160,8 +175,58 @@ final class LinkRequestTest extends TestCase {
     public function test_a_post_of_the_wrong_type_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'post', 'de', 5);   // plan says post_page
+        // `ours()` IS LOAD-BEARING HERE, and it was missing. The type check now
+        // runs after the scope loop, so without it this plan is refused
+        // `post_out_of_scope` and the assertions below pass over a refusal that
+        // has nothing to do with the type -- the test would go on passing while
+        // the thing it names stopped being checked.
+        $this->ours(1, 2);
         $r = CadenceLinkRequest::run($this->plan());
         $this->assertFalse($r['ok']);
+        $this->assertSame('bad_plan', $r['code']);
+        $this->assertStringContainsString('whose type is', $r['reason']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * AN OUT-OF-SCOPE POST IS NOT TOLD WHETHER IT EXISTS, OR WHAT IT IS.
+     *
+     * The two site reads that answer those questions used to sit in
+     * `validate_shape`, which runs BEFORE the scope loop. So a `translation.link`
+     * key could walk post ids and read the answers off the refusal: `names post
+     * 7, which does not exist on this site` against `names post 7, whose type is
+     * `page` and not `post_zzz`` distinguishes a missing id from a page from a
+     * post, for every id on a client's WordPress. That is an enumeration oracle
+     * behind a credential whose whole point is that it reaches only the posts
+     * this connector published.
+     *
+     * All three cases now answer the SAME refusal, and the reason names the id
+     * the caller already sent and nothing else.
+     */
+    public function test_an_out_of_scope_post_learns_nothing_about_the_site(): void {
+        WpStub::add_post(1, 'page', 'en', null);     // a human's page, real
+        WpStub::add_post(2, 'post', 'de', null);     // a human's post, real
+        // Post 9 is not on the site at all; the plan below names 1 and 2, so
+        // this asserts the two SHAPES that used to differ: wrong type, and
+        // absent. Neither is ours.
+        $r = CadenceLinkRequest::run($this->plan());
+        $this->assertFalse($r['ok']);
+        $this->assertSame('post_out_of_scope', $r['code']);
+        foreach (['does not exist', 'whose type is', 'page', 'post_post', 'post_page'] as $leak) {
+            $this->assertStringNotContainsString($leak, $r['reason'], $leak);
+        }
+        $this->assertSame([], WpStub::$writes);
+
+        // AND A POST THAT IS NOT THERE AT ALL IS THE SAME ANSWER. `get_post_meta`
+        // on an id the site does not have answers `''`, so absence and
+        // not-ours are one refusal rather than two distinguishable ones.
+        WpStub::$writes = [];
+        $plan = $this->plan();
+        $plan['source']['post_id'] = 9;
+        $r = CadenceLinkRequest::run($plan);
+        $this->assertFalse($r['ok']);
+        $this->assertSame('post_out_of_scope', $r['code']);
+        $this->assertStringNotContainsString('does not exist', $r['reason']);
         $this->assertSame([], WpStub::$writes);
     }
 
@@ -175,6 +240,7 @@ final class LinkRequestTest extends TestCase {
     public function test_a_plan_claiming_a_group_the_site_does_not_have_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', 5);
         WpStub::add_post(2, 'page', 'de', null);   // WPML: in no group
+        $this->ours(1, 2);
         $r = CadenceLinkRequest::run($this->plan());
         $this->assertFalse($r['ok']);
         $this->assertSame([], WpStub::$writes);
@@ -194,6 +260,7 @@ final class LinkRequestTest extends TestCase {
     public function test_a_post_wpml_has_no_answer_for_writes_nothing(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null, false);   // WP yes, WPML no
+        $this->ours(1, 2);
         $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
         $this->assertFalse($r['ok']);
         $this->assertStringContainsString('unknown', $r['reason']);
@@ -203,6 +270,7 @@ final class LinkRequestTest extends TestCase {
     public function test_the_same_shape_with_wpml_answering_creates_the_group(): void {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);          // the only difference
+        $this->ours(1, 2);
         $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertCount(2, WpStub::$writes);
@@ -251,6 +319,7 @@ final class LinkRequestTest extends TestCase {
             'group_unknown' => function () {
                 WpStub::add_post(1, 'page', 'en', null);
                 WpStub::add_post(2, 'page', 'de', null, false);
+                $this->ours(1, 2);
                 return $this->plan(['trid' => null, 'create_group' => true]);
             },
             'already_grouped' => function () {
@@ -261,30 +330,60 @@ final class LinkRequestTest extends TestCase {
                 $this->twoPosts(9);
                 return $this->plan(['trid' => 5, 'create_group' => false]);
             },
+            'source_group_unset' => function () {
+                $this->twoPosts(null);
+                WpStub::$wpml_write_detaches = [1];
+                return $this->plan(['trid' => null, 'create_group' => true]);
+            },
+            'source_group_unreadable' => function () {
+                $this->twoPosts(null);
+                WpStub::$wpml_write_unreadable = [1];
+                return $this->plan(['trid' => null, 'create_group' => true]);
+            },
             'wpml_unavailable' => function () {
                 $this->twoPosts(null);
                 WpStub::$wpml_reads = false;
                 WpStub::$wpml_writes = false;
                 return $this->plan(['trid' => null, 'create_group' => true]);
             },
+            'post_out_of_scope' => function () {
+                WpStub::add_post(1, 'page', 'en', null);
+                WpStub::add_post(2, 'page', 'de', null);
+                // Post 1 only. A plan whose posts are ALL outside the scope
+                // would be refused by a check that looked at the source alone,
+                // and this route writes every post it names.
+                $this->ours(1);
+                return $this->plan(['trid' => null, 'create_group' => true]);
+            },
         ];
+
+        // EVERY REFUSAL WRITES NOTHING, EXCEPT THE TWO THAT CANNOT. The create
+        // path has no group id until its own first write, so its two refusals
+        // are only reachable with the source already written. Naming them here
+        // is what makes a THIRD refusal that writes a failure of this test
+        // rather than a number somebody adjusted.
+        $wrote_the_source = ['source_group_unset' => 1, 'source_group_unreadable' => 1];
 
         $seen = [];
         foreach ($causes as $expected => $arrange) {
             WpStub::reset();
             $r = CadenceLinkRequest::run($arrange());
             $this->assertFalse($r['ok'], $expected . ' was supposed to be refused');
-            $this->assertSame([], WpStub::$writes, $expected);
+            $this->assertCount($wrote_the_source[$expected] ?? 0, WpStub::$writes, $expected);
             $this->assertSame($expected, $r['code'] ?? null, $expected);
             $seen[] = $r['code'];
         }
-        // Seven causes, seven codes: a mapping that collapsed two of them would
+        // Ten causes, ten codes: a mapping that collapsed two of them would
         // still pass every assertion above if both expectations were changed
-        // together, and the caller could no longer tell them apart.
-        $this->assertCount(7, array_unique($seen));
+        // together, and the caller could no longer tell them apart. The count
+        // is the union of two branches that each added to it -- eight after the
+        // scope narrowing, nine after the create path's two -- so it is
+        // asserted against `REFUSAL_CODES` rather than retyped from either.
+        $this->assertCount(10, array_unique($seen));
+        $this->assertSame(10, count(CadenceLinkRequest::REFUSAL_CODES));
 
         // AND THE PUBLISHED LIST IS THAT LIST. `REFUSAL_CODES` is what the REST
-        // layer maps to HTTP statuses; if a seventh refusal is added here and
+        // layer maps to HTTP statuses; if a further refusal is added here and
         // not added there, the mapping silently stops covering it. Binding the
         // constant to the codes actually observed is what makes the coverage
         // test over in RestRouteTest able to fail.
@@ -411,6 +510,7 @@ final class LinkRequestTest extends TestCase {
     public function test_a_write_that_did_not_land_is_not_reported_as_linked(): void {
         $this->twoPosts(5);
         WpStub::add_post(3, 'page', 'fr', 5);
+        $this->ours(3);
         WpStub::$wpml_write_detaches = [2];
         $r = CadenceLinkRequest::run($this->plan(['piece_id' => 'piece-1', 'translations' => [
             ['post_id' => 2, 'language_code' => 'de',
@@ -436,21 +536,111 @@ final class LinkRequestTest extends TestCase {
         $this->assertSame([], $r['report']['linked']);
     }
 
+    // ---- the create path --------------------------------------------------
+    //
+    // This route used to write a null trid for EVERY element, and WPML's own
+    // documentation says a falsy trid creates a new trid for THAT element: the
+    // site ended with one group per post, nothing was linked, and `written: 2`
+    // said the same thing it says now. These pin the ordering that fixes it and
+    // the two ways it can stop half-way. Every one of them runs against the
+    // stub, which models WPML's DOCUMENTATION -- including the undocumented
+    // part, that a read in the same request sees the trid the write invented.
+    // None of it is an observation of WPML 4.x.
+
     /**
-     * `create_group` writes a null trid for every element, and WPML's own
-     * documentation says a falsy trid creates a NEW trid for THAT element. So
-     * the site ends with two groups of one and nothing is linked -- which the
-     * report says and `written: 2` does not. Tracked as Elegia-io/cadence#1310;
-     * this test pins the REPORTING, not the linking, and is expected to change
-     * when the write does.
+     * THE GROUP IS LEARNED FROM THE FIRST WRITE, NOT NAMED BY THE PLAN. The
+     * source goes first with no trid, because nothing else can bring the group
+     * into existence; then the id WPML chose is read back out of the site and
+     * every translation is written under THAT. The assertion that matters is
+     * the last one: both posts end up in one group, which is the thing a group
+     * of one per post looks identical to in `written`.
      */
-    public function test_the_create_group_path_reports_the_links_it_did_not_make(): void {
+    public function test_the_create_path_learns_its_group_from_its_own_first_write(): void {
         $this->twoPosts(null);
         $r = CadenceLinkRequest::run($this->plan(
             ['trid' => null, 'create_group' => true, 'piece_id' => 'piece-1']));
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertSame(2, $r['written']);
+        $this->assertCount(2, WpStub::$writes);
+
+        // The source first, with no trid -- there was no id to send.
+        $this->assertSame(1, WpStub::$writes[0]['element_id']);
+        $this->assertNull(WpStub::$writes[0]['trid']);
+
+        // The translation second, under the id the site now holds for the
+        // source. Compared against the site rather than against 900: the
+        // literal is the stub's counter, and what this pins is that the two
+        // values are the same one.
+        $group = WpStub::$posts[1]['trid'];
+        $this->assertNotNull($group);
+        $this->assertSame(2, WpStub::$writes[1]['element_id']);
+        $this->assertSame($group, WpStub::$writes[1]['trid']);
+
+        $this->assertSame($group, WpStub::$posts[2]['trid']);
+        $this->assertSame(['de'], $r['report']['linked']);
+    }
+
+    /**
+     * THE WRITE LANDED AND CREATED NO GROUP, so there is nothing for the
+     * translations to join and they are not written. The refusal carries the
+     * count of what it already did, and the report says `linked: []` -- a bare
+     * `ok: false` would tell the caller's ledger that a run which changed the
+     * site changed nothing.
+     *
+     * Nothing was destroyed: the create path refuses unless every post is in no
+     * group, so the source had no relations to lose and post 2 is untouched.
+     */
+    public function test_a_source_left_in_no_group_by_its_own_write_stops_before_the_translations(): void {
+        $this->twoPosts(null);
+        WpStub::$wpml_write_detaches = [1];
+        $r = CadenceLinkRequest::run($this->plan(
+            ['trid' => null, 'create_group' => true, 'piece_id' => 'piece-1']));
+        $this->assertFalse($r['ok']);
+        $this->assertSame('source_group_unset', $r['code']);
+        $this->assertSame(1, $r['written']);
+        $this->assertCount(1, WpStub::$writes);
+        $this->assertSame(1, WpStub::$writes[0]['element_id']);
+        $this->assertNull(WpStub::$posts[2]['trid']);
         $this->assertSame([], $r['report']['linked']);
+        // ONE REFUSAL, ONE CLAIM: this reason says the site answered and the
+        // answer was "no group". It must not also allege an unreadable read,
+        // which is the other branch and did not fire.
+        $this->assertStringContainsString('puts it in no group', $r['reason']);
+        $this->assertStringNotContainsString('no usable', $r['reason']);
+    }
+
+    /**
+     * THE SOURCE'S GROUP CANNOT BE READ BACK AT ALL, which is not the same as
+     * "no group" and is the one state that must never be written over. Same
+     * half-applied shape, different claim.
+     */
+    public function test_a_source_whose_group_cannot_be_read_back_stops_before_the_translations(): void {
+        $this->twoPosts(null);
+        WpStub::$wpml_write_unreadable = [1];
+        $r = CadenceLinkRequest::run($this->plan(
+            ['trid' => null, 'create_group' => true, 'piece_id' => 'piece-1']));
+        $this->assertFalse($r['ok']);
+        $this->assertSame('source_group_unreadable', $r['code']);
+        $this->assertSame(1, $r['written']);
+        $this->assertCount(1, WpStub::$writes);
+        $this->assertNull(WpStub::$posts[2]['trid']);
+        $this->assertSame([], $r['report']['linked']);
+        $this->assertStringContainsString('no usable language details', $r['reason']);
+        $this->assertStringNotContainsString('puts it in no group', $r['reason']);
+    }
+
+    /**
+     * A half-applied create with no piece named carries the count and no
+     * report, for the reason the success path does: there is nothing for a
+     * ledger to file a report under.
+     */
+    public function test_a_half_applied_create_naming_no_piece_still_carries_its_count(): void {
+        $this->twoPosts(null);
+        WpStub::$wpml_write_detaches = [1];
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
+        $this->assertSame(['ok' => false, 'code' => 'source_group_unset',
+                           'reason' => $r['reason'], 'written' => 1], $r);
+        $this->assertArrayNotHasKey('report', $r);
     }
 
     /**
@@ -490,5 +680,136 @@ final class LinkRequestTest extends TestCase {
             'true'       => [true],
             'an array'   => [['piece-1']],
         ];
+    }
+
+    /**
+     * A POST THIS CONNECTOR NEVER PUBLISHED IS NOT A KEY'S TO LINK.
+     *
+     * THE NARROWING, and the whole point of it. Before this, `translation.link`
+     * authorised linking ANY post on the site: the per-post
+     * `current_user_can('edit_post', $id)` it replaced had no WordPress user to
+     * ask about, so what was left was a body-shape check. A stolen key could
+     * therefore write a translation group over the site's front page, a shop
+     * product, or a page a human wrote -- and WPML handed a group that is not
+     * those posts' own DESTROYS the relations they already had.
+     *
+     * The refusal is over the TRANSLATION here and the source is one of ours,
+     * so a check that asked only about the source would pass this.
+     */
+    public function test_a_plan_naming_a_post_this_connector_never_published_writes_nothing(): void {
+        WpStub::add_post(1, 'page', 'en', null);
+        WpStub::add_post(2, 'page', 'de', null);
+        $this->ours(1);   // post 2 is somebody else's page
+
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
+
+        $this->assertFalse($r['ok'], 'a post this connector never published was linked');
+        $this->assertSame('post_out_of_scope', $r['code']);
+        $this->assertSame([], WpStub::$writes, 'a refused plan wrote anyway');
+        // NOT A GROUP DISAGREEMENT AND NOT A MALFORMED PLAN. The body is well
+        // formed and the site agrees with it; what is wrong is that this
+        // credential does not reach that post, and a caller told `bad_plan`
+        // would re-read its own JSON forever.
+        $this->assertNotSame('group_disagreement', $r['code']);
+    }
+
+    /**
+     * THE TWIN: the same plan over posts this connector DID publish is written.
+     *
+     * Without it the test above passes on a `scope_admits` that returns false
+     * unconditionally, which is a route that links nothing at all.
+     */
+    public function test_the_same_plan_over_this_connectors_own_posts_is_written(): void {
+        WpStub::add_post(1, 'page', 'en', null);
+        WpStub::add_post(2, 'page', 'de', null);
+        $this->ours(1, 2);
+
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertCount(2, WpStub::$writes);
+    }
+
+    /**
+     * THE SOURCE IS ASKED TOO, not only the translations.
+     *
+     * The source is written like every other member -- it is first in the same
+     * write loop -- so a scope check that skipped it would let a key attach the
+     * site's own page to a group as its source, which is the destructive write
+     * with the roles swapped.
+     */
+    public function test_a_source_this_connector_never_published_writes_nothing(): void {
+        WpStub::add_post(1, 'page', 'en', null);
+        WpStub::add_post(2, 'page', 'de', null);
+        $this->ours(2);   // the TRANSLATION is ours; the source is not
+
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
+
+        $this->assertFalse($r['ok'], 'a source this connector never published was linked');
+        $this->assertSame('post_out_of_scope', $r['code']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * META THIS CANNOT READ AS AN IDENTIFIER IS OUT OF SCOPE, in every shape it
+     * can arrive in.
+     *
+     * `get_post_meta(..., true)` answers `''` for meta that is not there, so a
+     * stored empty string and an absent row are the same answer and both are
+     * refused. `/content` refuses a blank `piece_id`, so a blank stored value
+     * cannot have come from this plugin -- and a truthiness check would admit
+     * every post carrying `_cadence_external_id` as an empty string, an array,
+     * or a zero some other plugin wrote there.
+     */
+    #[DataProvider('unreadableIdentifiers')]
+    public function test_an_identifier_this_cannot_read_is_out_of_scope($stored): void {
+        WpStub::add_post(1, 'page', 'en', null);
+        WpStub::add_post(2, 'page', 'de', null);
+        $this->ours(1);
+        WpStub::$meta[2][CadenceContentRequest::META] = $stored;
+
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
+
+        $this->assertFalse($r['ok']);
+        $this->assertSame('post_out_of_scope', $r['code']);
+        $this->assertSame([], WpStub::$writes);
+        $this->assertFalse(CadenceKey::scope_admits(2));
+    }
+
+    public static function unreadableIdentifiers(): array {
+        return [
+            'blank'      => [''],
+            'whitespace' => ["  \t "],
+            'an array'   => [['piece-2']],
+            'an int'     => [0],
+            'true'       => [true],
+            'null'       => [null],
+        ];
+    }
+
+    /**
+     * THE REFUSAL SAYS WHICH POST AND NOTHING ELSE ABOUT IT.
+     *
+     * It names the id, which the caller sent, and the claim. It does not name
+     * the identifier the site stores for its own posts -- protected meta the
+     * REST API does not expose, and a refusal that spelled it out would hand a
+     * caller the value `/content/replace` demands. Nor a title, a slug or a
+     * status: the caller is not trusted with the site's copy, which is the line
+     * the report one file over draws for the same reason.
+     */
+    public function test_the_scope_refusal_names_the_post_and_leaks_nothing_about_it(): void {
+        WpStub::add_post(1, 'page', 'en', null);
+        WpStub::add_post(2, 'page', 'de', null);
+        $this->ours(1);
+        WpStub::$meta[2]['_some_other_plugin'] = 'Secret Draft Title';
+
+        $r = CadenceLinkRequest::run($this->plan(['trid' => null, 'create_group' => true]));
+
+        $this->assertStringContainsString('2', $r['reason']);
+        // The IN-SCOPE post's stored identifier is what a leak would spill,
+        // since the refusal has just read the meta table either side of it.
+        $this->assertStringNotContainsString('piece-1', $r['reason']);
+        $this->assertStringNotContainsString('Secret Draft Title', $r['reason']);
+        $this->assertStringNotContainsString('page', $r['reason']);
     }
 }

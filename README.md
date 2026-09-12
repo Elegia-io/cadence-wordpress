@@ -51,17 +51,41 @@ X-Cadence-Key: <the key>
 
 Three capabilities exist, and a key carries only the ones it was issued for:
 
-| Capability | Opens |
-|---|---|
-| `content.publish` | `POST /content` |
-| `content.replace` | `POST /content/replace` |
-| `translation.link` | `POST /translation-group` |
+| Capability | Opens | May act on |
+|---|---|---|
+| `content.publish` | `POST /content` | any post type this site registers |
+| `content.replace` | `POST /content/replace` | the post carrying the `piece_id` named |
+| `translation.link` | `POST /translation-group` | posts this connector published |
 
 `content.publish` and `content.replace` are separate on purpose: a key that may
 create must not silently also be able to overwrite. A pipeline that both
 publishes and revises holds both, ticked on the same key; a pipeline that only
 ever publishes cannot rewrite anything, even its own posts, without this being
 granted separately.
+
+**What a capability may act on is a second question from what it may do.**
+`translation.link` reaches the posts this connector created and nothing else, so
+a key cannot write a translation group over a page a human wrote, a shop product
+or the site's front page — and a group written over posts that already had one
+*destroys* the relations they had, including ones made by hand in wp-admin. The
+set is identified by the `_cadence_external_id` this plugin writes in the same
+call that creates a post, so it needs no configuration here and stays current by
+itself: a key issued today covers the posts the pipeline makes tomorrow and never
+covers anything else. A post outside it is refused with `post_out_of_scope` and a
+`403`. `content.replace` is narrower still — the stored identifier must *be* the
+`piece_id` the request names.
+
+**`content.publish` is not scoped, and that is worth saying plainly.** A key
+carrying it may create a post in any post type this site registers. Creating
+cannot be scoped by an identifier the post does not have yet, so narrowing it
+needs a post type named on the key — configuration this version does not have.
+A key is worth what its widest grant is worth: issue `content.publish` only to a
+pipeline that is meant to publish here, and revoke it when that stops being true.
+
+**Registering a post this connector did not create is not possible**, and a link
+request naming one is refused. A translation group whose source is a
+hand-written post therefore cannot be written through this route; the group has
+to be made in wp-admin, or the source republished through `/content`.
 
 **The byline** is a WordPress user on this site, defaulting to whoever is
 issuing the key. It fills `post_author` on the posts this key creates and does
@@ -325,6 +349,13 @@ Requires a key carrying `translation.link`. Once the key answers,
 shape it cannot read — an empty request authorises nothing, so there is nothing
 there to say yes to.
 
+**Every post the plan names must be one this connector published.** The
+capability answers for the route; this answers for the posts, and it is checked
+before the plan's own group logic is interpreted — so a caller that may not touch
+a post does not learn that post's translation group from a `group_disagreement`
+either. One post outside the scope refuses the whole plan: this route writes
+every member, and a partly-written group has one member in it.
+
 ```json
 {
   "piece_id": "piece-2026-08-31-en",
@@ -350,15 +381,27 @@ not a string — is refused, for the reason `/content` refuses it.
 Every post is read before any post is written, so a request that is wrong about
 its last post writes nothing about its first.
 
+**`create_group` writes the source first and reads its new group back.** The
+group id does not exist until something creates it, and WPML documents a falsy
+`trid` as creating a new one for *that* element — so a null trid sent for every
+element builds one group per post and links nothing. The source is therefore
+written alone, the id the site now holds for it is read back, and each
+translation is written under that id. That is the only place this route can stop
+half-way, and the two codes for it (`source_group_unset`,
+`source_group_unreadable`) carry `written: 1` and the report, so a reply always
+says what was done. Nothing is destroyed either way: the path refuses unless
+every post is in no group to begin with.
+
 ### Answers
 
 | Status | Meaning | What the caller should do |
 |---|---|---|
 | `200` | Written. `written` is how many, and the report below says which. | Nothing. |
 | `400` | The request is wrong on its face. | Fix it; re-sending cannot help. |
+| `403` | The key is genuine and does not reach what the request names. | Nothing here can help; the post is not this connector's. |
 | `409` | The site disagrees with the request. | Re-read the site and try again. |
 | `503` | The site cannot do this at all. | Fix the site; the request is fine. |
-| `500` | Refused for a reason this version cannot classify. | Report it. |
+| `500` | This server tried and failed — including a `create_group` that wrote the source and could not finish — or refused for a reason this version cannot classify. | Read the body: `written` says what was applied. |
 
 A request naming a `piece_id` is answered with the same report as `/content`,
 flat in the body:
@@ -381,7 +424,7 @@ flat in the body:
 | `post_id` | the **source** post. `piece_id` names the piece and the source is the post that piece is, so this is the same pair `/content` reported when it placed it |
 | `placed` | always empty here, for the mirror of the reason `linked` is empty on `/content`: this route associates posts that already exist and creates none |
 | `linked` | the translation languages the site puts in the source's group **when read back after the write** |
-| `refused` | always empty in a successful answer: every refusal this route has is total, and returns `ok: false` with nothing written |
+| `refused` | always empty: nothing here is refused *per language*. The route's own refusals are whole-request and answer `ok: false` |
 
 `observed_unsupported` is absent rather than empty. This route never asks the
 site which languages it serves, so an empty list would be an absence nothing
@@ -392,8 +435,8 @@ action returns nothing whatever it does, so the only evidence a link was made is
 what the site says afterwards — and a `linked` built from the plan would report
 every language the caller asked for, which is the request echoed back with an
 `ok` beside it. `written` is how many writes were *issued*; the two disagreeing
-is the signal. In particular a `create_group` request currently reports
-`linked: []` — see the note below.
+is the signal, and it is the signal on the create path too — see the note below
+for what this route believes about WPML and has not observed.
 
 The source's own language is not in `linked`. That is what `/content` reported
 under `placed` for this piece, and leaving it out makes an empty `linked`
@@ -410,6 +453,9 @@ the reason is prose and changes freely.
 | `group_unknown` | 409 | WPML returned nothing usable for a post, which is not "in no group" |
 | `already_grouped` | 409 | a post is already in a group, and creating one would detach it |
 | `group_disagreement` | 409 | the site's group for a post is not the one named |
+| `post_out_of_scope` | 403 | a post the plan names is not one this connector published |
+| `source_group_unset` | 500 | the source was written and the site still puts it in no group, so there was no group for the translations to join. **The source was written**; the translations were not |
+| `source_group_unreadable` | 500 | the source was written and WPML then said nothing usable about it, so its group cannot be named. **The source was written**; the translations were not |
 | `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks |
 | `bad_request` | 400 | the content body is not the shape it claims |
 | `capability_mismatch` | 409 | the declaration and the site disagree about WPML |
@@ -422,11 +468,22 @@ the reason is prose and changes freely.
 | `update_failed` | 500 | WordPress refused the update, or returned no id |
 | `no_row_lock` | 503 | the site would not open a transaction, so the text could not be checked and written as one act |
 
-**A `create_group` request reports `linked: []` today.** It writes a null trid for
-every element, and WPML documents a falsy trid as creating a new group for *that*
-element — so the posts may end in one group each, which is what reading the site
-back says. Joining an existing group with `trid` is unaffected. Tracked upstream;
-the report is what made it visible, and it is reported rather than hidden.
+**What the create path believes about WPML, and has not observed.** Three things,
+two from WPML's documentation and one from nowhere:
+
+1. a falsy `trid` creates a new trid for that element and drops its relations —
+   documented;
+2. it does so *per element*, so a set of such writes does not converge on one
+   group — the documented sentence is about one element, and this is the reading
+   of it;
+3. a language-details read in the *same request* answers with the trid the write
+   just invented — **not documented anywhere**, and the ordering above does not
+   work without it.
+
+None of the three has been measured against a live WPML 4.x. If the third is
+false, every `create_group` request refuses `source_group_unset` and writes only
+its source — visible, and never a wrong link. A live check is what would settle
+it. Joining an existing group with `trid` depends on none of this.
 
 ## Development
 

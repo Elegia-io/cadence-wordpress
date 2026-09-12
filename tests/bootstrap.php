@@ -27,6 +27,18 @@ final class WpStub {
      */
     public static array $wpml_write_detaches = [];
 
+    /**
+     * @var list<int> element ids whose write leaves WPML WITH NO USABLE ANSWER.
+     *
+     * Distinct from `$wpml_write_detaches`, which leaves the element in no
+     * group -- a reading. This leaves the element one the language-details
+     * filter says nothing usable about, which is not a reading and must never
+     * be treated as "no group". The create path reads the source back between
+     * its own two writes, so this is the only way to reach the branch where
+     * that read is not an answer.
+     */
+    public static array $wpml_write_unreadable = [];
+
     /** The next group id WPML invents for a write that names none. */
     public static int $next_trid = 900;
 
@@ -160,6 +172,7 @@ final class WpStub {
         self::$wpml_reads = true;
         self::$wpml_writes = true;
         self::$wpml_write_detaches = [];
+        self::$wpml_write_unreadable = [];
         self::$next_trid = 900;
         self::$wpml_declines = false;
         self::$inserted = [];
@@ -187,6 +200,20 @@ final class WpStub {
                                     bool $wpml_knows = true): void {
         self::$posts[$id] = ['post_type' => $post_type, 'language' => $language,
                              'trid' => $trid, 'wpml_knows' => $wpml_knows];
+    }
+
+    /**
+     * MARK A POST AS ONE THIS CONNECTOR PUBLISHED, i.e. inside the scope
+     * `translation.link` reaches.
+     *
+     * Separate from `add_post` and never its default, deliberately: a post on
+     * the site is not a post this plugin made, and a stub whose every post was
+     * one would make the scope check unreachable while every test passed. The
+     * value is what `/content` would have written -- the caller's identifier
+     * for the piece -- and only its non-blankness is read.
+     */
+    public static function cadence_published(int $id, ?string $piece_id = null): void {
+        self::$meta[$id][CadenceContentRequest::META] = $piece_id ?? 'piece-' . $id;
     }
 }
 
@@ -359,7 +386,7 @@ function do_action(string $hook, ...$args): void {
             return;
         }
         WpStub::$posts[$id]['language'] = $d['language_code'] ?? null;
-        WpStub::$posts[$id]['wpml_knows'] = true;
+        WpStub::$posts[$id]['wpml_knows'] = !in_array($id, WpStub::$wpml_write_unreadable, true);
         if (in_array($id, WpStub::$wpml_write_detaches, true)) {
             WpStub::$posts[$id]['trid'] = null;   // the relation is gone
             return;

@@ -230,4 +230,51 @@ final class KeyTest extends TestCase {
         $this->assertFalse(CadenceKey::authorises('a.b', 'content.publish'));
         $this->assertSame([], CadenceKey::all());
     }
+
+    /**
+     * WHAT A CAPABILITY MAY ACT ON, asked of the predicate itself.
+     *
+     * `translation.link` used to reach every post on the site: the per-post
+     * `current_user_can('edit_post', $id)` it replaced had no WordPress user to
+     * ask about, so nothing was left that could say no. The scope is now this
+     * plugin's own posts -- the set it created, and the one set that needs no
+     * configuration on a client's site to stay current.
+     */
+    public function test_a_post_this_connector_published_is_in_scope_and_nothing_else_is(): void {
+        WpStub::reset();
+        WpStub::add_post(1, 'page');
+        WpStub::add_post(2, 'page');
+        WpStub::cadence_published(1, 'piece-2026-en');
+
+        $this->assertTrue(CadenceKey::scope_admits(1));
+        // A page a human wrote. The site has it, WordPress would happily let
+        // anything write to it, and it is not this connector's.
+        $this->assertFalse(CadenceKey::scope_admits(2));
+        // And a post id the site does not have at all is not in scope either --
+        // fail closed, rather than "no meta says nothing, so allow it".
+        $this->assertFalse(CadenceKey::scope_admits(999));
+    }
+
+    /**
+     * THE SCOPE IS THE SET `/content` CREATES, checked by creating one rather
+     * than by writing the meta a test believes it writes.
+     *
+     * This is the join between the two halves, and the reason the meta is the
+     * right instrument: `/content` writes the identifier in the same
+     * `wp_insert_post` call that makes the row, so there is no window in which
+     * a post this pipeline just published is outside the scope of the key that
+     * will link it a moment later.
+     */
+    public function test_a_post_the_content_route_just_created_is_in_scope(): void {
+        WpStub::reset();
+        $r = CadenceContentRequest::run([
+            'piece_id' => 'piece-1', 'language' => 'en', 'post_type' => 'post',
+            'status' => 'draft', 'title' => 'T', 'content' => 'C',
+            'declared' => ['multilingual' => true, 'languages' => ['en']],
+        ], static fn (string $c): bool => false);
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertTrue(CadenceKey::scope_admits($r['post_id']),
+            'a post this connector had just created was outside the scope of a key that links it');
+    }
 }

@@ -137,6 +137,26 @@ final class RestRouteTest extends TestCase {
     }
 
     /**
+     * A POST THE CREDENTIAL DOES NOT REACH IS A 403, and is neither of the two
+     * answers it would otherwise collapse into.
+     *
+     * Not 400: the body is well formed, and a caller told its request is wrong
+     * re-reads its own JSON forever over a request that will never be the
+     * problem. Not 409 either, which means "re-read this site and try again" --
+     * a post does not become one this connector published by being asked about
+     * twice, so that retry is one the status invited and cannot succeed.
+     */
+    public function test_a_post_outside_the_scope_is_403_and_not_400_or_409(): void {
+        $r = CadenceRestRoute::respond(
+            ['ok' => false, 'code' => 'post_out_of_scope', 'reason' => 'x']);
+        $this->assertSame(403, $r['status']);
+        $this->assertSame('post_out_of_scope', $r['body']['code']);
+        $this->assertFalse($r['body']['ok']);
+        $this->assertNotSame(400, $r['status']);
+        $this->assertNotSame(409, $r['status']);
+    }
+
+    /**
      * A SITE THAT CANNOT DO THIS AT ALL IS A 503, not a 400 blaming the request
      * and not a 409 inviting a retry that cannot succeed until someone installs
      * WPML.
@@ -161,9 +181,80 @@ final class RestRouteTest extends TestCase {
         ]]);
         $this->assertSame(200, $r['status']);
         $this->assertArrayNotHasKey('report', $r['body']);
-        $this->assertSame(['ok' => true, 'written' => 2, 'piece_id' => 'piece-1',
+        $this->assertSame(['connector_version' => CadenceRestRoute::VERSION,
+                           'reply_schema' => CadenceRestRoute::REPLY_SCHEMA,
+                           'ok' => true, 'written' => 2, 'piece_id' => 'piece-1',
                            'post_id' => 12, 'placed' => [], 'linked' => ['de'],
                            'refused' => []], $r['body']);
+    }
+
+    /**
+     * EVERY REPLY CARRIES WHICH VERSION ANSWERED, AND WHETHER ITS SHAPE IS ONE
+     * THE SPINE CAN READ -- a success as much as a refusal, since a
+     * half-upgraded fleet needs both told apart no matter which kind of
+     * connector answers. Asked of the constants, not of a literal: a bump to
+     * either constant should not need this test rewritten, only reread as
+     * true.
+     */
+    public function test_every_reply_carries_the_connector_version_and_reply_schema(): void {
+        foreach ([
+            ['ok' => true, 'written' => 2],
+            ['ok' => true, 'created' => true, 'post_id' => 1],
+            ['ok' => false, 'code' => 'bad_plan', 'reason' => 'x'],
+            ['ok' => false, 'code' => 'invented_later'],
+        ] as $i => $result) {
+            $body = CadenceRestRoute::respond($result)['body'];
+            $this->assertSame(CadenceRestRoute::VERSION, $body['connector_version'] ?? null, (string) $i);
+            $this->assertSame(CadenceRestRoute::REPLY_SCHEMA, $body['reply_schema'] ?? null, (string) $i);
+        }
+    }
+
+    /**
+     * A HALF-APPLIED CREATE TAKES ITS COUNT AND ITS REPORT TO THE WIRE. The
+     * linking route's create path can refuse with the source already written,
+     * and this is the one refusal body that is not just `{ok, code, reason}`: a
+     * caller whose ledger saw only the code would file nothing for a run that
+     * changed the site, which is the failure the report exists to prevent one
+     * boundary over.
+     *
+     * A 500 AND NOT A 409, though a re-read is the next step for both codes. The
+     * likeliest cause is that WPML here does not answer a read with the trid a
+     * write in the same request just invented -- in which case every create
+     * fails identically and a caller retrying a 409 loops.
+     */
+    public function test_a_half_applied_create_carries_its_count_and_report(): void {
+        foreach (['source_group_unset', 'source_group_unreadable'] as $code) {
+            $r = CadenceRestRoute::respond(['ok' => false, 'code' => $code,
+                'reason' => 'x', 'written' => 1, 'report' => [
+                    'piece_id' => 'piece-1', 'post_id' => 12,
+                    'placed' => [], 'linked' => [], 'refused' => [],
+                ]]);
+            $this->assertSame(500, $r['status'], $code);
+            $this->assertArrayNotHasKey('report', $r['body'], $code);
+            // The meta pair leads, because `respond` builds this body as
+            // `$meta + ...` and `assertSame` over arrays compares order too.
+            // Asked of the constants so a bump rereads as true (#1273).
+            $this->assertSame(['connector_version' => CadenceRestRoute::VERSION,
+                               'reply_schema' => CadenceRestRoute::REPLY_SCHEMA,
+                               'ok' => false, 'code' => $code, 'reason' => 'x',
+                               'written' => 1, 'piece_id' => 'piece-1',
+                               'post_id' => 12, 'placed' => [], 'linked' => [],
+                               'refused' => []], $r['body'], $code);
+        }
+    }
+
+    /**
+     * AND A REFUSAL THAT WROTE NOTHING SENDS NO COUNT. `written: 0` beside a
+     * refusal reads as a measurement, and every other refusal in this plugin
+     * never reached a write to count -- the absence is the honest shape.
+     */
+    public function test_a_refusal_that_wrote_nothing_carries_no_count(): void {
+        $r = CadenceRestRoute::respond(['ok' => false, 'code' => 'already_grouped', 'reason' => 'x']);
+        $this->assertSame(['connector_version' => CadenceRestRoute::VERSION,
+                           'reply_schema' => CadenceRestRoute::REPLY_SCHEMA,
+                           'ok' => false, 'code' => 'already_grouped',
+                           'reason' => 'x'], $r['body']);
+        $this->assertArrayNotHasKey('written', $r['body']);
     }
 
     /**
@@ -284,6 +375,13 @@ final class RestRouteTest extends TestCase {
         WpStub::add_post(1, 'page', 'en', null);
         WpStub::add_post(2, 'page', 'de', null);
         WpStub::add_post(3, 'page', 'fr', null);
+        // Posts this connector published: what `translation.link` reaches. The
+        // comparison below is between the ids the boundary READS and the ids
+        // the writer WRITES, and it is the write side that the scope gates --
+        // so without this the writer refuses and there is nothing to compare.
+        foreach ([1, 2, 3] as $id) {
+            WpStub::cadence_published($id);
+        }
         $body = $this->body([1, 2, 3]);
 
         $this->assertTrue(CadenceRestRoute::names_posts($body));

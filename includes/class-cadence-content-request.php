@@ -60,12 +60,17 @@ final class CadenceContentRequest {
      *                             to name, and a default would be a licence to
      *                             skip that at the one call site that forgot it.
      * @param int|null $author     the byline the presenting key names, or null
-     *                             for a key issued before a key named one
+     *                             for a key issued before a key named one.
+     *                             OPTIONAL, unlike `$authorises`, and the
+     *                             asymmetry is deliberate: a missing byline
+     *                             leaves `post_author` untouched, which is
+     *                             exactly what a pre-byline key already does,
+     *                             while a missing capability probe would hand
+     *                             out a revision token nobody authorised.
      * @return array{ok: bool, created?: bool, post_id?: int, report?: array,
      *               revision?: string, code?: string, reason?: string}
      */
-    public static function run(array $body, callable $authorises,
-                               ?int $author = null): array {
+    public static function run(array $body, callable $authorises, ?int $author = null): array {
         $fields = self::validate($body);
         if (is_string($fields)) {
             return ['ok' => false, 'code' => 'bad_request', 'reason' => $fields];

@@ -30,7 +30,7 @@ final class ReplaceRequestTest extends TestCase {
     /** Publish a piece the way the pipeline does, and hand back what it was told. */
     private function publish(array $over = []): array {
         $r = CadenceContentRequest::run(array_merge([
-            'external_id' => 'piece-1',
+            'piece_id' => 'piece-1',
             'language'    => 'en',
             // The stub site has the WPML hooks and serves `en` (see
             // ContentRequestTest); a monolingual declaration here would be
@@ -60,7 +60,7 @@ final class ReplaceRequestTest extends TestCase {
     /** A replacement for that piece, naming the revision publishing answered with. */
     private function body(array $published, array $over = []): array {
         return array_merge([
-            'external_id' => 'piece-1',
+            'piece_id' => 'piece-1',
             'post_id'     => $published['post_id'],
             'revision'    => $published['revision'] ?? '',
             'title'       => 'The rewrite',
@@ -207,7 +207,7 @@ final class ReplaceRequestTest extends TestCase {
      */
     public function test_a_replacement_naming_a_post_that_is_a_different_piece_is_refused(): void {
         $one = $this->publish();
-        $two = $this->publish(['external_id' => 'piece-2']);
+        $two = $this->publish(['piece_id' => 'piece-2']);
         $this->assertSame($one['revision'], $two['revision'], 'the two pieces must be indistinguishable by revision');
 
         $r = CadenceReplaceRequest::run($this->body($one, ['post_id' => $two['post_id']]));
@@ -236,7 +236,7 @@ final class ReplaceRequestTest extends TestCase {
     public function test_a_replacement_for_a_post_this_connector_never_published_is_refused(): void {
         WpStub::add_post(7, 'post');
         $r = CadenceReplaceRequest::run([
-            'external_id' => 'piece-1',
+            'piece_id' => 'piece-1',
             'post_id'     => 7,
             // The revision the site does hold for it, so nothing but the
             // identifier is in disagreement.
@@ -279,12 +279,30 @@ final class ReplaceRequestTest extends TestCase {
             WpStub::$meta[$published['post_id']][CadenceContentRequest::META] ?? null);
     }
 
+    /**
+     * `external_id` IS WHAT 0.1.0 CALLED IT on `/content`, and this route was
+     * written asking for it before Elegia-io/cadence#1282 settled that the wire
+     * carries ONE spelling. It asks for `piece_id` now, and accepts the old name
+     * for the same reason `/content` does — but the alias is tested rather than
+     * assumed, because an alias nothing exercises is a line of code claiming a
+     * compatibility nobody has seen work.
+     */
+    public function test_the_released_field_name_still_says_which_piece(): void {
+        $published = $this->publish();
+        $body = $this->body($published);
+        $body['external_id'] = $body['piece_id'];
+        unset($body['piece_id']);
+
+        $r = CadenceReplaceRequest::run($body);
+        $this->assertTrue($r['ok'], 'the 0.1.0 spelling no longer identifies a piece');
+    }
+
     public function test_refuses_a_body_whose_shape_it_cannot_read(): void {
         $published = $this->publish();
         foreach ([
-            'no external_id'        => ['external_id' => null],
-            'external_id is an int' => ['external_id' => 7],
-            'external_id is blank'  => ['external_id' => '   '],
+            'no piece_id'           => ['piece_id' => null],
+            'piece_id is an int'    => ['piece_id' => 7],
+            'piece_id is blank'     => ['piece_id' => '   '],
             'no post_id'            => ['post_id' => null],
             'post_id is a string'   => ['post_id' => '100'],
             'post_id is a float'    => ['post_id' => 100.0],
@@ -346,7 +364,7 @@ final class ReplaceRequestTest extends TestCase {
         $causes = [
             'bad_replacement' => fn (array $p): array => $this->body($p, ['revision' => 7]),
             'post_missing'    => fn (array $p): array => $this->body($p, ['post_id' => 4242]),
-            'identifier_mismatch' => fn (array $p): array => $this->body($p, ['external_id' => 'piece-9']),
+            'identifier_mismatch' => fn (array $p): array => $this->body($p, ['piece_id' => 'piece-9']),
             'revision_mismatch'   => fn (array $p): array => $this->body($p, [
                 'revision' => CadenceRevision::of('something', 'else')]),
             'update_failed' => function (array $p): array {
@@ -509,7 +527,7 @@ final class ReplaceRequestTest extends TestCase {
         foreach ([
             'bad_replacement'     => ['revision' => 7],
             'post_missing'        => ['post_id' => 4242],
-            'identifier_mismatch' => ['external_id' => 'piece-9'],
+            'identifier_mismatch' => ['piece_id' => 'piece-9'],
         ] as $code => $over) {
             $GLOBALS['wpdb']->log = [];
             $r = CadenceReplaceRequest::run($this->body($published, $over));

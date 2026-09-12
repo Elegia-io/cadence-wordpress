@@ -251,7 +251,7 @@ overwrite.
 
 ```json
 {
-  "external_id": "piece-2026-08-31-en",
+  "piece_id":    "piece-2026-08-31-en",
   "post_id":     41,
   "revision":    "sha256:9f2c…",
   "title":       "A corrected title",
@@ -265,7 +265,10 @@ destroys work somebody did by hand, exactly as a wrong translation link does. So
 this plugin re-reads the post, hashes what it finds, and refuses when that is not
 the `revision` the request names. Nothing is written on any refusal.
 
-`post_id` and `external_id` must agree with each other on this site: the post
+`external_id` is accepted here as the 0.1.0 spelling of `piece_id`, the same way
+`/content` accepts it: one value carries one name across the wire.
+
+`post_id` and `piece_id` must agree with each other on this site: the post
 named has to be the piece named. The refusal says which of the two ways they
 disagree — that post is a different piece of this plugin's, or it is none of
 its — without naming the identifier the site stores, which is protected meta

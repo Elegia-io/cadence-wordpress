@@ -561,7 +561,7 @@ final class PluginTest extends TestCase {
         $this->assertTrue(($this->route[2]['permission_callback'])(new WP_REST_Request($plan, $b)));
         $refused = $link(new WP_REST_Request($plan, $b));
         $this->assertSame(403, $refused->get_status());
-        $this->assertSame('post_other_key', $refused->get_data()['code']);
+        $this->assertSame('post_out_of_scope', $refused->get_data()['code']);
         $this->assertSame([], WpStub::$writes, "a second tenant's key linked these posts anyway");
 
         // THE ACCEPT-PROOF: tenant A links its own pieces, through the same
@@ -570,6 +570,73 @@ final class PluginTest extends TestCase {
         $this->assertSame(200, $linked->get_status(), (string) ($linked->get_data()['reason'] ?? ''));
         $this->assertSame(2, $linked->get_data()['written']);
         $this->assertCount(2, WpStub::$writes);
+    }
+
+    /**
+     * AND TENANT B CANNOT TELL TENANT A'S POSTS FROM POSTS THAT ARE NOT THERE,
+     * asserted on the REPLY BODY through the registered route.
+     *
+     * `post_other_key` used to answer "this connector published that post and a
+     * different key did" beside `post_out_of_scope`'s "absent, or not this
+     * connector's". The pair sorted every integer on the site into another
+     * tenant's Cadence pieces and everything else -- one `403` at a time, to a
+     * caller holding a leaked connector key and nothing else, because this
+     * route verifies no attestation. Provenance is the fact per-key scope was
+     * added to protect, so the two questions are asked as one.
+     *
+     * OFF THE BODY AND NOT OFF `run`'s RETURN: what leaks is what reaches the
+     * caller, and a field that never left the plugin proves nothing.
+     */
+    public function test_a_second_tenant_cannot_tell_the_first_tenants_posts_from_absent_ones(): void {
+        $a = $this->key(CadenceKey::issue('tenant-a', ['content.publish', 'translation.link'], 7));
+        $b = $this->key(CadenceKey::issue('tenant-b', ['content.publish', 'translation.link'], 7));
+        $publish = $this->routes['/content']['callback'];
+        $link    = $this->route[2]['callback'];
+
+        $made = $publish(new WP_REST_Request([
+            'piece_id' => 'a-en', 'post_type' => 'post', 'status' => 'publish',
+            'title' => 'T', 'content' => 'C', 'language' => 'en',
+            'declared' => ['multilingual' => true, 'languages' => ['en', 'de']]], $a));
+        $this->assertSame(201, $made->get_status());
+        $theirs = $made->get_data()['post_id'];
+
+        $mine = $publish(new WP_REST_Request([
+            'piece_id' => 'b-de', 'post_type' => 'post', 'status' => 'publish',
+            'title' => 'T', 'content' => 'C', 'language' => 'de',
+            'declared' => ['multilingual' => true, 'languages' => ['en', 'de']]], $b));
+        $this->assertSame(201, $mine->get_status());
+
+        // A post on the site this connector never published, of the type the
+        // plan names -- so nothing but the Cadence stamp separates it from
+        // tenant A's, and an existence or type read moved above the scope loop
+        // would show up as a third answer here.
+        $a_stranger = 5000;
+        WpStub::add_post($a_stranger, 'post', 'en', null);
+        $absent = 5001;
+
+        $bodies = [];
+        foreach (['absent' => $absent, 'not ours' => $a_stranger, "tenant A's" => $theirs] as $case => $probe) {
+            WpStub::$writes = [];
+            $plan = ['trid' => null, 'create_group' => true,
+                     'source' => ['post_id' => $probe, 'language_code' => 'en',
+                                  'element_type' => 'post_post', 'source_language_code' => null],
+                     'translations' => [['post_id' => $mine->get_data()['post_id'],
+                                         'language_code' => 'de', 'element_type' => 'post_post',
+                                         'source_language_code' => 'en']]];
+            $r = $link(new WP_REST_Request($plan, $b));
+            $this->assertSame(403, $r->get_status(), $case);
+            $this->assertSame([], WpStub::$writes, $case);
+            $body = $r->get_data();
+            $this->assertFalse($body['ok'], $case);
+            // The whole body, not the code alone: a status, a branch name or a
+            // stray field would separate the cases just as well as a sentence.
+            $bodies[$case] = preg_replace('/\d+/', '<n>', json_encode($body));
+        }
+        $this->assertCount(1, array_unique($bodies),
+            'a second tenant could tell the three cases apart: ' . implode(' | ', $bodies));
+        $this->assertStringContainsString('post_out_of_scope', $bodies['absent']);
+        // AND THE ACCEPT-PROOF is the test above: tenant A links the same
+        // pieces through the same route and is written.
     }
 
     /**

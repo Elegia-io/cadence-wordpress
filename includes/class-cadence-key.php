@@ -156,6 +156,34 @@ final class CadenceKey {
     }
 
     /**
+     * DOES THIS KEY REACH THIS POST AT ALL? The two predicates above asked as
+     * ONE, and the only form the link route is allowed to ask them in.
+     *
+     * `scope_admits` and `created_by` are separate facts and stay separately
+     * testable, but a caller must not be able to tell which of them said no.
+     * Answered apart, the pair is a provenance oracle: "absent or not ours"
+     * against "ours but another key's" partitions every id on the site into
+     * the other tenant's Cadence posts and everything else, and a key holding
+     * `translation.link` can walk it one refusal at a time. Provenance --
+     * which of two tenants on one site published a given post -- is the thing
+     * per-key scope exists to protect, so the connector answers the
+     * conjunction and the caller sees one bit: does this key reach post N.
+     *
+     * SHORT-CIRCUIT ON PURPOSE. `created_by` is not asked about a post the
+     * connector never published; it would answer `true` for one (no stamp, so
+     * the null-identity path), and a reader could mistake that for entitlement.
+     *
+     * `/content/replace` asks `created_by` on its own instead, and is not the
+     * same exposure: it verifies the request's attestation before it reads
+     * anything about the post, so the finer answers there cost a signing key
+     * rather than a leaked connector key. Any route that asks WITHOUT
+     * verification first should ask here.
+     */
+    public static function reaches(int $post_id, ?string $key_id): bool {
+        return self::scope_admits($post_id) && self::created_by($post_id, $key_id);
+    }
+
+    /**
      * THE PUBLIC ID A PRESENTED KEY AUTHENTICATES AS, or null.
      *
      * The id and never the secret: this is what gets written into a post's meta

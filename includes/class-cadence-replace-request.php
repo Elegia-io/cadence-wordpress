@@ -173,9 +173,12 @@ final class CadenceReplaceRequest {
             // The id and the claim, and nothing else: not the key id the post
             // carries, which is another tenant's identifier; not the post's
             // type, its title, its author or its revision. Its own sentence
-            // and its own code, never `post_other_key`'s -- that one says
-            // nothing was LINKED, and a caller matching on it would be told
-            // about an act it did not ask for.
+            // and its own code, never the linking route's
+            // `post_out_of_scope` -- that one says nothing was LINKED, and a
+            // caller matching on it would be told about an act it did not ask
+            // for. That route merges this predicate with `scope_admits`
+            // because it verifies no attestation; here the verify above has
+            // already run, so the finer answer costs a signing key.
             return ['ok' => false, 'code' => 'replace_other_key', 'reason' => sprintf(
                 'post %d was published through a different connector key, and a key may '
                 . 'replace only its own pieces; nothing was written',

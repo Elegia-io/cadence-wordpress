@@ -118,7 +118,11 @@ final class RestRouteTest extends TestCase {
      * ever ask about the codes it already knows.
      */
     public function test_every_published_refusal_code_is_mapped(): void {
-        $published = array_merge(CadenceLinkRequest::REFUSAL_CODES, CadenceContentRequest::REFUSAL_CODES);
+        $published = array_merge(
+            CadenceLinkRequest::REFUSAL_CODES,
+            CadenceContentRequest::REFUSAL_CODES,
+            CadenceReplaceRequest::REFUSAL_CODES
+        );
         $this->assertNotEmpty($published);
         foreach ($published as $code) {
             // Asked of the TABLE, not of the status the table produces. 500 is
@@ -181,6 +185,40 @@ final class RestRouteTest extends TestCase {
     }
 
     /**
+     * A REWRITE IS A DIFFERENT ANSWER FROM A BAD REQUEST. The three below say
+     * the site disagrees with what the caller believed, and a caller that
+     * re-reads may find the disagreement gone; `bad_replacement` is wrong
+     * however many times it is sent, and `update_failed` is this server's own.
+     */
+    public function test_a_stale_replacement_is_409_and_a_malformed_one_is_400(): void {
+        foreach (['post_missing', 'identifier_mismatch', 'revision_mismatch'] as $code) {
+            $r = CadenceRestRoute::respond(['ok' => false, 'code' => $code, 'reason' => 'x']);
+            $this->assertSame(409, $r['status'], $code);
+            $this->assertSame($code, $r['body']['code']);
+        }
+        $this->assertSame(400, CadenceRestRoute::respond(
+            ['ok' => false, 'code' => 'bad_replacement', 'reason' => 'x'])['status']);
+        $this->assertSame(500, CadenceRestRoute::respond(
+            ['ok' => false, 'code' => 'update_failed', 'reason' => 'x'])['status']);
+    }
+
+    /**
+     * THE ANSWER CARRIES THE REVISION. `respond` copies a named set of keys out
+     * of the result and drops everything else -- silently, and with a 200 --
+     * so a revision the writer computed and this table has not been told about
+     * never reaches the caller, and the caller cannot make its next
+     * replacement at all.
+     */
+    public function test_a_rewrite_answers_200_and_carries_the_new_revision(): void {
+        $r = CadenceRestRoute::respond(['ok' => true, 'post_id' => 12,
+                                        'created' => false, 'revision' => 'sha256:abc']);
+        $this->assertSame(200, $r['status']);
+        $this->assertSame('sha256:abc', $r['body']['revision'] ?? null,
+            'the answer dropped the key the caller needs to replace this post next time');
+        $this->assertSame(12, $r['body']['post_id']);
+    }
+
+    /**
      * THE `ABSPATH` GUARD ACTUALLY GUARDS. It is one line of boilerplate that
      * says `exit`, which is exactly the kind of line that gets the constant
      * name wrong and is never noticed, because in the suite ABSPATH is defined
@@ -213,6 +251,8 @@ final class RestRouteTest extends TestCase {
             ['class-cadence-key.php', 'CadenceKey'],
             ['class-cadence-language-declaration.php', 'CadenceLanguageDeclaration'],
             ['class-cadence-admin.php', 'CadenceAdmin'],
+            ['class-cadence-replace-request.php', 'CadenceReplaceRequest'],
+            ['class-cadence-revision.php', 'CadenceRevision'],
         ];
     }
 

@@ -66,8 +66,41 @@ final class CadenceAdmin {
         check_admin_referer(self::ACTION);
         $error  = '';
         $post   = wp_unslash($_POST);
-        if (($post['do'] ?? '') === 'revoke') {
-            CadenceKey::revoke(sanitize_text_field((string) ($post['id'] ?? '')));
+        $do = (string) ($post['do'] ?? '');
+        $id = sanitize_text_field((string) ($post['id'] ?? ''));
+        if ($do === 'revoke') {
+            CadenceKey::revoke($id);
+        } elseif ($do === 'attest') {
+            // THE ONLY WAY A VERIFYING KEY EVER GETS ONTO THIS SITE, and it is
+            // a human pasting it behind `manage_options`. There is no upload
+            // route and no API write channel, and adding one would be the end
+            // of the property: whoever can set the verifying key can sign
+            // anything as this tenant, so a grant that could set it would BE
+            // the boundary this whole feature draws. The cost is an operator
+            // typing 44 characters during a rotation, once.
+            //
+            // The value goes over UNJUDGED, exactly as the publish scope does.
+            // Whether it is base64, 32 bytes, a name already taken or a third
+            // entry is `CadenceKey`'s question; deciding it here would be a
+            // decision nothing runs a test against, and a wrong paste stored
+            // silently surfaces as `mismatch` on a client's site -- a refusal
+            // that says the body was tampered with, over a typo.
+            $result = CadenceKey::add_verify_key(
+                $id,
+                sanitize_text_field((string) ($post['kid'] ?? '')),
+                sanitize_text_field((string) ($post['public_key'] ?? ''))
+            );
+            if (is_string($result)) {
+                $error = $result;
+            }
+        } elseif ($do === 'attest_remove') {
+            CadenceKey::remove_verify_key($id, sanitize_text_field((string) ($post['kid'] ?? '')));
+        } elseif ($do === 'unsigned_on' || $do === 'unsigned_off') {
+            // WHO SET IT AND WHEN, recorded at the one moment there is a human
+            // to record. `get_current_user_id` and not a value the form
+            // posted: a provenance field a form can choose is a provenance
+            // field an operator can disown.
+            CadenceKey::set_unsigned_ok($id, $do === 'unsigned_on', get_current_user_id());
         } else {
             $capabilities = array_values(array_intersect(
                 CadenceKey::CAPABILITIES,
@@ -132,7 +165,31 @@ final class CadenceAdmin {
             echo '<div class="notice notice-warning"><p>Copy this key now; it is not shown again.</p><p><code>'
                 . esc_html($issued) . '</code></p></div>';
         }
-        echo '<table class="widefat"><thead><tr><th>Label</th><th>Id</th><th>Grants</th><th>Publishes in</th><th>Byline</th><th>State</th><th></th></tr></thead><tbody>';
+        // EVERY KEY PUBLISHING UNSIGNED, NAMED, AT THE TOP OF THE SCREEN.
+        //
+        // One notice per key and never a single "some keys are exempt": an
+        // operator with four tenants has to know WHICH one is unattested, and
+        // a notice that made them go and check each row is a notice that gets
+        // dismissed. Nothing at all is printed when no key carries it, so the
+        // warning stays a warning rather than furniture.
+        foreach (CadenceKey::all() as $warn_id => $warn_record) {
+            $flag = CadenceKey::unsigned_ok($warn_id);
+            if ($flag === null) {
+                continue;
+            }
+            echo '<div class="notice notice-warning"><p>'
+                . 'Key <strong>' . esc_html((string) $warn_record['label']) . '</strong> '
+                . '(<code>' . esc_html($warn_id) . '</code>) publishes WITHOUT a signature: '
+                . 'a request that carries no attestation header is accepted. '
+                . 'Set ' . esc_html(date_i18n('Y-m-d H:i', $flag['set_at']))
+                . ($flag['by_user'] !== null
+                    ? ' by ' . esc_html(get_the_author_meta('display_name', $flag['by_user'])
+                                        ?: '#' . $flag['by_user'])
+                    : '')
+                . '. A request that carries a BAD signature is still refused.'
+                . '</p></div>';
+        }
+        echo '<table class="widefat"><thead><tr><th>Label</th><th>Id</th><th>Grants</th><th>Publishes in</th><th>Byline</th><th>Attestation</th><th>State</th><th></th></tr></thead><tbody>';
         foreach (CadenceKey::all() as $id => $record) {
             echo '<tr><td>' . esc_html((string) $record['label']) . '</td>'
                 . '<td><code>' . esc_html($id) . '</code></td>'
@@ -155,13 +212,16 @@ final class CadenceAdmin {
                     ? esc_html(get_the_author_meta('display_name', (int) $record['author'])
                                ?: '#' . (int) $record['author'])
                     : 'none — re-issue to set one') . '</td>'
+                . '<td>' . self::attestation_cell($id) . '</td>'
                 . '<td>' . ($record['revoked_at'] === null ? 'active' : 'revoked') . '</td><td>';
             if ($record['revoked_at'] === null) {
                 self::form(['do' => 'revoke', 'id' => $id], 'Revoke');
             }
             echo '</td></tr>';
         }
-        echo '</tbody></table><h2>Issue a key</h2>';
+        echo '</tbody></table>';
+        self::attestation_forms();
+        echo '<h2>Issue a key</h2>';
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field(self::ACTION);
         echo '<input type="hidden" name="action" value="' . esc_attr(self::ACTION) . '">';
@@ -187,6 +247,79 @@ final class CadenceAdmin {
                 . esc_html($capability) . '</label></p>';
         }
         echo '<p><button class="button button-primary">Issue</button></p></form></div>';
+    }
+
+    /**
+     * WHICH PUBLIC KEYS THIS CONNECTOR KEY HOLDS, in its own row.
+     *
+     * The kid and never the key: the bytes are public and printing them would
+     * still fill a column with 44 characters nobody reads, and the kid is what
+     * a reply names and therefore what an operator compares against.
+     */
+    private static function attestation_cell(string $id): string {
+        $keys = CadenceKey::verify_keys($id);
+        if ($keys === []) {
+            // NOT BLANK, because blank reads as "fine". A key with no public
+            // key refuses every signed publish it is ever presented for.
+            return '<em>none — every signed publish is refused</em>';
+        }
+        $out = [];
+        foreach ($keys as $record) {
+            $out[] = '<code>' . esc_html((string) $record['kid']) . '</code>';
+        }
+        return implode('<br>', $out);
+    }
+
+    /**
+     * THE PASTE, THE REMOVAL AND THE EXEMPTION, one form set per key.
+     *
+     * Below the table rather than inside it, because a 44-character field in a
+     * table cell is unusable and because these are the three acts an operator
+     * performs during a rotation: paste the arriving key, watch the replies
+     * name it, remove the retiring one.
+     */
+    private static function attestation_forms(): void {
+        $keys = CadenceKey::all();
+        if ($keys === []) {
+            return;
+        }
+        echo '<h2>Attestation keys</h2>';
+        echo '<p>The public half of the key the pipeline signs with. Paste it here by hand: '
+            . 'there is no upload route and no API that can write it, deliberately — whoever can '
+            . 'set this key can sign anything as this tenant. A key may hold '
+            . esc_html((string) CadenceKey::MAX_VERIFY_KEYS)
+            . ' at once, so a rotation has an overlap window; remove the retired one to make room '
+            . 'for the next.</p>';
+        foreach ($keys as $id => $record) {
+            echo '<h3>' . esc_html((string) $record['label'])
+                . ' <code>' . esc_html($id) . '</code></h3>';
+            foreach (CadenceKey::verify_keys($id) as $stored) {
+                echo '<p><code>' . esc_html((string) $stored['kid']) . '</code> ';
+                self::form(['do' => 'attest_remove', 'id' => $id, 'kid' => (string) $stored['kid']],
+                           'Remove');
+                echo '</p>';
+            }
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+            wp_nonce_field(self::ACTION);
+            echo '<input type="hidden" name="action" value="' . esc_attr(self::ACTION) . '">';
+            echo '<input type="hidden" name="do" value="attest">';
+            echo '<input type="hidden" name="id" value="' . esc_attr($id) . '">';
+            echo '<p><label>Key id <input name="kid" placeholder="16 lowercase hex" required>'
+                . '</label> <label>Public key '
+                . '<input name="public_key" size="50" placeholder="base64, 32 bytes" required>'
+                . '</label> <button class="button">Add</button></p></form>';
+            // THE EXEMPTION, BESIDE THE KEY IT APPLIES TO and never a global
+            // switch: it is a per-tenant migration state, and a site-wide one
+            // would be turned on for the tenant that needed it and left on for
+            // the three that did not.
+            if (CadenceKey::unsigned_ok($id) === null) {
+                self::form(['do' => 'unsigned_on', 'id' => $id],
+                           'Allow unsigned publishes from this key');
+            } else {
+                self::form(['do' => 'unsigned_off', 'id' => $id],
+                           'Require a signature from this key');
+            }
+        }
     }
 
     /**

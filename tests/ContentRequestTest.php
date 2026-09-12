@@ -16,6 +16,9 @@ use PHPUnit\Framework\TestCase;
  */
 final class ContentRequestTest extends TestCase {
 
+    /** The helper's "sign this body with the suite's key" sentinel, distinct from any header. */
+    private const SIGN = "\0sign";
+
     protected function setUp(): void {
         WpStub::reset();
         WpStub::$capabilities = ['publish_posts' => [null], 'edit_posts' => [null]];
@@ -60,7 +63,8 @@ final class ContentRequestTest extends TestCase {
      */
     private function publish(array $body, array $capabilities = ['content.replace'],
                              ?int $author = null, ?array $post_types = null,
-                             ?string $key_id = null): array {
+                             ?string $key_id = CadenceAttest::KEY_ID,
+                             $attestation = self::SIGN): array {
         return CadenceContentRequest::run(
             $body,
             static fn (string $capability): bool => in_array($capability, $capabilities, true),
@@ -71,7 +75,10 @@ final class ContentRequestTest extends TestCase {
             // a key that named no type from a call site that forgot to ask.
             $post_types,
             $author,
-            $key_id
+            $key_id,
+            $attestation === self::SIGN
+                ? CadenceAttest::header('/content', CadenceAttest::fields('/content', $body), $key_id)
+                : $attestation
         );
     }
 
@@ -326,15 +333,28 @@ final class ContentRequestTest extends TestCase {
     }
 
     /**
-     * AND A CALLER THIS ROUTE CANNOT NAME STAMPS NOTHING, exactly as every
-     * insert did before the stamp existed.
+     * AND A CALLER THIS ROUTE CANNOT NAME NOW PUBLISHES NOTHING AT ALL.
+     *
+     * It used to publish and merely stamp nothing. The attestation is stored
+     * per connector key, so a request this route cannot name has no record to
+     * hold a public key -- there is nothing on this site a signature could be
+     * checked against, which is `no_public_key` and not `unknown_kid`. The
+     * stamp is still absent, and now so is the post: an insert is the thing
+     * that must not happen, and the meta is only how it would have been marked.
+     *
+     * IT IS UNREACHABLE THROUGH THE ROUTE and asserted anyway. Both
+     * `permission_callback`s require a key that authenticates before this
+     * runs, so `key_id` is never null there -- this is the layer below saying
+     * no on its own, rather than trusting the layer above to have said it.
      */
-    public function test_a_publish_with_no_key_id_stamps_nothing(): void {
-        $r = $this->publish($this->body());
+    public function test_a_publish_this_route_cannot_name_is_refused_and_writes_nothing(): void {
+        $r = $this->publish($this->body(), ['content.replace'], null, null, null);
 
-        $this->assertTrue($r['ok'], $r['reason'] ?? '');
-        $this->assertArrayNotHasKey(CadenceContentRequest::KEY_META,
-                                    WpStub::$inserted[0]['meta_input'] ?? []);
+        $this->assertFalse($r['ok'], 'a request naming no connector key published anyway');
+        $this->assertSame('attestation_unverified', $r['code']);
+        $this->assertStringContainsString('carries no attestation public key at all', $r['reason'],
+            'the refusal did not name the no_public_key branch');
+        $this->assertSame([], WpStub::$inserted);
     }
 
     /**

@@ -703,6 +703,11 @@ function get_the_author_meta(string $field, int $user_id) {
  * site by construction, so this stub answers with one: the id `CadenceKey`'s
  * own stub map already has a name for.
  */
+/** WordPress's localised date formatter; the format is all a test needs. */
+function date_i18n(string $format, ?int $timestamp = null): string {
+    return date($format, $timestamp ?? time());
+}
+
 function get_current_user_id(): int {
     return 7;
 }
@@ -754,8 +759,39 @@ final class WP_REST_Response {
  * WordPress returns null rather than '' for a header that was not sent.
  */
 final class WP_REST_Request {
+
+    /**
+     * "THIS CALLER PRESENTED NOTHING", said explicitly.
+     *
+     * The constructor hands a headerless request with a body the suite's own
+     * exempt key, so that route tests written before the attestation existed
+     * go on reaching the handler they are about. A test probing a
+     * `permission_callback` means the opposite -- nobody presented anything --
+     * and has to be able to say so, because for that one the credential IS the
+     * thing under test. A header name no code reads: present, so nothing is
+     * injected; meaningless, so nothing is authorised.
+     */
+    public const NO_KEY = ['x-cadence-test-no-credentials' => '1'];
     /** @param array<string, string> $headers */
-    public function __construct(private $json, private array $headers = []) {}
+    public function __construct(private $json, private array $headers = []) {
+        // A REQUEST WITH NO HEADERS AT ALL IS A LEGACY CALLER, and this stub
+        // gives it the one credential those tests always assumed they had: a
+        // connector key carrying the UNSIGNED-PUBLISH EXEMPTION. Not a signed
+        // header -- a test that supplied itself a valid signature by default
+        // would make every route test pass the attestation without ever
+        // composing one, which is the guard testing itself. The exemption is
+        // what an un-upgraded site actually has, these tests predate the
+        // header, and the ones that are ABOUT attestation pass headers.
+        // AND ONLY FOR A REQUEST THAT CARRIES A BODY. `new WP_REST_Request(null)`
+        // and `new WP_REST_Request([])` are this file's "nobody presented
+        // anything" probes against the permission callbacks, and handing those
+        // a credential would make a test that asserts an empty request is
+        // refused assert nothing at all.
+        if ($this->headers === [] && is_array($this->json) && $this->json !== []) {
+            CadenceAttest::exempt_key();
+            $this->headers = [strtolower(CadenceKey::HEADER) => CadenceAttest::secret()];
+        }
+    }
     public function get_json_params() { return $this->json; }
     public function get_header(string $name) {
         // WordPress normalises header names; so does this, so a test naming the
@@ -765,6 +801,7 @@ final class WP_REST_Request {
 }
 
 require_once __DIR__ . '/../includes/class-cadence-key.php';
+require_once __DIR__ . '/../includes/class-cadence-attestation.php';
 require_once __DIR__ . '/../includes/class-cadence-language-declaration.php';
 
 $GLOBALS['wpdb'] = new WpdbStub();
@@ -775,3 +812,134 @@ require_once __DIR__ . '/../includes/class-cadence-revision.php';
 require_once __DIR__ . '/../includes/class-cadence-content-request.php';
 require_once __DIR__ . '/../includes/class-cadence-admin.php';
 require_once __DIR__ . '/../includes/class-cadence-replace-request.php';
+
+/**
+ * THE SIGNING SIDE, IN THE TEST SUITE ONLY.
+ *
+ * The connector never signs anything -- it verifies -- so no production code
+ * here composes a valid header, and a suite that could build only INVALID ones
+ * would test the five refusals and never the acceptance. This is the spine's
+ * half reduced to what a test needs: a keypair, and the header a spine sends.
+ *
+ * IT DOES NOT COMPOSE THE MATERIAL ITSELF. It calls
+ * `CadenceAttestation::material`, so every helper-signed header agrees with the
+ * verifier BY CONSTRUCTION -- which means this file proves nothing about the
+ * canonical form, and `AttestationTest`'s three contract vectors, signed
+ * elsewhere by a key this file never sees, are the only thing standing between
+ * this suite and a self-consistent wrong layout. Deliberate: the vectors are
+ * the oracle and this is a convenience, and a convenience that re-derived the
+ * bytes would be a second implementation nobody checks.
+ */
+final class CadenceAttest {
+
+    /** The connector key the suite's signed requests authenticate as. */
+    public const KEY_ID = 'ca11ab1e0000key1';
+
+    /** The attestation key id those requests name. 16 lowercase hex. */
+    public const KID = 'a1b2c3d4e5f60718';
+
+    /** @var array{pk: string, sk: string}|null */
+    private static $pair = null;
+
+    /** One keypair per suite run, so no test can pass against a pinned signature. */
+    public static function pair(): array {
+        if (self::$pair === null) {
+            $keypair = sodium_crypto_sign_keypair();
+            self::$pair = ['pk' => sodium_crypto_sign_publickey($keypair),
+                           'sk' => sodium_crypto_sign_secretkey($keypair)];
+        }
+        return self::$pair;
+    }
+
+    public static function public_key_base64(): string {
+        return base64_encode(self::pair()['pk']);
+    }
+
+    /** The signed field set a body reduces to, with the alias resolved as the routes do. */
+    public static function fields(string $route, array $body): array {
+        if (!isset($body['piece_id']) && isset($body['external_id'])) {
+            $body['piece_id'] = $body['external_id'];
+        }
+        $out = [];
+        foreach (CadenceAttestation::FIELDS[$route] as $name) {
+            $value = $body[$name] ?? '';
+            // A BODY THE ROUTE WILL REFUSE AS `bad_request` STILL GETS A
+            // HEADER. The helper is called before `run`, so it sees bodies
+            // whose fields are arrays or missing; it signs the empty string
+            // for those rather than throwing, because what those tests assert
+            // is that validation refuses FIRST and the header is never read.
+            if ($name === CadenceAttestation::INTEGER_FIELD) {
+                // The composer refuses a string here, deliberately. A body
+                // carrying one is `bad_replacement` before the header is ever
+                // read, so the helper signs 0 rather than throwing on its way
+                // to a refusal that is not about the signature.
+                $out[$name] = is_int($value) ? $value : 0;
+                continue;
+            }
+            $out[$name] = (is_string($value) || is_int($value)) ? $value : '';
+        }
+        return $out;
+    }
+
+    /** Unpadded base64url of an Ed25519 signature over the 32 RAW digest bytes. */
+    public static function sign(string $material, ?string $sk = null): string {
+        $signature = sodium_crypto_sign_detached(
+            CadenceAttestation::digest($material), $sk ?? self::pair()['sk']);
+        return rtrim(strtr(base64_encode($signature), '+/', '-_'), '=');
+    }
+
+    /**
+     * The header a spine would send for this body, with the public key already
+     * pasted onto the connector key it names. Installing on the way past is
+     * what keeps every publish test from having to know a verifying key exists.
+     */
+    public static function header(string $route, array $fields, ?string $key_id,
+                                  ?string $kid = null): string {
+        $kid = $kid ?? self::KID;
+        if ($key_id !== null) {
+            self::install($key_id, $kid);
+        }
+        return 'v1 ' . $kid . ' ' . self::sign(CadenceAttestation::material($route, $fields));
+    }
+
+    /** The presented secret for the suite's own connector key. */
+    public static function secret(): string {
+        self::install(self::KEY_ID);
+        return self::KEY_ID . '.x';
+    }
+
+    /**
+     * The suite's key, carrying the unsigned-publish exemption.
+     *
+     * What an un-upgraded site has, and the ONLY thing the exemption covers:
+     * an absent header. A test that sends a BAD header to this key is refused
+     * exactly as it would be on a key without it, which is what
+     * `AttestationTest` pins.
+     */
+    public static function exempt_key(string $key_id = self::KEY_ID): string {
+        self::install($key_id);
+        CadenceKey::set_unsigned_ok($key_id, true, 1);
+        return $key_id;
+    }
+
+    /** Put a connector key record on the site, carrying this public key. */
+    public static function install(string $key_id, ?string $kid = null): void {
+        $keys = get_option(CadenceKey::OPTION, []);
+        if (!is_array($keys)) {
+            $keys = [];
+        }
+        if (!isset($keys[$key_id])) {
+            $keys[$key_id] = ['label' => 'test', 'hash' => hash('sha256', 'x'),
+                              'caps' => CadenceKey::CAPABILITIES, 'author' => 1,
+                              'created' => 0, 'revoked_at' => null];
+            update_option(CadenceKey::OPTION, $keys);
+        }
+        $kid = $kid ?? self::KID;
+        foreach (CadenceKey::verify_keys($key_id) as $record) {
+            if (($record['kid'] ?? null) === $kid) {
+                return;
+            }
+        }
+        CadenceKey::add_verify_key($key_id, $kid, self::public_key_base64());
+    }
+}

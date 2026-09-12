@@ -75,6 +75,7 @@ final class CadenceReplaceRequest {
         'revision_mismatch',
         'update_failed',
         'no_row_lock',
+        CadenceAttestation::CODE,
     ];
 
     /**
@@ -105,10 +106,28 @@ final class CadenceReplaceRequest {
      *                    but it would be doing so silently.
      * @return array{ok: bool, created?: bool, post_id?: int, revision?: string, code?: string, reason?: string}
      */
-    public static function run(array $body, ?array $post_types, ?string $key_id): array {
+    public static function run(array $body, ?array $post_types, ?string $key_id,
+                               ?string $attestation): array {
         $fields = self::validate($body);
         if (is_string($fields)) {
             return ['ok' => false, 'code' => 'bad_replacement', 'reason' => $fields];
+        }
+
+        // THE ATTESTATION, BEFORE THIS SITE IS ASKED ANYTHING AT ALL.
+        //
+        // The same placement as `/content`'s and for the same reasons, and one
+        // more that is this route's own: every refusal below reads the post
+        // being replaced. `post_missing` says whether an id exists here,
+        // `replace_other_key` which key made it, `identifier_mismatch` which
+        // piece it is -- three facts about a client's site, each answerable one
+        // refusal at a time by a caller holding a leaked connector key and no
+        // signing key. Verified first, that caller learns nothing.
+        //
+        // `validate` has already refused a `post_id` that is not an integer, so
+        // the material's decimal-ASCII rendering of it is never a coercion.
+        $attested = CadenceAttestation::verify($attestation, '/content/replace', $fields, $key_id);
+        if ($attested['ok'] !== true) {
+            return ['ok' => false, 'code' => $attested['code'], 'reason' => $attested['reason']];
         }
 
         // READ THE POST BEFORE ANYTHING IS DECIDED ABOUT IT. `wp_update_post`
@@ -275,7 +294,7 @@ final class CadenceReplaceRequest {
                         $fields['post_id'], $actual, $fields['revision'])]);
             }
 
-            return self::write($wpdb, $fields);
+            return self::write($wpdb, $fields, $attested);
         } catch (Throwable $e) {
             // Any plugin on the site can hang code on `save_post`, and code
             // that throws inside an open transaction would otherwise leave the
@@ -298,7 +317,7 @@ final class CadenceReplaceRequest {
      *
      * @param array{piece_id: string, post_id: int, revision: string, title: string, content: string} $fields
      */
-    private static function write(object $wpdb, array $fields): array {
+    private static function write(object $wpdb, array $fields, array $attested): array {
         $id = wp_update_post([
             'ID'           => $fields['post_id'],
             'post_title'   => $fields['title'],
@@ -329,7 +348,12 @@ final class CadenceReplaceRequest {
         // Read back before the row is released, so the revision answered is
         // the one this site holds under the same lock the write was made in.
         $answer = array_merge(
-            ['ok' => true, 'created' => false, 'post_id' => $id],
+            ['ok' => true, 'created' => false, 'post_id' => $id,
+             // WHAT THE ATTESTATION SAID, carried down from `run` rather than
+             // re-derived: one verification per request, and a second here
+             // would be a second chance to disagree with the first.
+             'attestation' => $attested['attestation']]
+            + (isset($attested['kid']) ? ['attestation_kid' => $attested['kid']] : []),
             CadenceRevision::answer($id)
         );
         $wpdb->query('COMMIT');

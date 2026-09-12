@@ -66,7 +66,8 @@ final class CadenceContentRequest {
      */
     public const REFUSAL_CODES = ['bad_request', 'capability_mismatch',
                                  'unsupported_language', 'post_type_out_of_scope',
-                                 'existing_post_type_out_of_scope', 'insert_failed'];
+                                 'existing_post_type_out_of_scope', 'insert_failed',
+                                 CadenceAttestation::CODE];
 
     /**
      * @param array    $body       the JSON body, already decoded
@@ -107,10 +108,39 @@ final class CadenceContentRequest {
      *               revision?: string, code?: string, reason?: string}
      */
     public static function run(array $body, callable $authorises, ?array $post_types,
-                               ?int $author = null, ?string $key_id = null): array {
+                               ?int $author, ?string $key_id, ?string $attestation): array {
         $fields = self::validate($body);
         if (is_string($fields)) {
             return ['ok' => false, 'code' => 'bad_request', 'reason' => $fields];
+        }
+
+        // THE ATTESTATION, AND IT RUNS HERE.
+        //
+        // AFTER `validate` AND BEFORE EVERYTHING ELSE. After, because the
+        // signed set has to exist before there are bytes to verify and because
+        // an absent or non-string field is this connector's own `bad_request`
+        // decided on its own grounds -- folding it in would answer 403
+        // `attestation_unverified` over a body that is simply incomplete, and
+        // send an operator to look at a signing key over a missing title.
+        // `validate` also resolves the `external_id` alias, which is why the
+        // material can say `piece_id` on both routes whatever the caller spelled.
+        //
+        // BEFORE EVERYTHING ELSE, AND THAT IS THE HARM PROPERTY. Not merely
+        // before `wp_insert_post`: before `post_type_exists`, before the
+        // declaration is verified against WPML, before the site is asked
+        // whether this piece is already here. Each of those is a READ of the
+        // client's site whose refusal discloses something about it -- which
+        // types are registered, which languages are configured, which pieces
+        // exist -- and an unattested request learns none of them. A verifier
+        // placed after the insert is not a guard at all; one placed after the
+        // reads is a guard over the write and an oracle over the site.
+        //
+        // IT IS ALSO BEFORE THE DECLARATION IS RECORDED. Nothing about this
+        // request enters this site -- as a post, as meta, as a declaration
+        // acted upon -- until the signature over its bytes has verified.
+        $attested = CadenceAttestation::verify($attestation, '/content', $fields, $key_id);
+        if ($attested['ok'] !== true) {
+            return ['ok' => false, 'code' => $attested['code'], 'reason' => $attested['reason']];
         }
 
         // AUTHORISATION FIRST, AND BEFORE THE SITE IS ASKED ANYTHING.
@@ -187,7 +217,8 @@ final class CadenceContentRequest {
             // believes it is publishing something new, and the live article is
             // not this code's to overwrite on that belief.
             $answer = ['ok' => true, 'created' => false, 'post_id' => $existing,
-                       'report' => self::report($fields, $existing, $unsupported)];
+                       'report' => self::report($fields, $existing, $unsupported)]
+                      + self::attested($attested);
             // WITH THE REVISION THE POST ACTUALLY HOLDS, which is how a caller
             // whose body no longer matches the site finds that out -- and how
             // it gets the value a replacement has to name. Read from the post,
@@ -274,7 +305,7 @@ final class CadenceContentRequest {
         // so there is nothing here to disclose -- and gating it would leave a
         // pipeline unable to replace what it published without a capability
         // it does not need in order to publish.
-        return array_merge(['ok' => true, 'created' => true, 'post_id' => $id,
+        return array_merge(self::attested($attested), ['ok' => true, 'created' => true, 'post_id' => $id,
                              'report' => self::report($fields, $id, $unsupported)],
                            CadenceRevision::answer($id));
     }
@@ -320,6 +351,33 @@ final class CadenceContentRequest {
      *
      * @return array{piece_id: string, language: string, post_type: string, status: string, title: string, content: string}|string
      */
+    /**
+     * WHAT THE REPLY SAYS ABOUT THE ATTESTATION, and it is two states on the
+     * wire rather than three.
+     *
+     * `verified` carries the kid THAT VERIFIED IT -- not the first kid on the
+     * record, which during a rotation's overlap window is as likely to be the
+     * retiring one. The reply naming the live key is the only way an operator
+     * can see a rotation has taken effect before they remove the other half.
+     *
+     * `exempt` carries no kid, because no key was used. The third state is not
+     * this side's to send: a reply with no `attestation` field at all is an
+     * un-upgraded connector, which the spine records as null and must never
+     * fold into `exempt` -- "it did not say" and "it said nobody checked" are
+     * different facts about a client's site, and only one of them is a
+     * decision somebody made.
+     *
+     * @param array $attested The return of `CadenceAttestation::verify`.
+     * @return array{attestation: string, attestation_kid?: string}
+     */
+    private static function attested(array $attested): array {
+        $out = ['attestation' => $attested['attestation']];
+        if (isset($attested['kid'])) {
+            $out['attestation_kid'] = $attested['kid'];
+        }
+        return $out;
+    }
+
     private static function validate(array $body) {
         // `external_id` is what 0.1.0 called it. Accepted, because a released
         // connector is installed on sites this repository does not control and

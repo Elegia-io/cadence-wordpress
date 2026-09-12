@@ -445,6 +445,205 @@ final class CadenceKey {
         return $keys[$id];
     }
 
+    /**
+     * HOW MANY ATTESTATION PUBLIC KEYS ONE CONNECTOR KEY MAY HOLD, and why it
+     * is two rather than one or many.
+     *
+     * ONE would make every rotation an outage: the moment the spine starts
+     * signing with a new private key, every body it sends fails `mismatch`
+     * until a human has pasted the new public key here -- and every body it
+     * sent with the old one fails from the moment they paste it. Two gives the
+     * rotation an overlap window, in which both the retiring and the arriving
+     * key verify and the operator can see from the reply's `kid` which one is
+     * actually live before removing the other.
+     *
+     * MANY would make the window unbounded. Each stored key is a private key
+     * somewhere that can still publish as this tenant, so the list is the
+     * blast radius of every seed that was ever compromised and never pruned;
+     * a third entry is refused rather than rotated out silently, because the
+     * one thing an operator must not be able to do by accident is leave a
+     * retired key live.
+     */
+    public const MAX_VERIFY_KEYS = 2;
+
+    /**
+     * PASTE AN ATTESTATION PUBLIC KEY ONTO A CONNECTOR KEY.
+     *
+     * MANUAL, AND THERE IS NO ROUTE THAT DOES THIS. Not an upload endpoint,
+     * not a field on the key issue API, nothing a request can reach: whoever
+     * can set the verifying key IS the boundary this whole class draws, so a
+     * grant that could set it would be a grant that could sign anything. It is
+     * a paste on a screen behind `manage_options`, on purpose, and the cost of
+     * that -- an operator typing 44 characters during a rotation -- is the
+     * price of the property.
+     *
+     * REFUSES rather than stores, in every case a wrong paste can produce: a
+     * key that is not base64, one that is not 32 bytes (a 31- or 33-byte value
+     * is a truncated or over-long paste, and `sodium_crypto_sign_verify_detached`
+     * throws on one rather than returning false), a kid that is not 16
+     * lowercase hex, a kid this key already holds, and a third entry. Stored
+     * wrong, every one of them surfaces later as `mismatch` on a client's
+     * site -- a branch that says the body was tampered with, over a paste.
+     *
+     * @param string $id     The connector key's public id.
+     * @param string $kid    16 lowercase hex, as the spine names the key.
+     * @param string $public The 32-byte Ed25519 public key, standard base64.
+     *
+     * @return true|string True, or the sentence to put in front of a human.
+     */
+    public static function add_verify_key(string $id, string $kid, string $public) {
+        $keys = self::records();
+        if (!isset($keys[$id]) || !is_array($keys[$id])) {
+            return 'no connector key on this site has that id, so there is nothing to attach a public key to';
+        }
+        $kid = trim($kid);
+        if (preg_match('/\A[0-9a-f]{16}\z/', $kid) !== 1) {
+            return 'the key id must be exactly 16 lowercase hex characters, as the signing side spells it; '
+                 . 'an uppercase or shortened one is a different name for the same key';
+        }
+        $public = trim($public);
+        $raw = $public === '' ? false : base64_decode($public, true);
+        if ($raw === false) {
+            return 'the public key must be standard base64, exactly as the signing side prints it; '
+                 . 'this value is not base64 at all and nothing was stored';
+        }
+        if (strlen($raw) !== SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES) {
+            return sprintf('an Ed25519 public key is %d bytes and this one decodes to %d; '
+                           . 'a truncated or over-long paste would refuse every publish as tampered with, '
+                           . 'so nothing was stored',
+                           SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES, strlen($raw));
+        }
+        $stored = self::verify_keys($id);
+        foreach ($stored as $record) {
+            if (($record['kid'] ?? null) === $kid) {
+                return sprintf('this connector key already holds a public key under the name %s; '
+                               . 'remove it before pasting another, so one name never means two keys', $kid);
+            }
+        }
+        if (count($stored) >= self::MAX_VERIFY_KEYS) {
+            return sprintf('this connector key already holds %d attestation public keys, which is the most '
+                           . 'one may hold; remove the retired one before pasting a third, so a rotation '
+                           . 'never leaves a key live that nobody meant to keep',
+                           self::MAX_VERIFY_KEYS);
+        }
+        $stored[] = ['kid' => $kid, 'pk' => $public, 'added' => time()];
+        $keys[$id]['verify'] = array_values($stored);
+        update_option(self::OPTION, $keys);
+        return true;
+    }
+
+    /**
+     * Take one attestation public key off a connector key, by its kid.
+     *
+     * The other half of the two-key window: a rotation that cannot remove the
+     * retired key is a rotation that can only ever be done once.
+     */
+    public static function remove_verify_key(string $id, string $kid): bool {
+        $keys = self::records();
+        if (!isset($keys[$id]) || !is_array($keys[$id])) {
+            return false;
+        }
+        $kept = [];
+        $found = false;
+        foreach (self::verify_keys($id) as $record) {
+            if (($record['kid'] ?? null) === $kid) {
+                $found = true;
+                continue;
+            }
+            $kept[] = $record;
+        }
+        if (!$found) {
+            return false;
+        }
+        $keys[$id]['verify'] = $kept;
+        update_option(self::OPTION, $keys);
+        return true;
+    }
+
+    /**
+     * THE ATTESTATION PUBLIC KEYS THIS CONNECTOR KEY HOLDS.
+     *
+     * A LIST, AND NEVER A SINGLE KEY. `CadenceAttestation::verify` looks the
+     * presented kid up in it rather than taking the first -- during an overlap
+     * window the first is as likely to be the retiring one as the arriving
+     * one, and a verifier that took it would refuse every body signed with the
+     * other half of its own rotation.
+     *
+     * FAILS TO THE EMPTY LIST. A record with no `verify` key, one holding
+     * something that is not a list, and a key id this site does not have are
+     * all "no public key here", which is a refusal at the call site and never
+     * an admission.
+     *
+     * @return list<array{kid: string, pk: string, added: int}>
+     */
+    public static function verify_keys(string $id): array {
+        $keys = self::records();
+        $stored = $keys[$id]['verify'] ?? null;
+        if (!is_array($stored) || !array_is_list($stored)) {
+            return [];
+        }
+        $out = [];
+        foreach ($stored as $record) {
+            if (is_array($record) && isset($record['kid'], $record['pk'])
+                && is_string($record['kid']) && is_string($record['pk'])) {
+                $out[] = $record;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * IS THE UNSIGNED-PUBLISH EXEMPTION SET ON THIS KEY, and who set it when?
+     *
+     * `['set_at' => int, 'by_user' => int|null]` or null. The record and not a
+     * bool, because the flag is a migration affordance and the two questions
+     * an operator asks about one are "is it still on" and "who turned it on":
+     * a bare `true` on a site nobody remembers configuring is a boundary
+     * nobody can account for.
+     *
+     * WHAT IT EXEMPTS IS AN ABSENCE AND NEVER A FAILURE -- see
+     * `CadenceAttestation::verify`. It is stored here, read there, and the
+     * distinction lives in exactly one place.
+     *
+     * @return array{set_at: int, by_user: int|null}|null
+     */
+    public static function unsigned_ok(string $id): ?array {
+        $keys = self::records();
+        $flag = $keys[$id]['unsigned_ok'] ?? null;
+        if (!is_array($flag) || !isset($flag['set_at'])) {
+            return null;
+        }
+        return ['set_at' => (int) $flag['set_at'],
+                'by_user' => isset($flag['by_user']) ? (int) $flag['by_user'] : null];
+    }
+
+    /**
+     * Turn the unsigned-publish exemption on or off for one connector key.
+     *
+     * SETTING IT RECORDS WHEN AND BY WHOM. A migration affordance with no
+     * provenance is one an audit cannot close: the question a year later is
+     * never "is it on" alone but "was this deliberate", and a bare flag cannot
+     * answer it. Clearing it removes the record rather than writing a false
+     * one -- absent means off, and there is one spelling of off.
+     */
+    public static function set_unsigned_ok(string $id, bool $on, $by_user = null): bool {
+        $keys = self::records();
+        if (!isset($keys[$id]) || !is_array($keys[$id])) {
+            return false;
+        }
+        if (!$on) {
+            unset($keys[$id]['unsigned_ok']);
+            update_option(self::OPTION, $keys);
+            return true;
+        }
+        $keys[$id]['unsigned_ok'] = [
+            'set_at'  => time(),
+            'by_user' => self::user_id($by_user),
+        ];
+        update_option(self::OPTION, $keys);
+        return true;
+    }
+
     /** @return array<string, array> */
     private static function records(): array {
         $keys = get_option(self::OPTION, []);

@@ -23,6 +23,37 @@
  * translation group with one member in it. Any future change that makes this
  * more eager is a regression even if it raises the automation rate.
  *
+ * THE ONE EXCEPTION, AND WHY IT IS UNAVOIDABLE. When the plan says
+ * `create_group` there is no group id yet: it is invented by WPML during the
+ * first write, and the sentence quoted above says it invents ONE PER ELEMENT.
+ * Writing a null trid for every element therefore builds a group of one per
+ * post and links nothing, while the count of writes issued still says two. So
+ * the create path writes the SOURCE first, reads the group WPML gave it back
+ * out of the site, and writes each translation under that id. Two refusals
+ * exist for the gap between those steps, and they are the only refusals here
+ * that have already written something; both say so in the answer
+ * (`written`, and the report's `linked`) rather than leaving the caller to
+ * infer it from a bare `ok: false`.
+ *
+ * DOCUMENTED, NOT OBSERVED. Three things this file believes about WPML come
+ * from WPML's documentation and from nothing else -- there is no WordPress and
+ * no WPML licence in the environment this was built in, and the suite's stub
+ * models the documentation rather than a measurement:
+ *
+ *   1. that a falsy `trid` on `wpml_set_element_language_details` creates a new
+ *      trid for that element and drops its existing relations (quoted above);
+ *   2. that it does so PER ELEMENT, so a set of such writes does not converge
+ *      on one group -- the action is told about one element and has no way to
+ *      know the call is one of a set;
+ *   3. that `wpml_element_language_details` read immediately afterwards, in the
+ *      SAME request, answers with the trid the write just invented. This third
+ *      one is not documented at all, and the ordered write below does not work
+ *      without it. If WPML defers or caches that write, the read returns the
+ *      pre-write answer -- `null` -- and this route refuses
+ *      `source_group_unset` on every create, which is a visible, non-destructive
+ *      failure rather than a wrong link. A live check against WPML 4.x is what
+ *      would settle all three; until then assume they are beliefs.
+ *
  * @package CadenceConnector
  * @license GPL-2.0-or-later
  */
@@ -49,6 +80,8 @@ final class CadenceLinkRequest {
         'group_unknown',
         'already_grouped',
         'group_disagreement',
+        'source_group_unset',
+        'source_group_unreadable',
         'wpml_unavailable',
         'post_out_of_scope',
     ];
@@ -65,6 +98,13 @@ final class CadenceLinkRequest {
      * `contradictory_instructions`, `no_group_named` -- no re-read can help).
      * A caller that had to tell those apart by matching the prose would be
      * matching on spellings this file changes freely.
+     *
+     * `source_group_unset` and `source_group_unreadable` are a third class and
+     * the reason the code is not merely a status in disguise: the source WAS
+     * written and the translations were not. A caller reading them as "the site
+     * disagreed, nothing happened" would be wrong about the site, so they are
+     * not spelled as the 409s above even though a re-read is the next step for
+     * both.
      *
      * @param array $plan the JSON body, already decoded
      * @return array{ok: bool, code?: string, reason?: string, written?: int,
@@ -187,16 +227,100 @@ final class CadenceLinkRequest {
             }
         }
 
-        foreach ($posts as $p) {
-            do_action('wpml_set_element_language_details', [
-                'element_id'           => $p['post_id'],
-                'element_type'         => $p['element_type'],
-                'trid'                 => $trid,
-                'language_code'        => $p['language_code'],
-                'source_language_code' => $p['source_language_code'],
-            ]);
+        // THE CREATE PATH LEARNS ITS GROUP FROM ITS OWN FIRST WRITE. Handing
+        // every element the same null trid asks WPML to invent a group for each
+        // of them separately (see the header); the group has to exist before
+        // the translations can name it, and the only thing that can bring it
+        // into existence is the source's own write.
+        //
+        // The source, and not an arbitrary member: it is the element the report
+        // is filed under and the one `/content` already placed, so if exactly
+        // one post ends up in a group of its own, that post is the one a human
+        // looking for this piece will find.
+        if ($create) {
+            $source = $posts[0];
+            self::write_element($source, null);
+
+            // READ BACK, NEVER ASSUMED. `do_action` returns nothing, so the id
+            // WPML chose is not available from the write and cannot be guessed
+            // -- and the two answers that are not an id are the two refusals
+            // below rather than a value to write with.
+            $group = self::current_trid($source['post_id'], $source['element_type']);
+            if ($group === null) {
+                // WPML ANSWERED, AND PUTS THE SOURCE IN NO GROUP. Either the
+                // write went nowhere or it created nothing; either way there is
+                // no id for the translations to join, and writing them with a
+                // null trid is the very behaviour this ordering exists to stop.
+                //
+                // Nothing was destroyed: the create path refuses above unless
+                // EVERY post is in no group, so the source had no relations to
+                // lose and the translations were not touched. A caller that
+                // re-reads and sends the identical plan again is safe.
+                return self::half_written('source_group_unset', sprintf(
+                    'post %d was written with no trid and WPML still puts it in no group, so there is no group for the %d translation(s) to join; they were not written',
+                    $source['post_id'], count($posts) - 1), $piece_id, $posts);
+            }
+            if (!is_int($group)) {
+                // A READ THAT IS NOT A READING. `false` is WPML saying nothing
+                // usable about an element it answered for a moment ago, which
+                // leaves the source's group unknown rather than absent -- and an
+                // unknown group is the one thing that must never be written
+                // over. A re-read is the caller's next step and the pre-write
+                // check will refuse `group_unknown` until the site answers.
+                return self::half_written('source_group_unreadable', sprintf(
+                    'post %d was written with no trid and WPML then returned no usable language details for it, so the group it is now in cannot be named; the %d translation(s) were not written',
+                    $source['post_id'], count($posts) - 1), $piece_id, $posts);
+            }
+            foreach (array_slice($posts, 1) as $p) {
+                self::write_element($p, $group);
+            }
+        } else {
+            foreach ($posts as $p) {
+                self::write_element($p, $trid);
+            }
         }
         $answer = ['ok' => true, 'written' => count($posts)];
+        if ($piece_id !== null) {
+            $answer['report'] = self::report($piece_id, $posts);
+        }
+        return $answer;
+    }
+
+    /**
+     * One element into one translation group. The only place this file writes.
+     *
+     * @param array $p one validated plan entry
+     * @param int|null $trid the group to write, or null to have WPML invent one
+     */
+    private static function write_element(array $p, ?int $trid): void {
+        do_action('wpml_set_element_language_details', [
+            'element_id'           => $p['post_id'],
+            'element_type'         => $p['element_type'],
+            'trid'                 => $trid,
+            'language_code'        => $p['language_code'],
+            'source_language_code' => $p['source_language_code'],
+        ]);
+    }
+
+    /**
+     * A REFUSAL THAT HAS ALREADY WRITTEN THE SOURCE, and the only kind here.
+     *
+     * It carries the same two fields a success does -- `written`, and the
+     * report when a piece was named -- because a half-applied plan the caller
+     * cannot see is worse than either outcome: the ledger would file nothing
+     * for a run that changed the site. `written` is 1 by construction and not a
+     * count of the loop: the loop below the refusal never ran.
+     *
+     * The report is the same read-back the success path emits, and on this path
+     * it reports `linked: []` for the same reason it reports it anywhere -- the
+     * source's group could not be read as an id, so no translation can be shown
+     * to share it.
+     *
+     * @param list<array> $posts the validated plan, source first
+     */
+    private static function half_written(string $code, string $reason,
+                                        ?string $piece_id, array $posts): array {
+        $answer = ['ok' => false, 'code' => $code, 'reason' => $reason, 'written' => 1];
         if ($piece_id !== null) {
             $answer['report'] = self::report($piece_id, $posts);
         }

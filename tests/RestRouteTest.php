@@ -210,6 +210,54 @@ final class RestRouteTest extends TestCase {
     }
 
     /**
+     * A HALF-APPLIED CREATE TAKES ITS COUNT AND ITS REPORT TO THE WIRE. The
+     * linking route's create path can refuse with the source already written,
+     * and this is the one refusal body that is not just `{ok, code, reason}`: a
+     * caller whose ledger saw only the code would file nothing for a run that
+     * changed the site, which is the failure the report exists to prevent one
+     * boundary over.
+     *
+     * A 500 AND NOT A 409, though a re-read is the next step for both codes. The
+     * likeliest cause is that WPML here does not answer a read with the trid a
+     * write in the same request just invented -- in which case every create
+     * fails identically and a caller retrying a 409 loops.
+     */
+    public function test_a_half_applied_create_carries_its_count_and_report(): void {
+        foreach (['source_group_unset', 'source_group_unreadable'] as $code) {
+            $r = CadenceRestRoute::respond(['ok' => false, 'code' => $code,
+                'reason' => 'x', 'written' => 1, 'report' => [
+                    'piece_id' => 'piece-1', 'post_id' => 12,
+                    'placed' => [], 'linked' => [], 'refused' => [],
+                ]]);
+            $this->assertSame(500, $r['status'], $code);
+            $this->assertArrayNotHasKey('report', $r['body'], $code);
+            // The meta pair leads, because `respond` builds this body as
+            // `$meta + ...` and `assertSame` over arrays compares order too.
+            // Asked of the constants so a bump rereads as true (#1273).
+            $this->assertSame(['connector_version' => CadenceRestRoute::VERSION,
+                               'reply_schema' => CadenceRestRoute::REPLY_SCHEMA,
+                               'ok' => false, 'code' => $code, 'reason' => 'x',
+                               'written' => 1, 'piece_id' => 'piece-1',
+                               'post_id' => 12, 'placed' => [], 'linked' => [],
+                               'refused' => []], $r['body'], $code);
+        }
+    }
+
+    /**
+     * AND A REFUSAL THAT WROTE NOTHING SENDS NO COUNT. `written: 0` beside a
+     * refusal reads as a measurement, and every other refusal in this plugin
+     * never reached a write to count -- the absence is the honest shape.
+     */
+    public function test_a_refusal_that_wrote_nothing_carries_no_count(): void {
+        $r = CadenceRestRoute::respond(['ok' => false, 'code' => 'already_grouped', 'reason' => 'x']);
+        $this->assertSame(['connector_version' => CadenceRestRoute::VERSION,
+                           'reply_schema' => CadenceRestRoute::REPLY_SCHEMA,
+                           'ok' => false, 'code' => 'already_grouped',
+                           'reason' => 'x'], $r['body']);
+        $this->assertArrayNotHasKey('written', $r['body']);
+    }
+
+    /**
      * AND AN UNCLASSIFIED ONE IS NOT A SUCCESS. The test above turns red when
      * a code is added unmapped; this one says what happens in the meantime on a
      * live site. Falling back to 400 would tell the caller its plan is wrong

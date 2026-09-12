@@ -143,6 +143,16 @@ final class WpStub {
     /** @var list<string> the post types this site has registered */
     public static array $post_types = ['post', 'page'];
 
+    /**
+     * WHETHER THE NONCE `check_admin_referer` IS ASKED TO VERIFY IS GOOD.
+     *
+     * The one thing a test controls about it. Real WordPress reads a value
+     * that travelled in the form; the stub answers this instead, so a test
+     * can make the check fail without knowing anything about how a nonce is
+     * built.
+     */
+    public static bool $referer_valid = true;
+
     public static function reset(): void {
         self::$posts = [];
         self::$writes = [];
@@ -169,6 +179,7 @@ final class WpStub {
         self::$active_languages = ['en' => ['code' => 'en'], 'de' => ['code' => 'de']];
         self::$options = [];
         self::$users = [7 => 'A Real Person'];
+        self::$referer_valid = true;
     }
 
     public static function add_post(int $id, string $post_type = 'page',
@@ -549,6 +560,93 @@ function update_option(string $name, $value, $autoload = null): bool {
 
 function esc_html(string $s): string { return $s; }
 function __(string $s, string $d = ''): string { return $s; }
+function esc_url(string $s): string { return $s; }
+function esc_attr(string $s): string { return $s; }
+
+/**
+ * TWO EXCEPTIONS THAT STAND IN FOR CONTROL FLOW THAT WOULD OTHERWISE END THE
+ * PROCESS. `wp_die` never returns on a real site, and `wp_safe_redirect` is
+ * always followed by a bare `exit` at its call site -- a stub that recorded
+ * either call and returned would let a test see code that runs AFTER a point
+ * nothing ever reaches outside a test. Throwing instead stops execution in
+ * exactly the same place a real death or a real redirect would, and hands the
+ * test the one fact it needs to tell the two apart.
+ */
+final class CadenceTestDied extends RuntimeException {}
+final class CadenceTestRedirected extends RuntimeException {
+    public function __construct(public readonly string $location) {
+        parent::__construct($location);
+    }
+}
+
+function wp_die($message = '', $title = '', $args = []): void {
+    throw new CadenceTestDied(is_string($message) ? $message : 'died');
+}
+
+/**
+ * Fails exactly as the real one does: on an invalid nonce it calls `wp_die`
+ * rather than returning a falsy value, so a caller that never checks a return
+ * value is not thereby skipping the check. `WpStub::$referer_valid` is the
+ * one thing a test controls about it.
+ */
+function check_admin_referer($action = -1, $query_arg = '_wpnonce') {
+    if (!WpStub::$referer_valid) {
+        wp_die('The link you followed has expired.');
+    }
+    return 1;
+}
+
+function wp_safe_redirect(string $location, int $status = 302): void {
+    throw new CadenceTestRedirected($location);
+}
+
+function wp_unslash($value) {
+    return is_array($value) ? array_map('wp_unslash', $value) : $value;
+}
+
+function sanitize_text_field($str): string {
+    return trim((string) $str);
+}
+
+function add_query_arg(array $args, string $url): string {
+    return $url . (str_contains($url, '?') ? '&' : '?') . http_build_query($args);
+}
+
+function admin_url(string $path = ''): string {
+    return 'http://cadence-connector.test/wp-admin/' . $path;
+}
+
+function wp_nonce_field($action = -1, $name = '_wpnonce', $referer = true, $echo = true): string {
+    $field = '<input type="hidden" name="' . $name . '" value="stub-nonce">';
+    if ($echo) {
+        echo $field;
+    }
+    return $field;
+}
+
+function wp_dropdown_users(array $args = []): ?string {
+    $html = '<select name="' . ($args['name'] ?? 'user') . '"></select>';
+    if ($args['echo'] ?? true) {
+        echo $html;
+        return null;
+    }
+    return $html;
+}
+
+/** Reuses `WpStub::$users` -- the same map `get_userdata` answers from. */
+function get_the_author_meta(string $field, int $user_id) {
+    return $field === 'display_name' ? (WpStub::$users[$user_id] ?? '') : '';
+}
+
+/**
+ * The screen's own default byline. Whoever is looking at it holds
+ * `manage_options` -- that is what reached it -- and is a real user of this
+ * site by construction, so this stub answers with one: the id `CadenceKey`'s
+ * own stub map already has a name for.
+ */
+function get_current_user_id(): int {
+    return 7;
+}
 
 // What WordPress defines and every plugin file guards on. Defined here for
 // the same reason WordPress's own test suite defines it: the guard is only

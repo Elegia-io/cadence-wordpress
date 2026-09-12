@@ -138,10 +138,30 @@ final class CadenceKey {
      * field it never had, and substituting any user would put a byline on a
      * post that person did not choose. The admin screen marks those keys, so
      * the fix is visible and is the operator's to make -- re-issue the key.
+     *
+     * NULL ALSO FOR A BYLINE WHOSE USER HAS SINCE BEEN DELETED, for the same
+     * reason and by the same path. `issue()` checked `get_userdata` once, at
+     * the moment a human was on the screen to fix a bad answer; a key lives
+     * far longer than that moment, and a byline the site could name yesterday
+     * can be one it cannot name today. Re-checking HERE, on every call, is
+     * what keeps that from being bypassed by time passing -- `issue()` runs
+     * once per key, `author_for()` runs once per publish.
+     *
+     * Refusing the publish instead was the other option, and it is worse: a
+     * post that is otherwise complete would fail for a reason the caller
+     * neither caused nor can fix from where it sits, over a field that names
+     * nobody, on a request that names a post type, a title and a body the
+     * site can accept. Omitting the byline is not a wrong write -- it is the
+     * same value that field has always taken when nothing sets it, so a
+     * client's content still publishes and the missing byline is exactly as
+     * visible on the admin screen as the pre-byline-key case already is.
      */
     public static function author_for($presented): ?int {
         $author = self::grant($presented)['author'] ?? null;
-        return is_int($author) && $author > 0 ? $author : null;
+        if (!is_int($author) || $author < 1 || get_userdata($author) === false) {
+            return null;
+        }
+        return $author;
     }
 
     /**

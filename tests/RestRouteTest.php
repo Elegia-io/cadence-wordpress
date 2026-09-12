@@ -161,9 +161,32 @@ final class RestRouteTest extends TestCase {
         ]]);
         $this->assertSame(200, $r['status']);
         $this->assertArrayNotHasKey('report', $r['body']);
-        $this->assertSame(['ok' => true, 'written' => 2, 'piece_id' => 'piece-1',
+        $this->assertSame(['connector_version' => CadenceRestRoute::VERSION,
+                           'reply_schema' => CadenceRestRoute::REPLY_SCHEMA,
+                           'ok' => true, 'written' => 2, 'piece_id' => 'piece-1',
                            'post_id' => 12, 'placed' => [], 'linked' => ['de'],
                            'refused' => []], $r['body']);
+    }
+
+    /**
+     * EVERY REPLY CARRIES WHICH VERSION ANSWERED, AND WHETHER ITS SHAPE IS ONE
+     * THE SPINE CAN READ -- a success as much as a refusal, since a
+     * half-upgraded fleet needs both told apart no matter which kind of
+     * connector answers. Asked of the constants, not of a literal: a bump to
+     * either constant should not need this test rewritten, only reread as
+     * true.
+     */
+    public function test_every_reply_carries_the_connector_version_and_reply_schema(): void {
+        foreach ([
+            ['ok' => true, 'written' => 2],
+            ['ok' => true, 'created' => true, 'post_id' => 1],
+            ['ok' => false, 'code' => 'bad_plan', 'reason' => 'x'],
+            ['ok' => false, 'code' => 'invented_later'],
+        ] as $i => $result) {
+            $body = CadenceRestRoute::respond($result)['body'];
+            $this->assertSame(CadenceRestRoute::VERSION, $body['connector_version'] ?? null, (string) $i);
+            $this->assertSame(CadenceRestRoute::REPLY_SCHEMA, $body['reply_schema'] ?? null, (string) $i);
+        }
     }
 
     /**

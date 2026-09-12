@@ -14,6 +14,31 @@ if (!defined('ABSPATH')) {
 final class CadenceRestRoute {
 
     /**
+     * THE PLUGIN'S OWN VERSION, mirroring the `Version:` line in the plugin
+     * header. Duplicated rather than parsed from the header at request time --
+     * this is read on every authenticated reply, and a file read plus a regex
+     * per request is a cost the header comment does not need to impose. The
+     * two are tied together by `PluginTest::test_the_header_declares_a_plugin_and_the_licence_it_ships`,
+     * which reads the header directly and fails the moment a release bumps one
+     * without the other, so drift is caught rather than merely discouraged.
+     */
+    public const VERSION = '0.2.0';
+
+    /**
+     * THE REPLY'S OWN SHAPE, as a number the spine can compare with `<=`
+     * rather than a semver range it would have to parse. `VERSION` answers "an
+     * operator wants to know" -- it is for the fleet list, and nothing here
+     * reads it back. `REPLY_SCHEMA` answers "can this spine read this reply at
+     * all" -- it moves ONLY when a field in `respond()`'s body is added,
+     * renamed or dropped in a way a reader must know about, independently of
+     * whatever else changed in a release. Collapsing the two into one field
+     * would leave the spine re-deriving "does version X support field Y" from
+     * a table of ranges it has to keep in step with this file by hand -- a
+     * second implementation of the very mapping this constant exists to avoid.
+     */
+    public const REPLY_SCHEMA = 1;
+
+    /**
      * DOES THIS BODY NAME POSTS AT ALL, in the shape it claims to?
      *
      * What is LEFT of the old per-post `current_user_can('edit_post', $id)`
@@ -44,12 +69,22 @@ final class CadenceRestRoute {
      * the caller its plan is wrong, which nothing here established; 200 tells
      * it the write happened, which it did not.
      *
+     * Every body carries `connector_version` and `reply_schema` -- success and
+     * refusal alike, since a half-upgraded fleet is exactly the case a refusal
+     * has to identify too. Never on a reply this method did not build: both
+     * routes' `permission_callback`s reject an unauthenticated or
+     * capability-less caller BEFORE this runs, so a key that was never
+     * accepted never sees which version answered it, and the version cannot
+     * be harvested by probing an unauthenticated site with no key at all.
+     *
      * @param array $result
      * @return array{status: int, body: array}
      */
     public static function respond(array $result): array {
+        $meta = ['connector_version' => self::VERSION, 'reply_schema' => self::REPLY_SCHEMA];
+
         if (($result['ok'] ?? false) === true) {
-            $body = ['ok' => true];
+            $body = $meta + ['ok' => true];
             // A NAMED SET, so a writer's new key does not reach the caller by
             // accident -- and does not fail to reach it silently either, since
             // `test_a_rewrite_answers_200_and_carries_the_new_revision` asks
@@ -80,7 +115,7 @@ final class CadenceRestRoute {
         }
 
         $code = $result['code'] ?? null;
-        return ['status' => self::STATUS[$code] ?? 500, 'body' => array_filter([
+        return ['status' => self::STATUS[$code] ?? 500, 'body' => $meta + array_filter([
             'ok'     => false,
             'code'   => $code,
             'reason' => $result['reason'] ?? null,

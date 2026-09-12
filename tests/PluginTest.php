@@ -422,6 +422,63 @@ final class PluginTest extends TestCase {
     }
 
     /**
+     * THE LINKING ROUTE APPLIES THE SAME SCOPE, at the route and not merely in
+     * the handler.
+     *
+     * The key's post types reached `/content` and `/content/replace` first and
+     * stopped there: `CadenceLinkRequest` refused perfectly on an argument the
+     * callback never passed it, and every handler test in `LinkRequestTest`
+     * would go on passing while a key scoped to `post` linked pages. So both
+     * halves below go through the registered callback with a real key in a
+     * header, and read the code off the REST response body rather than off the
+     * handler's return.
+     */
+    public function test_the_linking_route_applies_the_keys_publish_scope(): void {
+        $call = $this->route[2]['callback'];
+        $header = $this->key(CadenceKey::issue('tenant-a', ['translation.link'], 7, ['post']));
+        WpStub::add_post(41, 'page', 'en', null);
+        WpStub::add_post(42, 'page', 'de', null);
+        WpStub::cadence_published(41);
+        WpStub::cadence_published(42);
+        $body = ['trid' => null, 'create_group' => true,
+                 'source' => ['post_id' => 41, 'language_code' => 'en',
+                              'element_type' => 'post_page', 'source_language_code' => null],
+                 'translations' => [['post_id' => 42, 'language_code' => 'de',
+                                     'element_type' => 'post_page', 'source_language_code' => 'en']]];
+
+        // The capability tripwire permits it: the key holds `translation.link`
+        // and the body reads. What it does not hold is the type.
+        $this->assertTrue(($this->route[2]['permission_callback'])(new WP_REST_Request($body, $header)));
+
+        $refused = $call(new WP_REST_Request($body, $header));
+        $this->assertSame(403, $refused->get_status());
+        $this->assertSame('link_post_type_out_of_scope', $refused->get_data()['code']);
+        $this->assertFalse($refused->get_data()['ok']);
+        $this->assertSame([], WpStub::$writes, 'a key scoped to post linked two pages');
+        // The key's own scope travels in the reason; the pages' type does not.
+        $this->assertStringContainsString('post', $refused->get_data()['reason']);
+        $this->assertStringNotContainsString('page', $refused->get_data()['reason']);
+
+        // THE ACCEPT-PROOF, through the same callback and the same key: two
+        // posts of the type this key names are still linked. Without it the
+        // assertions above pass on a route that links nothing at all.
+        WpStub::add_post(43, 'post', 'en', null);
+        WpStub::add_post(44, 'post', 'de', null);
+        WpStub::cadence_published(43);
+        WpStub::cadence_published(44);
+        $linked = $call(new WP_REST_Request([
+            'trid' => null, 'create_group' => true,
+            'source' => ['post_id' => 43, 'language_code' => 'en',
+                         'element_type' => 'post_post', 'source_language_code' => null],
+            'translations' => [['post_id' => 44, 'language_code' => 'de',
+                                'element_type' => 'post_post', 'source_language_code' => 'en']],
+        ], $header));
+        $this->assertSame(200, $linked->get_status(), (string) ($linked->get_data()['reason'] ?? ''));
+        $this->assertSame(2, $linked->get_data()['written']);
+        $this->assertCount(2, WpStub::$writes);
+    }
+
+    /**
      * THE ROUTE APPLIES THE PRESENTING KEY'S PUBLISH SCOPE.
      *
      * Asserted at the route, not at the handler: the handler can refuse

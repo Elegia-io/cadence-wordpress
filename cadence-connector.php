@@ -39,6 +39,13 @@ add_action('rest_api_init', static function (): void {
         'callback' => static function ($request) {
             $result = CadenceLinkRequest::run(
                 (array) $request->get_json_params(),
+                // THE POST TYPES THIS KEY REACHES, or null for a key issued
+                // before the field existed -- which links in any type, exactly
+                // as it did before the plugin was updated under it. The same
+                // list the other two routes read: an operator who narrows a
+                // key's types is narrowing one scope, not three, and a key
+                // that no longer publishes pages no longer links them either.
+                CadenceKey::publish_types_for($request->get_header(CadenceKey::HEADER)),
                 // WHICH KEY IS ASKING, so the scope can be this key's own
                 // pieces rather than every piece Cadence ever published here.
                 // The public id and never the secret: it is compared against

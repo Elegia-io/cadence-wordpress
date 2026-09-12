@@ -85,6 +85,7 @@ final class CadenceLinkRequest {
         'wpml_unavailable',
         'post_out_of_scope',
         'post_other_key',
+        'link_post_type_out_of_scope',
     ];
 
     /** A bare lowercase WPML language code: `de`, `pt-br`, `zh-hant-hk`. */
@@ -108,6 +109,14 @@ final class CadenceLinkRequest {
      * both.
      *
      * @param array $plan the JSON body, already decoded
+     * @param list<string>|null $post_types the post types the presenting key
+     *                    reaches, or null for a key issued before the field
+     *                    existed -- which links in any type, exactly as it did
+     *                    before this plugin was updated under it. REQUIRED and
+     *                    without a default, unlike `$key_id` below: null here
+     *                    is the WIDE case, so a call site that forgot it would
+     *                    read as a key that named no type and the scope would
+     *                    quietly stop applying at this route again.
      * @param string|null $key_id the public id of the presenting key. Null is
      *                    a caller this route cannot name, and it reaches only
      *                    the posts that carry no key stamp -- every post that
@@ -117,7 +126,7 @@ final class CadenceLinkRequest {
      * @return array{ok: bool, code?: string, reason?: string, written?: int,
      *               report?: array}
      */
-    public static function run(array $plan, ?string $key_id = null): array {
+    public static function run(array $plan, ?array $post_types, ?string $key_id = null): array {
         // BEFORE ANYTHING ELSE, INCLUDING THE PLAN'S OWN SHAPE: a server that
         // cannot perform this request at all has no standing to tell the caller
         // its request is malformed.
@@ -216,6 +225,60 @@ final class CadenceLinkRequest {
                     'post %d was published through a different connector key, and a key is '
                     . 'scoped to its own pieces; nothing was linked',
                     $p['post_id'])];
+            }
+            // AND THE POST IS IN A TYPE THIS KEY STILL REACHES.
+            //
+            // WHY THE LINKING ROUTE NEEDS IT AT ALL, given that it writes no
+            // text. The two predicates above stop at the same place the
+            // replace route's do: `created_by` admits every post made before
+            // the key stamp existed, and over that set two keys on one site do
+            // not separate. A key scoped to `post` could therefore attach an
+            // unstamped `page` -- another tenant's, or one an operator has
+            // since put out of this key's reach -- into a translation group,
+            // and WPML's own action DESTROYS the relations a post already had
+            // when it is handed a group that is not its own. The act is
+            // narrower than a rewrite; the damage it can do to a relation a
+            // human made by hand is not.
+            //
+            // ITS OWN CODE, NOT `existing_post_type_out_of_scope`. That one is
+            // asked of a PIECE the caller named by identifier, on the two
+            // routes that create or overwrite text, and its sentence ends
+            // "nothing was written". This is asked of a POST the caller named
+            // by id, and ends "nothing was linked". A caller matching on the
+            // code to decide what did not happen would otherwise be told about
+            // an act it never asked for -- the same reason `replace_other_key`
+            // is not `post_other_key` over the one predicate they share.
+            //
+            // LAST OF THE THREE, AND THE ORDER IS THE GUARD. The linking route
+            // is asked about a bare post ID -- it holds no identifier for the
+            // post the way `/content/replace` does, so it has no
+            // `identifier_mismatch` to hide behind and this is the ONLY check
+            // here that can answer a question about the post's own type. Run
+            // first, it would answer "is post N inside this key's types" for
+            // every post id on the site, which is the post's type by another
+            // name and a type oracle over posts the caller may not touch at
+            // all. Run last, it is reachable only for a post that already
+            // passed both entitlement checks -- one this key published, or an
+            // unstamped one it inherits -- so the only type it can be made to
+            // speak about is a post the caller already reaches.
+            //
+            // THE POSITION IS PINNED, not merely argued here: move this block
+            // above either check and
+            // `LinkRequestTest::test_the_type_scope_cannot_be_asked_about_a_post_this_key_does_not_reach`
+            // fails, because two posts outside the key's reach stop answering
+            // with the same refusal.
+            //
+            // `null` names no type and means ANY, so a key issued before the
+            // field existed links what it always linked.
+            if ($post_types !== null && !in_array(get_post_type($p['post_id']), $post_types, true)) {
+                // The id the caller sent and the key's OWN scope, which is the
+                // caller's to know -- and never the type the post is in, which
+                // is the site's. That is the same line the two refusals above
+                // draw, and the reason this one may name a list at all.
+                return ['ok' => false, 'code' => 'link_post_type_out_of_scope', 'reason' => sprintf(
+                    'post %d is of a type this key does not reach; this key is scoped to '
+                    . '%s, and nothing was linked',
+                    $p['post_id'], implode(', ', $post_types))];
             }
         }
 

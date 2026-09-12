@@ -90,7 +90,7 @@ Three capabilities exist, and a key carries only the ones it was issued for:
 |---|---|---|
 | `content.publish` | `POST /content` | the post types named on the key |
 | `content.replace` | `POST /content/replace` | the posts **this key** published, and the ones that predate the stamp, in the post types named on the key, carrying the `piece_id` named |
-| `translation.link` | `POST /translation-group` | the posts **this key** published, and the ones that predate the stamp |
+| `translation.link` | `POST /translation-group` | the posts **this key** published, and the ones that predate the stamp, in the post types named on the key |
 
 `content.publish` and `content.replace` are separate on purpose: a key that may
 create must not silently also be able to overwrite. A pipeline that both
@@ -459,6 +459,19 @@ a post does not learn that post's translation group from a `group_disagreement`
 either. One post outside the scope refuses the whole plan: this route writes
 every member, and a partly-written group has one member in it.
 
+**And every post must be in a post type the key names**, refused with
+`link_post_type_out_of_scope` and a `403`. A key narrowed to `post` no longer
+links a `page`, the same way it no longer publishes or replaces one — the scope
+is one scope and not three. It is its own code and not
+`existing_post_type_out_of_scope`: that one is asked of a *piece* named by
+identifier on the two routes that write text and ends *nothing was written*,
+this is asked of a *post* named by id and ends *nothing was linked*. The check
+runs **after** both scope questions above, so it can only ever speak about a
+post the key already reaches; asked first it would answer whether any post id on
+the site sits inside this key's types, which is that post's type by another
+name. A key issued before post types existed on keys names none, and links what
+it always linked.
+
 ```json
 {
   "piece_id": "piece-2026-08-31-en",
@@ -501,7 +514,7 @@ every post is in no group to begin with.
 |---|---|---|
 | `200` | Written. `written` is how many, and the report below says which. | Nothing. |
 | `400` | The request is wrong on its face. | Fix it; re-sending cannot help. |
-| `403` | The key is genuine and does not reach what the request names. | Read `code`: it names which. `post_out_of_scope` — the post is not this connector's, so republish it through `/content`. `post_other_key` — it is, but another key made it; `replace_other_key` — the same fact about a replacement rather than a link. `post_type_out_of_scope` — the type the request names is not on this key; `existing_post_type_out_of_scope` — the piece is already placed in a type that is not. The last two are re-issued keys, not requests to re-send. |
+| `403` | The key is genuine and does not reach what the request names. | Read `code`: it names which. `post_out_of_scope` — the post is not this connector's, so republish it through `/content`. `post_other_key` — it is, but another key made it; `replace_other_key` — the same fact about a replacement rather than a link. `post_type_out_of_scope` — the type the request names is not on this key; `existing_post_type_out_of_scope` — the piece is already placed in a type that is not; `link_post_type_out_of_scope` — the post a link names is in a type that is not. The last three are re-issued keys, not requests to re-send. |
 | `409` | The site disagrees with the request. | Re-read the site and try again. |
 | `503` | The site cannot do this at all. | Fix the site; the request is fine. |
 | `500` | This server tried and failed — including a `create_group` that wrote the source and could not finish — or refused for a reason this version cannot classify. | Read the body: `written` says what was applied. |
@@ -561,6 +574,7 @@ the reason is prose and changes freely.
 | `replace_other_key` | 403 | the post a replacement names was published through a different connector key |
 | `post_type_out_of_scope` | 403 | the post type named is not one this key may create in |
 | `existing_post_type_out_of_scope` | 403 | the piece is already on a post of a type this key does not name — on a `/content` repeat, or on a replacement |
+| `link_post_type_out_of_scope` | 403 | a post the plan names is in a type this key does not name |
 | `source_group_unset` | 500 | the source was written and the site still puts it in no group, so there was no group for the translations to join. **The source was written**; the translations were not |
 | `source_group_unreadable` | 500 | the source was written and WPML then said nothing usable about it, so its group cannot be named. **The source was written**; the translations were not |
 | `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks |

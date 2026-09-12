@@ -50,7 +50,13 @@ add_action('rest_api_init', static function (): void {
                 // pieces rather than every piece Cadence ever published here.
                 // The public id and never the secret: it is compared against
                 // what `/content` stamped on the post.
-                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER))
+                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER)),
+                // THE SIGNATURE OVER THE PLAN'S OWN BYTES. The key above says
+                // this caller may link here; this says the plan is the plan
+                // that tenant composed. `get_header` answers null when the
+                // header is absent, which is the `absent` branch and the only
+                // one the migration flag reaches.
+                $request->get_header(CadenceAttestation::HEADER)
             );
             $answer = CadenceRestRoute::respond($result);
             return new WP_REST_Response($answer['body'], $answer['status']);

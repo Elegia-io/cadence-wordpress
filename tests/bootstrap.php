@@ -902,6 +902,29 @@ final class CadenceAttest {
         return 'v1 ' . $kid . ' ' . self::sign(CadenceAttestation::material($route, $fields));
     }
 
+    /**
+     * The header a spine would send for one LINK PLAN.
+     *
+     * `link_fields` and not a second reduction here: the sort, the boolean
+     * rendering and the member framing have ONE implementation and this helper
+     * is a convenience over it, exactly as `fields` is for the flat routes.
+     * `AttestationTest`'s four link vectors, signed by the Python half, are
+     * what prove that implementation right.
+     */
+    public static function link_header(array $plan, ?string $key_id,
+                                       ?string $kid = null): string {
+        $fields = CadenceAttestation::link_fields($plan);
+        if (!is_array($fields)) {
+            // A PLAN THE ROUTE WILL REFUSE AS `bad_plan` STILL GETS A HEADER.
+            // The helper is called before `run`, so it sees plans with no
+            // rendering at all; it signs the empty group rather than throwing,
+            // because what those tests assert is that the plan is refused FIRST
+            // and this header is never read.
+            $fields = ['trid' => '', 'create_group' => 'false', 'piece_id' => ''];
+        }
+        return self::header('/translation-group', $fields, $key_id, $kid);
+    }
+
     /** The presented secret for the suite's own connector key. */
     public static function secret(): string {
         self::install(self::KEY_ID);

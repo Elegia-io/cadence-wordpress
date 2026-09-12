@@ -85,6 +85,10 @@ final class CadenceLinkRequest {
         'wpml_unavailable',
         'post_out_of_scope',
         'link_post_type_out_of_scope',
+        // ONE CODE OVER FIVE BRANCHES, and the branch travels beside it in
+        // `attestation_branch` rather than as five codes: a caller's handling of
+        // all five is identical -- stop, and put a human on it.
+        CadenceAttestation::CODE,
     ];
 
     /** A bare lowercase WPML language code: `de`, `pt-br`, `zh-hant-hk`. */
@@ -122,10 +126,58 @@ final class CadenceLinkRequest {
      *                    names one is refused. Optional so that the default is
      *                    the NARROW case rather than the wide one: no identity
      *                    is not a wildcard.
+     * @param string|null $attestation the `X-Cadence-Attestation` header as
+     *                    presented, or null when it is absent. Optional so the
+     *                    default is the NARROW case, like `$key_id` above: a
+     *                    call site that forgets it sends no signature, which is
+     *                    refused on every key that does not carry the
+     *                    unsigned-publish exemption.
      * @return array{ok: bool, code?: string, reason?: string, written?: int,
-     *               report?: array}
+     *               report?: array, attestation?: string, attestation_kid?: string,
+     *               attestation_branch?: string}
      */
-    public static function run(array $plan, ?array $post_types, ?string $key_id = null): array {
+    public static function run(array $plan, ?array $post_types, ?string $key_id = null,
+                               ?string $attestation = null): array {
+        // THE ATTESTATION, AND IT RUNS FIRST -- BEFORE THIS SITE IS ASKED
+        // ANYTHING AT ALL, including whether it has WPML.
+        //
+        // This route took no attestation at all until now
+        // (`Elegia-io/cadence` issue 1370), which left a holder of a leaked
+        // `translation.link` key able to associate posts with nothing proving
+        // the request came from the tenant who holds the signing key -- and
+        // `source_language_code` goes straight into WPML's write, so a tamper
+        // here ALTERS A WRITE rather than merely causing a refusal.
+        //
+        // BEFORE EVERY REFUSAL THAT READS THE CLIENT'S SITE, which is the harm
+        // property and not merely the place the lines sit. `wpml_unavailable`
+        // says whether WPML is installed here; `post_out_of_scope` sorts an id
+        // into this key's Cadence posts or everything else; `group_disagreement`
+        // names a trid, which is a row id in the client's database. Each is a
+        // disclosure, and the attestation is what earns the right to look.
+        //
+        // AND THE SIGNABLE REDUCTION IS BEFORE IT, because there have to be
+        // bytes before there is anything to verify. That refusal is `bad_plan`
+        // -- a plan whose `create_group` is not a JSON boolean, or whose
+        // `post_id` is a string, has no rendering at all -- and it reads nothing
+        // about the site, so it discloses nothing by running first.
+        //
+        // WHAT IS NOT HERE, DELIBERATELY: the rest of `validate_shape`. Whether
+        // two members claim one language, whether a code is well formed, whether
+        // a post appears twice -- all of it is decided AFTER the signature, on
+        // its own grounds. The tie-break in the canonical order exists exactly
+        // so an ambiguous plan still has one material to verify against.
+        $fields = CadenceAttestation::link_fields($plan);
+        if (is_string($fields)) {
+            return ['ok' => false, 'code' => 'bad_plan', 'reason' => $fields];
+        }
+        $attested = CadenceAttestation::verify(
+            $attestation, '/translation-group', $fields, $key_id);
+        if ($attested['ok'] !== true) {
+            return ['ok' => false, 'code' => $attested['code'],
+                    'reason' => $attested['reason'],
+                    'attestation_branch' => $attested['branch']];
+        }
+
         // BEFORE ANYTHING ELSE, INCLUDING THE PLAN'S OWN SHAPE: a server that
         // cannot perform this request at all has no standing to tell the caller
         // its request is malformed.
@@ -212,8 +264,10 @@ final class CadenceLinkRequest {
         // and a key holding `translation.link` could walk it one 403 at a time.
         // What that discloses is PROVENANCE -- which of two tenants on one site
         // published a given post -- and per-key scope was added to protect
-        // precisely that. This route verifies no attestation, so the walk needs
-        // only a leaked connector key.
+        // precisely that. The walk needed only a leaked connector key, because
+        // this route verified no attestation at all; it verifies one now, and
+        // the merge STAYS -- a signature narrows who can ask, and a key
+        // carrying the unsigned-publish exemption asks with none.
         //
         // AND IT IS NOT ONE SENTENCE OVER TWO DENY CLASSES, which is the defect
         // the rest of this vocabulary avoids. There is one predicate here,
@@ -416,7 +470,14 @@ final class CadenceLinkRequest {
                 self::write_element($p, $trid);
             }
         }
-        $answer = ['ok' => true, 'written' => count($posts)];
+        // WHAT THE ATTESTATION SAID, carried down from the verification above
+        // rather than re-derived: one verification per request, and a second
+        // here would be a second chance to disagree with the first. The same
+        // two fields the other two routes answer with, so a caller reading them
+        // never has to know which route it called.
+        $answer = ['ok' => true, 'written' => count($posts),
+                   'attestation' => $attested['attestation']]
+            + (isset($attested['kid']) ? ['attestation_kid' => $attested['kid']] : []);
         if ($piece_id !== null) {
             $answer['report'] = self::report($piece_id, $posts);
         }

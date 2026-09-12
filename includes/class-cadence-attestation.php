@@ -12,8 +12,8 @@
  * `connector_content_contract.json` under `attestation`, with worked vectors,
  * because two implementations in two languages cannot be shown to agree on a
  * byte layout by each describing it in prose. This class is written AGAINST
- * those vectors -- `AttestationTest` composes all three and diffs bytes -- and
- * if this file and that file disagree, that file is right.
+ * those vectors -- `AttestationTest` composes every one of them and diffs
+ * bytes -- and if this file and that file disagree, that file is right.
  *
  * WHY A SECOND DIGEST AND NOT `CadenceRevision`. They answer different
  * questions over different inputs: a revision says which text a POST holds
@@ -86,10 +86,225 @@ final class CadenceAttestation {
      */
     public const INTEGER_FIELD = 'post_id';
 
+    /**
+     * THE ONE ENTRY IN A FIELD ORDER THAT IS NOT A FIELD.
+     *
+     * `/translation-group` is the first route whose signed set is not a fixed
+     * list: a translation group has as many members as it has languages. This
+     * token stands where those members go, and `signed_field_order` expands it
+     * into `member.<i>.<name>` for i counting from 0 over the members in
+     * CANONICAL order. Everything else about the line format is unchanged -- a
+     * member field is length-prefixed exactly like a top-level one.
+     */
+    public const MEMBERS = '@members';
+
+    /** The four fields every member signs, in order, under its own prefix. */
+    public const MEMBER_FIELDS = ['post_id', 'language_code', 'element_type',
+                                  'source_language_code'];
+
     public const FIELDS = [
-        '/content'         => ['piece_id', 'language', 'post_type', 'status', 'title', 'content'],
-        '/content/replace' => ['piece_id', 'post_id', 'revision', 'title', 'content'],
+        '/content'           => ['piece_id', 'language', 'post_type', 'status', 'title', 'content'],
+        '/content/replace'   => ['piece_id', 'post_id', 'revision', 'title', 'content'],
+        // `/translation-group` signs `source_language_code` on every member
+        // BECAUSE IT REACHES A WRITE: it goes straight into WPML's
+        // `wpml_set_element_language_details`, so an intermediary that added or
+        // changed one would change what the site records as a translation's
+        // source. That is the test `/content`'s unsigned `declared` fails --
+        // tampering there can only cause a refusal -- and it is why a member is
+        // four fields and not three.
+        //
+        // NO MEMBER COUNT IS SIGNED, and that is not an oversight: every member
+        // name carries its index, so dropping a member renumbers every one after
+        // it and adding one appends a block. Either way the material differs. A
+        // count would be a second spelling of a fact the framing already carries.
+        '/translation-group' => ['trid', 'create_group', 'piece_id', self::MEMBERS],
     ];
+
+    /**
+     * THE SIGNED FIELD ORDER FOR ONE BODY, with `@members` expanded.
+     *
+     * Derived from the fields themselves rather than carried beside them: the
+     * member count is a property of the plan, and a verifier handed a count
+     * would be trusting the sender about how much of its own body to read.
+     *
+     * @param array $fields The route's signable fields.
+     * @return list<string>
+     *
+     * @throws InvalidArgumentException on a route this does not sign, or on a
+     *         member map whose indices are not 0..n-1. Never reachable from a
+     *         route: `link_fields` is the only thing that builds one.
+     */
+    public static function signed_field_order(string $route, array $fields): array {
+        if (!isset(self::FIELDS[$route])) {
+            throw new InvalidArgumentException('no signed field set for route ' . $route);
+        }
+        $order = [];
+        foreach (self::FIELDS[$route] as $name) {
+            if ($name !== self::MEMBERS) {
+                $order[] = $name;
+                continue;
+            }
+            // COUNTED FROM THE KEYS AND THEN REQUIRED TO BE CONTIGUOUS. A map
+            // holding `member.0.` and `member.2.` has no reading -- signing the
+            // two it can see would silently drop a member from the material and
+            // verify a body nobody sent.
+            $seen = [];
+            foreach (array_keys($fields) as $key) {
+                if (preg_match('/\Amember\.(\d+)\./', (string) $key, $m) === 1) {
+                    $seen[(int) $m[1]] = true;
+                }
+            }
+            for ($i = 0, $n = count($seen); $i < $n; $i++) {
+                if (!isset($seen[$i])) {
+                    throw new InvalidArgumentException('member indices are not 0..n-1');
+                }
+                foreach (self::MEMBER_FIELDS as $field) {
+                    $order[] = 'member.' . $i . '.' . $field;
+                }
+            }
+        }
+        return $order;
+    }
+
+    /**
+     * THE SIGNABLE REDUCTION OF ONE LINK PLAN, or why it has none.
+     *
+     * `/translation-group` is the one route whose body is not flat, so the plan
+     * becomes the flat, ordered field map the material is composed from here --
+     * in ONE place, because a second rendering of a boolean or of an absent
+     * language is a second thing for two languages to keep true.
+     *
+     * THE SOURCE IS MEMBER 0, because it is the plan's `source` field. Which
+     * member is the source is never inferred -- not from a language, not from an
+     * order, not from a `source_language_code`.
+     *
+     * THE TRANSLATIONS ARE SORTED, NEVER TAKEN IN WIRE ORDER. They arrive as a
+     * JSON object, and object key order is not a thing a signature may depend
+     * on: an intermediary that re-serialises the body, a parser that sorts, or a
+     * client library backed by a hash map would reorder it and every honest
+     * request would be refused as `mismatch` -- blaming a tenant's key for a
+     * proxy's JSON. So both halves sort, by `language_code` ascending AS BYTES,
+     * ties broken by `post_id` ascending. The tie-break exists so the form is
+     * TOTAL: two translations sharing a language is a plan neither side will
+     * ever compose -- this route refuses it as `bad_plan` -- but verification
+     * runs before that refusal, so the ordering has to be decided anyway.
+     *
+     * THE MAP KEY IS NOT SIGNED. `translations` is keyed by language, and the
+     * key selects nothing: the write reads each member's own `language_code`.
+     * It is also what makes the tie-break reachable at all, since two keys may
+     * hold two members naming one language.
+     *
+     * A STRING RETURN IS A PLAN THAT CANNOT BE SIGNED AT ALL, and the caller
+     * answers `bad_plan` over it -- not a sixth attestation branch. A
+     * `create_group` that is not a JSON boolean, or a `post_id` that is a
+     * string, has no rendering: `'true'` and `true` rendered alike would let a
+     * plan the shape check refuses verify against a signature over a plan it
+     * accepts. That refusal discloses nothing about the site, which is why it
+     * may run before the signature is checked.
+     *
+     * @param array $plan The decoded body, NOT yet shape-checked.
+     * @return array<string, string|int>|string
+     */
+    public static function link_fields(array $plan) {
+        if (!array_key_exists('create_group', $plan) || !is_bool($plan['create_group'])) {
+            return 'create_group is absent or is not a boolean, so this plan cannot be signed';
+        }
+        // ABSENT AND NULL RENDER ALIKE, for `trid` and `piece_id` both: a plan
+        // that names no group and one that names none by omission are the same
+        // zero-length value. A plan missing `trid` altogether is `bad_plan`
+        // further down on its own grounds; it is not an attestation failure.
+        $trid = $plan['trid'] ?? null;
+        if ($trid !== null && (is_bool($trid) || !is_int($trid))) {
+            return 'trid is neither null nor an integer, so this plan cannot be signed';
+        }
+        $piece_id = $plan['piece_id'] ?? null;
+        if ($piece_id !== null && !is_string($piece_id)) {
+            return 'piece_id is present and is not a string, so this plan cannot be signed';
+        }
+        $source = $plan['source'] ?? null;
+        $translations = $plan['translations'] ?? null;
+        if (!is_array($source) || !is_array($translations)) {
+            return 'source or translations is not an object, so this plan cannot be signed';
+        }
+
+        $members = [];
+        foreach (array_values($translations) as $i => $member) {
+            $reason = self::signable_member($member, 'translation ' . ($i + 1));
+            if (is_string($reason)) {
+                return $reason;
+            }
+            $members[] = $member;
+        }
+        usort($members, static function (array $a, array $b): int {
+            // AS BYTES. `strcmp` and never a locale- or case-aware comparison:
+            // the other half sorts Python strings, and a collation would make
+            // the two halves disagree on exactly the codes an operator adds last.
+            return strcmp($a['language_code'], $b['language_code'])
+                ?: $a['post_id'] <=> $b['post_id'];
+        });
+        $reason = self::signable_member($source, 'source');
+        if (is_string($reason)) {
+            return $reason;
+        }
+        array_unshift($members, $source);
+
+        $fields = [
+            // `trid` IS NOT AN INTEGER FIELD. It renders as decimal ASCII of the
+            // integer the check above has already required, so the rendering is
+            // exact rather than a coercion -- and a null one renders empty,
+            // which no decimal spelling collides with.
+            'trid'         => $trid === null ? '' : (string) $trid,
+            // THE ASCII LITERAL, lowercase, no quotes, never `1`/`0`.
+            'create_group' => $plan['create_group'] ? 'true' : 'false',
+            'piece_id'     => $piece_id === null ? '' : $piece_id,
+        ];
+        foreach ($members as $i => $member) {
+            $prefix = 'member.' . $i . '.';
+            // `post_id` STAYS AN INT so the material's own integer discipline
+            // refuses a string one there too, in the place the bytes are made.
+            $fields[$prefix . 'post_id']       = $member['post_id'];
+            $fields[$prefix . 'language_code'] = $member['language_code'];
+            $fields[$prefix . 'element_type']  = $member['element_type'];
+            $fields[$prefix . 'source_language_code'] =
+                $member['source_language_code'] ?? '';
+        }
+        return $fields;
+    }
+
+    /**
+     * CAN THIS MEMBER BE RENDERED AT ALL, and if not, which value stopped it.
+     *
+     * Only the questions the BYTES ask: is there a value of the right type for
+     * each of the four names. Whether a language code is well formed, whether an
+     * element type is one WPML knows, whether two members claim one language --
+     * all of that is the route's own `bad_plan`, decided after verification on
+     * its own grounds, and folding it in here would answer for a body that
+     * verifies perfectly.
+     *
+     * @param mixed $member
+     * @return string|null
+     */
+    private static function signable_member($member, string $where): ?string {
+        if (!is_array($member)) {
+            return $where . ' is not an object, so this plan cannot be signed';
+        }
+        if (is_bool($member['post_id'] ?? null) || !is_int($member['post_id'] ?? null)) {
+            return $where . ' has a post_id that is not an integer, so this plan cannot be signed';
+        }
+        foreach (['language_code', 'element_type'] as $name) {
+            if (!is_string($member[$name] ?? null)) {
+                return $where . ' has a ' . $name
+                    . ' that is not a string, so this plan cannot be signed';
+            }
+        }
+        $src = $member['source_language_code'] ?? null;
+        if ($src !== null && !is_string($src)) {
+            return $where
+                . ' has a source_language_code that is neither absent nor a string, '
+                . 'so this plan cannot be signed';
+        }
+        return null;
+    }
 
     /**
      * THE EXACT BYTES A SIGNATURE IS TAKEN OVER.
@@ -110,9 +325,10 @@ final class CadenceAttestation {
      * THE LAST LINE IS TERMINATED, NOT SEPARATED. The material's final byte is
      * 0x0a.
      *
-     * @param string $route  `/content` or `/content/replace` -- the BARE path.
-     *                       Never the mount point: a signature must not depend
-     *                       on where a site mounts its REST API.
+     * @param string $route  `/content`, `/content/replace` or
+     *                       `/translation-group` -- the BARE path. Never the
+     *                       mount point: a signature must not depend on where a
+     *                       site mounts its REST API.
      * @param array  $fields The route's validated fields. Values as decoded,
      *                       with `post_id` still an int.
      *
@@ -124,18 +340,15 @@ final class CadenceAttestation {
      *         whose closedness is the thing a caller reads.
      */
     public static function material(string $route, array $fields): string {
-        if (!isset(self::FIELDS[$route])) {
-            throw new InvalidArgumentException('no signed field set for route ' . $route);
-        }
         $material = self::PREFIX . "\n" . $route . "\n";
-        foreach (self::FIELDS[$route] as $name) {
+        foreach (self::signed_field_order($route, $fields) as $name) {
             if (!array_key_exists($name, $fields)) {
                 throw new InvalidArgumentException('signed field ' . $name . ' is absent');
             }
             $value = $fields[$name];
-            if ($name === self::INTEGER_FIELD && !is_int($value)) {
+            if (self::is_integer_field($name) && !is_int($value)) {
                 throw new InvalidArgumentException(
-                    self::INTEGER_FIELD . ' is signed as an integer and is never read from a string');
+                    $name . ' is signed as an integer and is never read from a string');
             }
             // `post_id` IS SIGNED AS DECIMAL ASCII OF AN INTEGER, and a string
             // is REFUSED rather than coerced: `'007'` and `7` are one post and
@@ -154,6 +367,18 @@ final class CadenceAttestation {
             $material .= $name . ':' . strlen($value) . ':' . $value . "\n";
         }
         return $material;
+    }
+
+    /**
+     * IS THIS NAME SIGNED AS DECIMAL ASCII OF AN INTEGER?
+     *
+     * `post_id` at the top level, and a member's own `post_id` under its index.
+     * Named rather than inferred from the value's type, for the reason
+     * `INTEGER_FIELD` gives: inferring it IS the coercion.
+     */
+    private static function is_integer_field(string $name): bool {
+        return $name === self::INTEGER_FIELD
+            || preg_match('/\Amember\.\d+\.' . self::INTEGER_FIELD . '\z/', $name) === 1;
     }
 
     /**

@@ -54,7 +54,7 @@ X-Cadence-Key: <the key>
 A connector key is a bearer credential: it says a caller is *entitled* to
 publish here, not that *this body* is the one that caller composed. Anything
 that ever reads one — a proxy, a log, a mirror — can replay a publish or edit
-the text inside it. So `/content` and `/content/replace` also verify an
+the text inside it. So all three routes also verify an
 Ed25519 signature over the bytes of the request:
 
 ```
@@ -66,6 +66,15 @@ route signs — for `/content` that is `piece_id`, `language`, `post_type`,
 `status`, `title` and `content`, in that order; for `/content/replace`,
 `piece_id`, `post_id`, `revision`, `title` and `content`. The route's own path
 is inside it, so a signature captured off a publish cannot verify a rewrite.
+
+`/translation-group` signs `trid`, `create_group`, `piece_id` and then every
+member of the group — the source first, then the translations **sorted by
+language code**, each contributing its `post_id`, `language_code`,
+`element_type` and `source_language_code`. The sort is why re-serialising the
+body, or a client library that hands `translations` back in a different order,
+does not break a signature. `source_language_code` is signed because it reaches
+WPML's write: changing it changes what the site records as a translation's
+source.
 
 **Paste the public half by hand**, on *Settings → Cadence Connector*, beside the
 key it belongs to. There is no upload route and no API that can write it, and
@@ -124,8 +133,10 @@ The linking route answers the two as **one** question deliberately. Answered
 apart they are a provenance oracle: a key holding `translation.link` could walk
 post ids and sort every one of them into "another tenant's Cadence post" and
 "everything else", one `403` at a time, and *which of two tenants published a
-given post* is the fact per-key scope exists to protect. That route verifies no
-attestation, so the walk would cost only a leaked connector key. The price is
+given post* is the fact per-key scope exists to protect. The walk cost only a
+leaked connector key while that route verified no attestation; it verifies one
+now, and the merge stays — a signature narrows *who can ask*, and a site
+carrying the unsigned-publish exemption asks with none. The price is
 paid by the legitimate caller: the code no longer says whether to republish the
 piece through `/content` or to present the key that owns it. What it keeps is
 the id it sent and the fact that this credential does not reach it; the rest is
@@ -143,9 +154,8 @@ same question as "is this post yours", and a replacement *overwrites a
 published title and body*. A replace naming a post another key published is
 refused with `replace_other_key` and a `403`, before the identifier is compared
 and before the row is touched. It stays its own code where the linking route
-merged: `/content/replace` verifies the request's attestation before it reads
-anything about the post, so the finer answer there costs a signing key rather
-than a leaked connector key. One refusal ends *nothing was linked* and the other
+merged: it was merged because the *pair of codes* partitioned the id space,
+which a signature in front of the route narrows but does not undo. One refusal ends *nothing was linked* and the other
 *nothing was written*, and a
 caller matching on the code to decide what did not happen must not be told
 about an act it never asked for. The refusal names the post id the caller
@@ -471,6 +481,14 @@ Requires a key carrying `translation.link`. Once the key answers,
 `CadenceRestRoute::names_posts()` refuses a body naming no posts, or one whose
 shape it cannot read — an empty request authorises nothing, so there is nothing
 there to say yes to.
+
+**And the plan must carry an attestation**, verified *before this site is asked
+anything at all* — before WPML is looked for, before the scope is settled,
+before a group is read. Every refusal under it discloses something about the
+client's site, and the signature is what earns the right to look. The one thing
+decided ahead of it is whether the plan can be rendered into bytes at all: a
+`create_group` that is not a JSON boolean, or a `post_id` that is a string, is
+`bad_plan`, which reads nothing about the site.
 
 **Every post the plan names must be one this connector published.** The
 capability answers for the route; this answers for the posts, and it is checked

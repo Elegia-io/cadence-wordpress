@@ -385,7 +385,8 @@ final class RestRouteTest extends TestCase {
         $body = $this->body([1, 2, 3]);
 
         $this->assertTrue(CadenceRestRoute::names_posts($body));
-        $result = CadenceLinkRequest::run($body, null);
+        $result = CadenceLinkRequest::run($body, null, CadenceAttest::KEY_ID,
+            CadenceAttest::link_header($body, CadenceAttest::KEY_ID));
         $this->assertTrue($result['ok'], $result['reason'] ?? '');
 
         $authorised = CadenceRestRoute::post_ids($body);

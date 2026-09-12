@@ -605,8 +605,8 @@ machine, only podman or docker.
 
 ### What CI enforces
 
-`.github/workflows/ci.yml` runs on every pull request and on every push to
-`main`: `php -l` over every tracked PHP file on **PHP 8.1**, the version the
+`.github/workflows/ci.yml` runs on every pull request (and on demand via
+`workflow_dispatch`): `php -l` over every tracked PHP file on **PHP 8.1**, the version the
 plugin header declares as its minimum, and the PHPUnit suite on PHP 8.3. Before
 that workflow existed this repository ran nothing — the suite above was a
 command someone chose to type (`Elegia-io/cadence`#1259).

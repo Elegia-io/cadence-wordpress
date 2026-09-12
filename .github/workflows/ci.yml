@@ -14,6 +14,31 @@
 #   `tests` runs the PHPUnit suite, which is the plugin's own REFUSALS -- what
 #   it checks before it writes. PHPUnit 11 needs PHP >= 8.2, so it runs on 8.3,
 #   the version ./run-tests.sh uses locally.
+#
+# THE SUITE RUNS IN TWO LANES, SPLIT AT THE WPML LINE (Elegia-io/cadence#1262).
+# Both are stubbed -- nothing here runs against a real WordPress -- but they are
+# not worth the same:
+#
+#   `--exclude-group wpml` reaches no WPML hook at all: 132 of the suite's 279
+#   test methods, which PHPUnit counts as 154 once a data provider's rows are
+#   counted separately. Its verdicts are the plugin's own refusals, and they
+#   are as true here as they would be on a live site.
+#
+#   `--group wpml` reaches one: the other 147 methods, 168 runs. Its verdicts
+#   are conditional on tests/bootstrap.php modelling WPML correctly, and three
+#   of the beliefs it models are documented by WPML and never observed -- see
+#   the header of includes/class-cadence-link-request.php. Green here is
+#   evidence about this plugin's logic, not about WPML.
+#
+# The third step is what keeps that line from decaying into a sentence nobody
+# maintains: it fails when a test crosses it in either direction. See
+# tests/wpml-boundary.php for what counts as crossing and why.
+#
+# THE REAL-WPML LANE IS NOT BUILT, AND THAT IS A PRICE, NOT A WALL. The operator
+# HOLDS a WPML licence, so a self-hosted runner carrying WordPress + WPML is
+# available on the day someone decides to keep, patch and pay for a machine.
+# Against a plugin whose entire CI is three jobs on GitHub-hosted runners, that
+# has not been worth it yet. Nobody should record this as impossible.
 name: CI
 
 # PULL REQUESTS ONLY. A push to `main` is the merge of a pull request this workflow
@@ -82,16 +107,39 @@ jobs:
         # acquire a test runner would be the largest thing in the repository.
         run: curl -sSfL -o .phpunit.phar https://phar.phpunit.de/phpunit-11.phar
 
-      - name: Run the suite
-        # --fail-on-empty-test-suite so a bootstrap that loaded no tests is red
-        # rather than a green summary over nothing.
+      # TWO STEPS, NOT ONE RUN AND A FILTER, so the two lanes' results are
+      # separately visible: a red `stubbed` lane is a defect in the plugin, and
+      # a red `wpml` lane may equally be a defect in what the stub believes.
+      #
+      # --fail-on-empty-test-suite on both so a bootstrap that loaded no tests,
+      # or a selector that matched none, is red rather than a green summary over
+      # nothing.
+      - name: Run the stubbed lane
         run: |
           php .phpunit.phar \
             --bootstrap tests/bootstrap.php \
             --do-not-cache-result \
             --colors=never \
             --fail-on-empty-test-suite \
+            --exclude-group wpml \
             tests
+
+      - name: Run the wpml lane
+        run: |
+          php .phpunit.phar \
+            --bootstrap tests/bootstrap.php \
+            --do-not-cache-result \
+            --colors=never \
+            --fail-on-empty-test-suite \
+            --group wpml \
+            tests
+
+      - name: Check the boundary between them
+        # Runs both lanes again with the recorder armed and refuses if a test
+        # crossed either way. It re-runs rather than reading the steps above
+        # because what it needs is WHICH TEST reached WPML, which a pass/fail
+        # summary cannot say. The whole suite is under a second.
+        run: php tests/wpml-boundary.php
 
   readme:
     name: readme.txt agrees with the plugin header

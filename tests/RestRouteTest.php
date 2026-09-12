@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -370,6 +371,7 @@ final class RestRouteTest extends TestCase {
      * writer has never read, which would have authorised nothing at all while
      * every test on this page passed.
      */
+    #[Group('wpml')]
     public function test_the_ids_authorised_are_exactly_the_ids_written(): void {
         WpStub::reset();
         WpStub::add_post(1, 'page', 'en', null);

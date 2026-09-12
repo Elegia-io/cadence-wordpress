@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -114,6 +115,7 @@ final class ContentRequestTest extends TestCase {
      * the identifier is taken, which is the same disclosure in smaller print,
      * and it would refuse a publish B is entitled to make.
      */
+    #[Group('wpml')]
     public function test_a_piece_id_another_key_used_resolves_to_this_keys_own_post(): void {
         $first = $this->publish($this->body(), ['content.replace'], null, null, 'key-a');
         $this->assertTrue($first['created']);
@@ -151,6 +153,7 @@ final class ContentRequestTest extends TestCase {
      * Without it the test above passes on a lookup that finds nothing ever,
      * which publishes every retried piece twice.
      */
+    #[Group('wpml')]
     public function test_the_same_key_repeating_its_own_piece_id_is_answered_with_that_post(): void {
         $first  = $this->publish($this->body(), ['content.replace'], null, null, 'key-a');
         $second = $this->publish($this->body(), ['content.replace'], null, null, 'key-a');
@@ -170,6 +173,7 @@ final class ContentRequestTest extends TestCase {
      * than the disclosure the scoping closes, and one that lands on sites this
      * repository does not control.
      */
+    #[Group('wpml')]
     public function test_a_post_that_predates_the_stamp_is_still_found_by_the_repeat(): void {
         WpStub::add_post(42, 'post');
         WpStub::cadence_published(42, 'piece-2026-08-31-en');
@@ -194,6 +198,7 @@ final class ContentRequestTest extends TestCase {
      * one this key reaches, so saying so discloses nothing it could not ask
      * for -- and creating instead would put the same piece on the site twice.
      */
+    #[Group('wpml')]
     public function test_a_piece_already_placed_in_a_type_out_of_scope_is_refused(): void {
         WpStub::add_post(42, 'page');
         WpStub::cadence_published(42, 'piece-2026-08-31-en');
@@ -245,6 +250,7 @@ final class ContentRequestTest extends TestCase {
      * Without it the test above passes on a route that refuses every publish,
      * which is a narrowing nobody can tell from a broken connector.
      */
+    #[Group('wpml')]
     public function test_a_publish_into_the_type_the_key_names_still_succeeds(): void {
         $r = $this->publish($this->body(['post_type' => 'post']), ['content.replace'], null, ['post']);
 
@@ -257,6 +263,7 @@ final class ContentRequestTest extends TestCase {
      * AND A KEY THAT NAMES NO TYPE PUBLISHES INTO ANY, which is the
      * compatibility path for every key already issued on a client's site.
      */
+    #[Group('wpml')]
     public function test_a_key_naming_no_post_type_publishes_into_any_registered_type(): void {
         $r = $this->publish($this->body(['post_type' => 'page']));
 
@@ -313,6 +320,7 @@ final class ContentRequestTest extends TestCase {
      * `meta_input` beside the identifier and for the same reason: a stamp
      * written afterwards leaves a window in which the post carries no identity.
      */
+    #[Group('wpml')]
     public function test_the_created_post_carries_the_creating_keys_id(): void {
         $r = $this->publish($this->body(), ['content.replace'], null, null, 'aaaa1111');
 
@@ -364,6 +372,7 @@ final class ContentRequestTest extends TestCase {
      * request is still authenticated by a key that confers no WordPress
      * identity, and this id does not change that.
      */
+    #[Group('wpml')]
     public function test_the_keys_byline_is_the_posts_author(): void {
         $r = $this->publish($this->body(), ['content.replace'], 7);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
@@ -376,12 +385,14 @@ final class ContentRequestTest extends TestCase {
      * connector has always made -- the field is absent, not 0 written by us.
      * An install that publishes today goes on publishing.
      */
+    #[Group('wpml')]
     public function test_no_byline_leaves_the_author_field_untouched(): void {
         $r = $this->publish($this->body());
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertArrayNotHasKey('post_author', WpStub::$inserted[0]);
     }
 
+    #[Group('wpml')]
     public function test_creates_a_post_and_returns_its_id(): void {
         $r = $this->publish($this->body());
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
@@ -396,6 +407,7 @@ final class ContentRequestTest extends TestCase {
      * THE RETRY. Same body twice: one post, the same id, and the second answer
      * says plainly that it did not create anything.
      */
+    #[Group('wpml')]
     public function test_the_same_piece_id_twice_creates_one_post(): void {
         $first  = $this->publish($this->body());
         $second = $this->publish($this->body());
@@ -412,6 +424,7 @@ final class ContentRequestTest extends TestCase {
      * post is right. Silently overwriting the live article is not, and neither
      * is creating a second one.
      */
+    #[Group('wpml')]
     public function test_a_changed_body_under_a_used_id_neither_rewrites_nor_duplicates(): void {
         $first = $this->publish($this->body());
         $again = $this->publish($this->body(['title' => 'Rewritten', 'content' => 'x']));
@@ -425,6 +438,7 @@ final class ContentRequestTest extends TestCase {
      * THE ID IS SCOPED TO THIS PLUGIN'S OWN META KEY, and matched exactly. A
      * lookup that matched a prefix would let `piece-1` answer for `piece-10`.
      */
+    #[Group('wpml')]
     public function test_a_different_piece_id_creates_a_second_post(): void {
         $this->publish($this->body(['piece_id' => 'piece-1']));
         $r = $this->publish($this->body(['piece_id' => 'piece-10']));
@@ -432,6 +446,7 @@ final class ContentRequestTest extends TestCase {
         $this->assertCount(2, WpStub::$inserted);
     }
 
+    #[Group('wpml')]
     public function test_the_piece_id_is_recorded_on_the_post_it_created(): void {
         $r = $this->publish($this->body(['piece_id' => 'piece-7']));
         $this->assertSame('piece-7', WpStub::$meta[$r['post_id']]['_cadence_external_id'] ?? null);
@@ -454,6 +469,7 @@ final class ContentRequestTest extends TestCase {
         }
     }
 
+    #[Group('wpml')]
     public function test_accepts_the_three_statuses_it_does_publish(): void {
         foreach (['draft', 'pending', 'publish'] as $status) {
             WpStub::reset();
@@ -505,6 +521,7 @@ final class ContentRequestTest extends TestCase {
      * on the next run of the pipeline -- content resurrected by a retry, which
      * is worse than a duplicate because a human deliberately removed it.
      */
+    #[Group('wpml')]
     public function test_a_trashed_post_still_answers_for_its_identifier(): void {
         $first = $this->publish($this->body(['status' => 'publish']));
         WpStub::$posts[$first['post_id']]['post_status'] = 'trash';
@@ -521,6 +538,7 @@ final class ContentRequestTest extends TestCase {
      * default, so the test above is about the scope of the lookup and not
      * about the word `trash`.
      */
+    #[Group('wpml')]
     public function test_a_draft_answers_for_its_identifier(): void {
         $first = $this->publish($this->body(['status' => 'draft']));
         $again = $this->publish($this->body(['status' => 'draft']));
@@ -535,6 +553,7 @@ final class ContentRequestTest extends TestCase {
      * duplicate. The window is too small to test by racing it and too real to
      * leave to a comment, so the mechanism is asserted instead.
      */
+    #[Group('wpml')]
     public function test_the_identifier_travels_in_the_insert_call(): void {
         $this->publish($this->body(['piece_id' => 'piece-9']));
         $this->assertSame('piece-9',
@@ -550,6 +569,7 @@ final class ContentRequestTest extends TestCase {
      * would make its next replacement wrong in the direction that writes.
      * Refusing the whole request would be a second lie: the post exists.
      */
+    #[Group('wpml')]
     public function test_a_post_that_cannot_be_read_back_is_still_a_created_post(): void {
         WpStub::$post_read_fails = true;
         $r = $this->publish($this->body());
@@ -566,6 +586,7 @@ final class ContentRequestTest extends TestCase {
      * as an id gets `0` -- which is falsy, and is also what "no post" looks
      * like everywhere else.
      */
+    #[Group('wpml')]
     public function test_an_insert_that_fails_is_reported_as_a_failure(): void {
         WpStub::$insert_fails = 'database is on fire';
         $r = $this->publish($this->body());
@@ -583,6 +604,7 @@ final class ContentRequestTest extends TestCase {
      * it is falsy, which is what "no post" looks like everywhere else -- so it
      * propagates as a plausible absence instead of a failure.
      */
+    #[Group('wpml')]
     public function test_a_zero_with_no_error_is_reported_as_a_failure(): void {
         WpStub::$insert_returns_zero = true;
         $r = $this->publish($this->body());
@@ -597,6 +619,7 @@ final class ContentRequestTest extends TestCase {
      * against a post that was never created would make every future retry
      * answer with a post that does not exist.
      */
+    #[Group('wpml')]
     public function test_a_failed_insert_leaves_the_identifier_free(): void {
         WpStub::$insert_fails = 'nope';
         $this->publish($this->body());
@@ -616,6 +639,7 @@ final class ContentRequestTest extends TestCase {
      * worth auditing -- which is why the verifier on the other side of the wire
      * had nothing to parse until now.
      */
+    #[Group('wpml')]
     public function test_a_created_post_reports_what_it_placed(): void {
         $r = $this->publish($this->body(['piece_id' => 'p-1']));
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
@@ -634,6 +658,7 @@ final class ContentRequestTest extends TestCase {
     }
 
     /** The idempotent repeat reports the same placement, and `created` false. */
+    #[Group('wpml')]
     public function test_an_idempotent_repeat_reports_the_post_that_is_already_there(): void {
         $first  = $this->publish($this->body());
         $second = $this->publish($this->body());
@@ -650,6 +675,7 @@ final class ContentRequestTest extends TestCase {
      *
      * Without this the client discovers it on their own site.
      */
+    #[Group('wpml')]
     public function test_a_language_the_site_cannot_serve_is_reported_not_dropped(): void {
         WpStub::$active_languages = ['en' => [], 'de' => []];
         $r = $this->publish($this->body([
@@ -667,6 +693,7 @@ final class ContentRequestTest extends TestCase {
     }
 
     /** `linked` is empty and says so: linking is the other route's write. */
+    #[Group('wpml')]
     public function test_this_route_never_reports_a_link_it_did_not_make(): void {
         $r = $this->publish($this->body());
         $this->assertSame([], $r['report']['linked']);
@@ -674,6 +701,7 @@ final class ContentRequestTest extends TestCase {
     }
 
     /** A refusal reports no placement at all, and writes nothing. */
+    #[Group('wpml')]
     public function test_a_declaration_that_disagrees_with_the_site_places_nothing(): void {
         WpStub::$wpml_reads  = false;
         WpStub::$wpml_writes = false;
@@ -690,6 +718,7 @@ final class ContentRequestTest extends TestCase {
      * `external_id` IS WHAT 0.1.0 CALLED IT, and 0.1.0 is installed on sites
      * this repository does not control. Accepted, and answered as `piece_id`.
      */
+    #[Group('wpml')]
     public function test_the_released_field_name_still_identifies_a_piece(): void {
         $body = $this->body();
         $body['external_id'] = $body['piece_id'];
@@ -707,6 +736,7 @@ final class ContentRequestTest extends TestCase {
      * own -- it did not exist a moment ago -- so there is nothing here to
      * disclose, and a key holding only `content.publish` still gets it.
      */
+    #[Group('wpml')]
     public function test_a_created_posts_revision_is_handed_to_a_key_with_no_replace_capability(): void {
         $r = $this->publish($this->body(), []);
         $this->assertTrue($r['created']);
@@ -721,6 +751,7 @@ final class ContentRequestTest extends TestCase {
      * could otherwise guess a piece_id and read the revision back having read
      * no article; it is never handed to a key that cannot act on it.
      */
+    #[Group('wpml')]
     public function test_a_key_without_content_replace_is_not_handed_the_revision_on_a_repeat(): void {
         $first  = $this->publish($this->body());
         $second = $this->publish($this->body(), []);
@@ -731,6 +762,7 @@ final class ContentRequestTest extends TestCase {
     }
 
     /** THE TWIN: a key that DOES hold `content.replace` is handed it. */
+    #[Group('wpml')]
     public function test_a_key_with_content_replace_is_handed_the_revision_on_a_repeat(): void {
         $first  = $this->publish($this->body());
         $second = $this->publish($this->body(), ['content.replace']);

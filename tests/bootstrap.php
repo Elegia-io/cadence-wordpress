@@ -334,10 +334,105 @@ function get_post_meta(int $post_id, string $key = '', bool $single = false) {
 }
 
 /**
+ * WHICH TESTS REACH WPML, recorded while they run.
+ *
+ * THE LINE THIS SUITE IS SPLIT ON. The stubs above answer the way the code
+ * expects, so a test whose verdict rests on WPML's behaviour is checking this
+ * file's beliefs about WPML and not WPML -- three of them are documented and
+ * never observed (see the header of includes/class-cadence-link-request.php).
+ * Those tests carry `#[Group('wpml')]` and run in their own lane; everything
+ * else is the plugin's own refusals, which reach no WPML at all and are
+ * therefore as true here as on a live site.
+ *
+ * THE BOUNDARY IS THE CAPABILITY, NOT A LIST OF TEST NAMES: recorded when a
+ * WPML hook is actually reached, so a test that gets there through a private
+ * helper, a shared setUp or three frames of production code is recorded the
+ * same as one that names the hook itself. Any hook in WPML's `wpml_`
+ * namespace counts, present or future -- the prefix is the namespace WPML
+ * publishes under, not a denylist of the four spellings this file happens to
+ * implement.
+ *
+ * Armed only when `CADENCE_WPML_BOUNDARY_LOG` names a file, which
+ * tests/wpml-boundary.php sets; an ordinary run records nothing and pays for
+ * nothing. The log is written at shutdown so a fatal error mid-run still
+ * leaves whatever was measured behind.
+ */
+final class WpmlBoundary {
+    /** The namespace WPML's hooks live in. */
+    public const PREFIX = 'wpml_';
+
+    /**
+     * A reach nothing could attribute to a test -- a hook fired from a data
+     * provider, a shutdown function, or the bootstrap itself. Recorded under
+     * its own key rather than dropped: an unattributable crossing is still a
+     * crossing, and a recorder that silently discarded it would report a clean
+     * lane it had not measured.
+     */
+    public const UNATTRIBUTED = '(no test frame)';
+
+    /** @var array<string, list<string>> `Class::method` => the wpml_ hooks it reached */
+    public static array $crossings = [];
+
+    private static ?string $log = null;
+
+    public static function arm(): void {
+        $path = getenv('CADENCE_WPML_BOUNDARY_LOG');
+        if ($path === false || $path === '') {
+            return;
+        }
+        self::$log = $path;
+        register_shutdown_function(static function (): void {
+            // THE PREFIX TRAVELS WITH THE MEASUREMENT. The reader reports
+            // what was keyed on rather than repeating the constant, so a
+            // second copy of it cannot drift away from the one that ran.
+            file_put_contents(
+                (string) self::$log,
+                json_encode(['prefix' => self::PREFIX, 'crossings' => self::$crossings],
+                            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n"
+            );
+        });
+    }
+
+    /** Called by every stub below that answers for WPML, before it answers. */
+    public static function reached(string $hook): void {
+        if (self::$log === null || !str_starts_with($hook, self::PREFIX)) {
+            return;
+        }
+        $test = self::current_test();
+        if (!in_array($hook, self::$crossings[$test] ?? [], true)) {
+            self::$crossings[$test][] = $hook;
+        }
+    }
+
+    /**
+     * The test method on the stack. PHPUnit's own frames sit between it and
+     * here, and production code sits above it, so the first frame that is a
+     * `test*` method on a `*Test` class is the one that asked -- the same
+     * identity `--list-tests` prints, so the two sets can be compared.
+     */
+    private static function current_test(): string {
+        foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
+            $class = $frame['class'] ?? '';
+            $method = $frame['function'] ?? '';
+            if (str_ends_with($class, 'Test') && str_starts_with($method, 'test')) {
+                return $class . '::' . $method;
+            }
+        }
+        return self::UNATTRIBUTED;
+    }
+}
+
+WpmlBoundary::arm();
+
+/**
  * WPML's read filter. Returns null when the post is in no group, which is a
  * READING; a post this stub does not know returns false, which is not.
  */
 function apply_filters(string $hook, $value, ...$args) {
+    // BEFORE the listener question, not after: "WPML is not installed here" is
+    // an answer about WPML, and a test that leans on it has crossed the line
+    // just as surely as one that reads a trid back.
+    WpmlBoundary::reached($hook);
     // EXACTLY WHAT WORDPRESS DOES WITH NO LISTENER: return the default,
     // unchanged and without complaint. Not an error, not null -- the value the
     // caller itself supplied, which is why an absent WPML is invisible to any
@@ -380,6 +475,7 @@ function apply_filters(string $hook, $value, ...$args) {
 }
 
 function do_action(string $hook, ...$args): void {
+    WpmlBoundary::reached($hook);
     if (!WpStub::$wpml_writes) {
         return;   // nothing listening; the call is a no-op, as on a real site
     }
@@ -430,10 +526,12 @@ function current_user_can(string $cap, ...$args): bool {
  * registry; these answer from the two flags above.
  */
 function has_filter(string $hook, $callback = false) {
+    WpmlBoundary::reached($hook);
     return $hook === 'wpml_element_language_details' ? WpStub::$wpml_reads : false;
 }
 
 function has_action(string $hook, $callback = false) {
+    WpmlBoundary::reached($hook);
     return $hook === 'wpml_set_element_language_details' ? WpStub::$wpml_writes : false;
 }
 

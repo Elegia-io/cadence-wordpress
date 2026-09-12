@@ -16,6 +16,15 @@ if [ ! -f "$PHPUNIT_PHAR" ]; then
   curl -sSfL -o "$PHPUNIT_PHAR" https://phar.phpunit.de/phpunit-11.phar
 fi
 
-exec $PODMAN run --rm --entrypoint php \
+$PODMAN run --rm --entrypoint php \
   -v "${HERE}:/p:z" -w /p "$PHP_IMAGE" \
   /p/.phpunit.phar --bootstrap tests/bootstrap.php --do-not-cache-result --colors=never "$@" tests
+
+# AND THE BOUNDARY BETWEEN THE TWO LANES, unconditionally -- including after a
+# run narrowed by "$@", since the check measures the whole suite and what a
+# filtered run proves about the split is nothing. It runs both lanes itself, in
+# under a second. See tests/wpml-boundary.php for what the line is and why it
+# falls where it does.
+exec $PODMAN run --rm --entrypoint php \
+  -v "${HERE}:/p:z" -w /p "$PHP_IMAGE" \
+  /p/tests/wpml-boundary.php

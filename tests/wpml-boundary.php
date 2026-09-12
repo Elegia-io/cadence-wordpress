@@ -45,6 +45,20 @@
  * would otherwise report "0 crossings" and exit 0, which reads exactly like a
  * pass.
  *
+ * WHAT IT DOES NOT OBSERVE, stated because a detector that reports an absence
+ * owes the shape of what it cannot see. The recorder sits inside the stubs, so
+ * it sees reaches through WPML's HOOK surface and only that. WPML also exposes
+ * a `SitePress` object and `icl_*` functions, and a plugin talking to either
+ * would reach WPML without this file noticing.
+ *
+ * That hole is bounded rather than open, and by the bootstrap rather than by
+ * luck: neither `SitePress` nor any `icl_*` function is stubbed here, and
+ * nothing in includes/ calls one (grepped at this sha). So such a call does not
+ * slip quietly into the stubbed lane -- it fatals, because the symbol does not
+ * exist in this environment. The silent failure mode needs BOTH a new call
+ * shape and a stub for it, and whoever writes the second one is the person who
+ * has to widen this recorder.
+ *
  * Run: `php tests/wpml-boundary.php` (PHPUNIT_PHAR, else ./.phpunit.phar).
  */
 declare(strict_types=1);

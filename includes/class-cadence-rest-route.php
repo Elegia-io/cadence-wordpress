@@ -182,7 +182,7 @@ final class CadenceRestRoute {
      * the request nor the site: it is that this credential does not reach that
      * post.
      *
-     * ALL FIVE 403s ARE SEPARATE CODES FOR THE SAME REASON THEY ARE SEPARATE
+     * ALL SIX 403s ARE SEPARATE CODES FOR THE SAME REASON THEY ARE SEPARATE
      * BRANCHES. `post_out_of_scope` is a post this connector never published,
      * `post_other_key` one a different key published,
      * `post_type_out_of_scope` a post type this key may not create in, and
@@ -194,6 +194,17 @@ final class CadenceRestRoute {
      * last two are the pair most easily collapsed and least safely: one is the
      * type the REQUEST names, which the caller can change, and the other the
      * type a post it already owns was made in, which it cannot.
+     *
+     * `link_post_type_out_of_scope` IS THE SIXTH, AND IS NOT
+     * `existing_post_type_out_of_scope`. The scope behind both is the key's
+     * post-type list and the act is not: one refusal ends "nothing was
+     * written", this one "nothing was linked", and the thing refused is a POST
+     * the caller named by id rather than a PIECE it named by identifier. The
+     * operator's fix happens to be the same -- re-issue the key wider -- and
+     * that is not enough to merge them: a caller matching on the code to decide
+     * what did not happen would be told about an act it never asked for. Two
+     * acts, two codes, one scope, exactly as `replace_other_key` and
+     * `post_other_key` are two codes over one predicate.
      *
      * `replace_other_key` IS THE FIFTH, AND IS NOT `post_other_key`. The
      * predicate behind both is `CadenceKey::created_by`, and the act is not:
@@ -222,6 +233,7 @@ final class CadenceRestRoute {
         'replace_other_key'          => 403,
         'post_type_out_of_scope'     => 403,
         'existing_post_type_out_of_scope' => 403,
+        'link_post_type_out_of_scope' => 403,
         // ONE CODE OVER FIVE BRANCHES, and 403 for the same reason the four
         // above it are: the body is well formed and the site is fine. What is
         // wrong is that nothing here can show this body came from the tenant

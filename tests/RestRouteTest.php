@@ -147,6 +147,26 @@ final class RestRouteTest extends TestCase {
     }
 
     /**
+     * THE REPORT REACHES THE WIRE FLAT, from the linking route as from the
+     * other one. The caller's verifier reads `linked` from the body; a report
+     * left nested under `report` is a field it cannot see, and the merge is the
+     * only thing that puts it there. `written` survives beside it -- it is how
+     * many writes were ISSUED, and the gap between it and `linked` is the
+     * signal, so neither may swallow the other.
+     */
+    public function test_a_linking_reports_fields_are_merged_into_the_body(): void {
+        $r = CadenceRestRoute::respond(['ok' => true, 'written' => 2, 'report' => [
+            'piece_id' => 'piece-1', 'post_id' => 12,
+            'placed' => [], 'linked' => ['de'], 'refused' => [],
+        ]]);
+        $this->assertSame(200, $r['status']);
+        $this->assertArrayNotHasKey('report', $r['body']);
+        $this->assertSame(['ok' => true, 'written' => 2, 'piece_id' => 'piece-1',
+                           'post_id' => 12, 'placed' => [], 'linked' => ['de'],
+                           'refused' => []], $r['body']);
+    }
+
+    /**
      * AND AN UNCLASSIFIED ONE IS NOT A SUCCESS. The test above turns red when
      * a code is added unmapped; this one says what happens in the meantime on a
      * live site. Falling back to 400 would tell the caller its plan is wrong

@@ -41,9 +41,10 @@ final class ContentRequestTest extends TestCase {
     }
 
     /**
-     * `CadenceContentRequest::run`, WITH THE PRESENTED KEY'S CAPABILITY SET.
-     * Named for what it does rather than what it wraps: `run` is final on
-     * PHPUnit's own TestCase and a method here of that name never gets called.
+     * `CadenceContentRequest::run`, WITH THE PRESENTED KEY'S CAPABILITY SET
+     * AND ITS BYLINE. Named for what it does rather than what it wraps: `run`
+     * is final on PHPUnit's own TestCase and a method here of that name never
+     * gets called.
      *
      * Every test in this file that does not itself care about disclosure runs
      * a key holding `content.replace` too, so the revision this route hands
@@ -52,13 +53,43 @@ final class ContentRequestTest extends TestCase {
      * gate itself -- what a key WITHOUT that capability is and is not handed --
      * is `test_a_key_without_content_replace_is_not_handed_the_revision` below.
      *
+     * The byline defaults to null, which is the pre-existing key: the two
+     * arguments answer two unrelated questions and neither implies the other.
+     *
      * @param list<string> $capabilities
      */
-    private function publish(array $body, array $capabilities = ['content.replace']): array {
+    private function publish(array $body, array $capabilities = ['content.replace'],
+                             ?int $author = null): array {
         return CadenceContentRequest::run(
             $body,
-            static fn (string $capability): bool => in_array($capability, $capabilities, true)
+            static fn (string $capability): bool => in_array($capability, $capabilities, true),
+            $author
         );
+    }
+
+    /**
+     * THE BYLINE REACHES THE INSERT.
+     *
+     * Nothing else is done with it: `post_author` is a field on the row. The
+     * request is still authenticated by a key that confers no WordPress
+     * identity, and this id does not change that.
+     */
+    public function test_the_keys_byline_is_the_posts_author(): void {
+        $r = $this->publish($this->body(), ['content.replace'], 7);
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame(7, WpStub::$inserted[0]['post_author'] ?? null);
+    }
+
+    /**
+     * THE TWIN, AND THE PRE-EXISTING KEY. A key issued before keys carried a
+     * byline passes none, and the insert is then exactly the insert this
+     * connector has always made -- the field is absent, not 0 written by us.
+     * An install that publishes today goes on publishing.
+     */
+    public function test_no_byline_leaves_the_author_field_untouched(): void {
+        $r = $this->publish($this->body());
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertArrayNotHasKey('post_author', WpStub::$inserted[0]);
     }
 
     public function test_creates_a_post_and_returns_its_id(): void {

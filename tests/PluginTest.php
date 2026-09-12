@@ -59,11 +59,11 @@ final class PluginTest extends TestCase {
         $this->assertNotSame('__return_true', $permit);
         $this->assertFalse($permit(new WP_REST_Request(null)));
 
-        $publisher = CadenceKey::issue('tenant-a', ['content.publish']);
+        $publisher = CadenceKey::issue('tenant-a', ['content.publish'], 7);
         $this->assertFalse($permit(new WP_REST_Request(['post_id' => 41], $this->key($publisher))),
             'a key that may only create was allowed to rewrite');
 
-        $replacer = CadenceKey::issue('tenant-b', ['content.replace']);
+        $replacer = CadenceKey::issue('tenant-b', ['content.replace'], 7);
         $this->assertTrue($permit(new WP_REST_Request(['post_id' => 41], $this->key($replacer))));
     }
 
@@ -117,12 +117,33 @@ final class PluginTest extends TestCase {
 
         $this->assertFalse($permit(new WP_REST_Request($body)), 'no key at all was let through');
 
-        $linker = CadenceKey::issue('tenant-a', ['translation.link']);
+        $linker = CadenceKey::issue('tenant-a', ['translation.link'], 7);
         $this->assertFalse($permit(new WP_REST_Request($body, $this->key($linker))),
             'a key for linking translations was allowed to publish content');
 
-        $publisher = CadenceKey::issue('tenant-b', ['content.publish']);
+        $publisher = CadenceKey::issue('tenant-b', ['content.publish'], 7);
         $this->assertTrue($permit(new WP_REST_Request($body, $this->key($publisher))));
+    }
+
+    /**
+     * THE ROUTE PASSES THE PRESENTING KEY'S BYLINE TO THE INSERT.
+     *
+     * Asserted at the route: the handler can fill `post_author` perfectly from
+     * an argument the route never passes it, and every handler test still
+     * passes while every post the connector creates has no author.
+     */
+    public function test_the_content_route_gives_the_post_the_keys_byline(): void {
+        WpStub::$users = [7 => 'A Real Person', 9 => 'Another Person'];
+        $key = CadenceKey::issue('tenant-b', ['content.publish'], 9);
+        $this->assertIsArray($key, is_string($key) ? $key : '');
+        $body = ['piece_id' => 'p-3', 'post_type' => 'post', 'status' => 'draft',
+                 'title' => 'T', 'content' => 'C', 'language' => 'en',
+                 'declared' => ['multilingual' => true, 'languages' => ['en']]];
+
+        $made = ($this->routes['/content']['callback'])(new WP_REST_Request($body, $this->key($key)));
+
+        $this->assertSame(201, $made->get_status());
+        $this->assertSame(9, WpStub::$inserted[0]['post_author'] ?? null);
     }
 
     /** The header, spelled as it travels on the wire. */
@@ -229,7 +250,7 @@ final class PluginTest extends TestCase {
      */
     public function test_the_permission_callback_permits_a_linking_key(): void {
         $permit = $this->route[2]['permission_callback'];
-        $header = $this->key(CadenceKey::issue('tenant-a', ['translation.link']));
+        $header = $this->key(CadenceKey::issue('tenant-a', ['translation.link'], 7));
         $this->assertTrue($permit(new WP_REST_Request([
             'source' => ['post_id' => 1], 'translations' => [['post_id' => 2]],
         ], $header)));

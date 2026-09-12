@@ -41,8 +41,9 @@ post types, no front-end output.
 
 Callers authenticate with a **connector key**, not as a WordPress user. On
 **Settings → Cadence Connector**, give the key a label naming the tenant it is
-for, tick the capabilities it needs, and press *Issue*. The key is shown once and
-never again; the site stores only a SHA-256 of it. Present it as a header:
+for, tick the capabilities it needs, choose the **byline** its posts will carry,
+and press *Issue*. The key is shown once and never again; the site stores only a
+SHA-256 of it. Present it as a header:
 
 ```
 X-Cadence-Key: <the key>
@@ -62,6 +63,18 @@ publishes and revises holds both, ticked on the same key; a pipeline that only
 ever publishes cannot rewrite anything, even its own posts, without this being
 granted separately.
 
+**The byline** is a WordPress user on this site, defaulting to whoever is
+issuing the key. It fills `post_author` on the posts this key creates and does
+nothing else: the key does not authenticate as that user, and a request
+presenting it still has no WordPress identity. Without it `post_author` is `0`,
+which is a post no author filter finds and a byline themes print empty or fatal
+on.
+
+A key issued by an earlier version of this plugin carries no byline and goes on
+publishing exactly as it did, with no author. The key list marks those rows
+*none — re-issue to set one*; re-issuing is the only way to give one a byline,
+since the old key's secret cannot be recovered to edit in place.
+
 **Revoking** is the *Revoke* button beside the key. It takes effect on the next
 request; the row stays, marked revoked, so there is a record that this tenant had
 a key and that it was withdrawn.
@@ -79,7 +92,9 @@ plugin needs, and all of which whoever holds the credential now has.
 A connector key is scoped to a **capability** and carries no WordPress identity
 at all: `wp_get_current_user()` is 0 for a request authenticated this way, so
 every other REST route on the site, core's included, still refuses it. The two
-routes below are therefore the whole of what the key can reach.
+routes below are therefore the whole of what the key can reach. The byline is
+not an exception to this — it is an id written into one field of the post, never
+a user the request becomes.
 
 There is no fallback: a WordPress administrator logged in with every capability
 WordPress has cannot call these routes either.
@@ -136,6 +151,12 @@ Requires a key carrying `content.publish`.
 
 `external_id` is accepted as the 0.1.0 spelling of `piece_id`.
 
+The post is created with the byline the presenting key names; the request body
+does not choose an author, so a key cannot publish under a byline the site did
+not grant it. Nothing else in the connector sets an author: there is one route
+that creates posts, and a `piece_id` already on a post is answered with that
+post rather than rewritten.
+
 **`declared` is required, and the plugin verifies it rather than detecting it.**
 `multilingual` says whether this tenant is a multilingual client; `languages`
 says which languages the run covers. The plugin reports what the site actually
@@ -186,7 +207,7 @@ appeared:
 | `piece_id` | echoed back, so a reply can be bound to a request |
 | `post_id` | the integer WordPress assigned; the caller type-checks it before verifying anything else |
 | `placed` | the languages the piece landed in |
-| `linked` | the languages associated as translations. Always empty here: linking is the other endpoint's write |
+| `linked` | the languages associated as translations. Always empty here: linking is the other endpoint's write, and it reports them |
 | `refused` | `[language, reason]` pairs — this connector's own refusals, not transport failures |
 | `observed_unsupported` | requested languages this site cannot serve |
 
@@ -296,11 +317,14 @@ current state from the refusal instead of sending again.
 POST /wp-json/cadence/v1/translation-group
 ```
 
-Requires `edit_post` on every post the request names, asked per post rather than
-the blanket `edit_posts`, which a contributor holds.
+Requires a key carrying `translation.link`. Once the key answers,
+`CadenceRestRoute::names_posts()` refuses a body naming no posts, or one whose
+shape it cannot read — an empty request authorises nothing, so there is nothing
+there to say yes to.
 
 ```json
 {
+  "piece_id": "piece-2026-08-31-en",
   "trid": null,
   "create_group": true,
   "source":       {"post_id": 12, "language_code": "en", "element_type": "post_page",
@@ -314,6 +338,12 @@ Either `create_group` (make a new group from these posts) or `trid` (join this
 existing one). Both together is refused rather than reconciled: it asks for two
 different things and one of them destroys relations.
 
+`piece_id` is the piece the source post is, the same identifier `/content` was
+given for it. It is optional: without it the answer is the bare `{"ok": true,
+"written": N}` this route has always sent, because a report filed under no
+identifier is one nothing can be joined to. Present and blank — or present and
+not a string — is refused, for the reason `/content` refuses it.
+
 Every post is read before any post is written, so a request that is wrong about
 its last post writes nothing about its first.
 
@@ -321,11 +351,50 @@ its last post writes nothing about its first.
 
 | Status | Meaning | What the caller should do |
 |---|---|---|
-| `200` | Written. `written` is how many. | Nothing. |
+| `200` | Written. `written` is how many, and the report below says which. | Nothing. |
 | `400` | The request is wrong on its face. | Fix it; re-sending cannot help. |
 | `409` | The site disagrees with the request. | Re-read the site and try again. |
 | `503` | The site cannot do this at all. | Fix the site; the request is fine. |
 | `500` | Refused for a reason this version cannot classify. | Report it. |
+
+A request naming a `piece_id` is answered with the same report as `/content`,
+flat in the body:
+
+```json
+{
+  "ok": true,
+  "written": 2,
+  "piece_id": "piece-2026-08-31-en",
+  "post_id": 12,
+  "placed": [],
+  "linked": ["de"],
+  "refused": []
+}
+```
+
+| Field | |
+|---|---|
+| `piece_id` | echoed back, so a reply can be bound to a request |
+| `post_id` | the **source** post. `piece_id` names the piece and the source is the post that piece is, so this is the same pair `/content` reported when it placed it |
+| `placed` | always empty here, for the mirror of the reason `linked` is empty on `/content`: this route associates posts that already exist and creates none |
+| `linked` | the translation languages the site puts in the source's group **when read back after the write** |
+| `refused` | always empty in a successful answer: every refusal this route has is total, and returns `ok: false` with nothing written |
+
+`observed_unsupported` is absent rather than empty. This route never asks the
+site which languages it serves, so an empty list would be an absence nothing
+measured.
+
+**`linked` is read back from the site, never copied out of the request.** WPML's
+action returns nothing whatever it does, so the only evidence a link was made is
+what the site says afterwards — and a `linked` built from the plan would report
+every language the caller asked for, which is the request echoed back with an
+`ok` beside it. `written` is how many writes were *issued*; the two disagreeing
+is the signal. In particular a `create_group` request currently reports
+`linked: []` — see the note below.
+
+The source's own language is not in `linked`. That is what `/content` reported
+under `placed` for this piece, and leaving it out makes an empty `linked`
+unambiguous: nothing was associated, rather than "only the piece itself".
 
 Refusals carry a stable `code` as well as a human `reason`. Match on the code;
 the reason is prose and changes freely.
@@ -349,6 +418,12 @@ the reason is prose and changes freely.
 | `revision_mismatch` | 409 | the post holds text the replacement does not name |
 | `update_failed` | 500 | WordPress refused the update, or returned no id |
 | `no_row_lock` | 503 | the site would not open a transaction, so the text could not be checked and written as one act |
+
+**A `create_group` request reports `linked: []` today.** It writes a null trid for
+every element, and WPML documents a falsy trid as creating a new group for *that*
+element — so the posts may end in one group each, which is what reading the site
+back says. Joining an existing group with `trid` is unaffected. Tracked upstream;
+the report is what made it visible, and it is reported rather than hidden.
 
 ## Development
 

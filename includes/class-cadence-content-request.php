@@ -59,10 +59,13 @@ final class CadenceContentRequest {
      *                             this route hands out the token a rewrite has
      *                             to name, and a default would be a licence to
      *                             skip that at the one call site that forgot it.
+     * @param int|null $author     the byline the presenting key names, or null
+     *                             for a key issued before a key named one
      * @return array{ok: bool, created?: bool, post_id?: int, report?: array,
      *               revision?: string, code?: string, reason?: string}
      */
-    public static function run(array $body, callable $authorises): array {
+    public static function run(array $body, callable $authorises,
+                               ?int $author = null): array {
         $fields = self::validate($body);
         if (is_string($fields)) {
             return ['ok' => false, 'code' => 'bad_request', 'reason' => $fields];
@@ -102,7 +105,7 @@ final class CadenceContentRequest {
             return $answer;
         }
 
-        $id = wp_insert_post([
+        $postarr = [
             'post_type'    => $fields['post_type'],
             'post_status'  => $fields['status'],
             'post_title'   => $fields['title'],
@@ -112,7 +115,32 @@ final class CadenceContentRequest {
             // and a retry landing in that window is exactly the duplicate this
             // class exists to prevent.
             'meta_input'   => [self::META => $fields['piece_id']],
-        ], true);
+        ];
+        // THE ONLY THING THE AUTHOR ID DOES IS FILL THIS FIELD.
+        //
+        // Left out, `post_author` takes 0 -- no user -- and a theme printing a
+        // byline prints an empty one or fatals on `get_userdata(0)`, while the
+        // posts list sorts and filters by author and these rows sit outside
+        // every filter. So the key names a user the client chose.
+        //
+        // It is NOT an identity. The request is still authenticated by a key
+        // that confers none: nothing here calls `wp_set_current_user`, nothing
+        // asks `current_user_can` about this id, and the capability boundary is
+        // still the key's own grant. A post carries this person's name; the
+        // caller did not become them.
+        //
+        // Null is the pre-existing key, and omits the field exactly as this
+        // insert did before the field existed -- see `CadenceKey::author_for`.
+        //
+        // This is the one place the connector creates a post. There is no
+        // /content/replace route and nothing here calls `wp_update_post`: an
+        // identifier already on a post is answered with that post, never a
+        // rewrite of it, so no second route has an author to set.
+        if ($author !== null) {
+            $postarr['post_author'] = $author;
+        }
+
+        $id = wp_insert_post($postarr, true);
 
         // WP_Error, or 0, and neither is an exception. Read as an id, `0` is
         // falsy -- which is also what "no post" looks like everywhere else, so

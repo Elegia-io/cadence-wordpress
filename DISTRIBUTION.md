@@ -92,10 +92,51 @@ client:
    registers the account, so a CI leg would red the branch over a step no commit
    can take, while the zip is the thing that actually gets submitted.
 2. Set `Tested up to:` to the newest WordPress release the plugin has actually
-   been run against. It currently reads `6.4`, the same as `Requires at least`,
-   because **no live-WordPress test exists anywhere in this repository** — the
-   suite drives the refusals through stubs (`Elegia-io/cadence`#1262). Raising
-   that number is a claim about a test somebody ran.
+   been run against. Raising that number is a claim about a test somebody ran,
+   so the run behind the current value is recorded below.
+
+   ### The run behind `Tested up to: 7.1`
+
+   Date: 2026-09-18. Environment: `Elegia-io/cadence`, `deploy/wordpress-dev`.
+
+   | | |
+   |---|---|
+   | WordPress | 7.1 |
+   | PHP | 8.4.25 |
+   | Connector | 0.7.0 |
+   | WPML | 5.0.1, String Translation 5.0.0 |
+   | `wordpress:7.1-php8.4-apache` | `sha256:1a21ee4adadfe5a02b4649544ffe1d5da607454a65e01757850b88200fc7c9b9` |
+   | `wordpress:cli-php8.4` | `sha256:0265a63214c24982a62a58952cfebb145180ef47a250c7261f816a249d32f8bc` |
+
+   Exercised against the running site, not through stubs:
+
+   * The plugin activates from a clean `up.sh` and serves all four routes:
+     `/cadence/v1`, `/content`, `/content/replace`, `/translation-group`.
+   * Refusals: no key gives `401 rest_forbidden`; an incomplete body gives
+     `400 bad_request` naming each missing field; and all five attestation
+     branches (absent, malformed, `no_public_key`, `unknown_kid`, `mismatch`)
+     give `403 attestation_unverified`. No refused request created a post.
+   * Acceptance: a correctly signed request gives `201` with
+     `attestation: verified` and the post exists. Repeating it gives `200` with
+     `created: false` and the same `post_id`, and no second post.
+   * With WPML active, `declared.multilingual: false` is refused
+     `409 capability_mismatch`, and a piece whose own language is not active on
+     the site is refused `409 unsupported_language`.
+
+   Deliberately NOT covered by this run, and still open:
+
+   * **The language a piece is actually filed under.** `/content` reports
+     `placed` from the request rather than from WPML, and a piece sent as `de`
+     is stored as `en` (`Elegia-io/cadence`#1428). The run at 7.1 is what found
+     it. `Tested up to` is a statement about WordPress core, not a statement
+     that this defect is absent.
+   * `/translation-group` trid grouping against the real plugin, and WPML
+     Translation Management, whose zip was not installed
+     (`Elegia-io/cadence`#767).
+   * The full spine-to-site publish round trip. Every request above was made by
+     hand with `curl`.
+   * WPML was not registered with a site key, so anything gated on registration
+     (automatic translation, plugin updates) is untested.
 3. Build the submission zip with `./build-zip.py` and submit it at
    https://wordpress.org/plugins/developers/add/ .
 4. Answer the reviewers. Expect weeks, and expect fixable findings.

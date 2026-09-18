@@ -98,7 +98,7 @@ final class CadenceLanguageDeclaration {
                 return self::no('bad_request',
                     'a monolingual declaration names more than one language');
             }
-            return ['ok' => true, 'unsupported' => []];
+            return ['ok' => true, 'unsupported' => [], 'multilingual' => false];
         }
 
         // WHICH LANGUAGES THIS SITE CAN SERVE. `wpml_active_languages` is a
@@ -121,7 +121,66 @@ final class CadenceLanguageDeclaration {
                 $language
             ), $unsupported);
         }
-        return ['ok' => true, 'unsupported' => $unsupported];
+        return ['ok' => true, 'unsupported' => $unsupported, 'multilingual' => true];
+    }
+
+    /**
+     * RECORD THE PIECE'S LANGUAGE WITH WPML, AND READ BACK WHAT WPML KEPT.
+     *
+     * Placing a post is not telling WPML what language it is in. Nothing did,
+     * so every post `/content` created took the site's DEFAULT language while
+     * the reply named the language that was asked for: a piece sent as `de` was
+     * stored as `en` under a `201` saying `placed: ["de"]` (#1428).
+     *
+     * `trid` is null, which has WPML invent a new group. That is the only safe
+     * value here and only because the post is NEW: WPML's own documentation for
+     * this action warns that an unestablished group *"will create a new trid for
+     * the element causing any potential translation relations to/from it to
+     * disappear"*. Associating translations is `/translation-group`'s write, and
+     * this must never be called for a post that already existed.
+     *
+     * THE RETURN IS THE SITE'S ANSWER, NOT THE ARGUMENT. It is read back
+     * through the same filter `/translation-group` reads, with `false` as the
+     * default for the same reason: `apply_filters` hands the default straight
+     * back when nothing answers, so a silent site must not be readable as
+     * agreement. A caller gets `placed: []` and a reason rather than a success
+     * naming a language the site did not keep.
+     *
+     * @param int $post_id The post just created.
+     * @param string $element_type WPML's element type, e.g. `post_post`.
+     * @param string $language The language the piece was published in.
+     * @return string|null The language WPML now holds, or null if it could not
+     *         be read at all.
+     */
+    public static function record(int $post_id, string $element_type, string $language): ?string {
+        do_action('wpml_set_element_language_details', [
+            'element_id'           => $post_id,
+            'element_type'         => $element_type,
+            'trid'                 => null,
+            'language_code'        => $language,
+            'source_language_code' => null,
+        ]);
+        return self::stored_language($post_id, $element_type);
+    }
+
+    /**
+     * WHAT LANGUAGE WPML HOLDS FOR ONE ELEMENT, or null when it will not say.
+     *
+     * Separate from `record` so the repeat path can ask without writing: a post
+     * that already exists must be reported on, never re-grouped.
+     *
+     * @return string|null
+     */
+    public static function stored_language(int $post_id, string $element_type): ?string {
+        $details = apply_filters('wpml_element_language_details', false, [
+            'element_id'   => $post_id,
+            'element_type' => $element_type,
+        ]);
+        if (!is_object($details) || !isset($details->language_code)) {
+            return null;
+        }
+        $code = $details->language_code;
+        return is_string($code) && $code !== '' ? $code : null;
     }
 
     /**

@@ -692,12 +692,24 @@ final class ContentRequestTest extends TestCase {
         $this->assertSame([], array_intersect($r['report']['placed'], $r['report']['observed_unsupported']));
     }
 
-    /** `linked` is empty and says so: linking is the other route's write. */
+    /**
+     * `linked` is empty and says so: linking is the other route's write.
+     *
+     * This used to assert `WpStub::$writes === []`, which was a PROXY for "this
+     * route writes no link" and stopped being one the moment the route began
+     * recording the piece's language (#1428). The predicate itself is that the
+     * single write it makes names neither a group nor a source language, so it
+     * cannot be a link: a link is an element joined to an established trid.
+     */
     #[Group('wpml')]
     public function test_this_route_never_reports_a_link_it_did_not_make(): void {
         $r = $this->publish($this->body());
         $this->assertSame([], $r['report']['linked']);
-        $this->assertSame([], WpStub::$writes);
+        $this->assertCount(1, WpStub::$writes);
+        $this->assertNull(WpStub::$writes[0]['trid'],
+            'a write naming a group is a link, which is the other route');
+        $this->assertNull(WpStub::$writes[0]['source_language_code'],
+            'a write naming a source makes this a translation OF something, which is the other route');
     }
 
     /** A refusal reports no placement at all, and writes nothing. */

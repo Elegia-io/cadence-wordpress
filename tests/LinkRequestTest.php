@@ -117,13 +117,121 @@ final class LinkRequestTest extends TestCase {
         $this->assertSame([], WpStub::$writes);
     }
 
+    /**
+     * CREATING A GROUP REFUSES OVER WHAT IT WOULD DETACH, not over the mere
+     * existence of a trid.
+     *
+     * This was `..._requires_every_post_to_be_in_none`, and it passed because
+     * the stub left posts ungrouped. On a real WPML site every post has a trid
+     * the moment it is saved, so "in none" is true of nothing and the create
+     * path was unreachable in production (#1430). Post 3 is what the refusal is
+     * actually for: an element in the group that this plan does not name, whose
+     * relation a new trid would destroy.
+     */
     #[Group('wpml')]
-    public function test_creating_a_group_requires_every_post_to_be_in_none(): void {
+    public function test_creating_a_group_refuses_over_a_member_the_plan_does_not_name(): void {
         WpStub::add_post(1, 'page', 'en', null);
-        WpStub::add_post(2, 'page', 'de', 7);   // already grouped
+        WpStub::add_post(2, 'page', 'de', 7);
+        WpStub::add_post(3, 'page', 'fr', 7);   // in post 2's group, and not in the plan
         $this->ours(1, 2);
         $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
         $this->assertFalse($r['ok']);
+        $this->assertSame('already_grouped', $r['code']);
+        $this->assertStringContainsString('3', $r['reason'],
+            'the refusal names the post whose relation it is protecting');
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * AND A POST ALONE IN ITS OWN GROUP IS REGROUPED, because nothing is lost.
+     *
+     * The state WPML leaves every post in, and the one the publish-then-link
+     * workflow arrives in. Without this, the fix for #1430 could be a refusal
+     * keyed on a different spelling of the same wrong question.
+     */
+    #[Group('wpml')]
+    public function test_creating_a_group_joins_posts_each_alone_in_their_own(): void {
+        WpStub::add_post(1, 'page', 'en', 7);
+        WpStub::add_post(2, 'page', 'de', 8);
+        $this->ours(1, 2);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame(2, $r['written']);
+        $this->assertCount(2, WpStub::$writes);
+        // ONE group, and not the two they started in.
+        $this->assertSame(WpStub::$posts[1]['trid'], WpStub::$posts[2]['trid']);
+        $this->assertNotSame(7, WpStub::$posts[2]['trid']);
+    }
+
+    /**
+     * A PLAN THAT WOULD SWAP TWO LANGUAGES IS REFUSED.
+     *
+     * The scenario the widened create path made reachable. `/content` placed A
+     * as `en` and B as `de`, each alone in its own group as WPML leaves them. A
+     * stale plan names them the other way round. Nothing is outside the plan,
+     * so the members check passes; `write_element` writes `language_code` from
+     * the PLAN, so the site would start serving each post as the other's
+     * language under an `hreflang` that lies. `linked` could not show it: it
+     * compares trids, and the trids would be exactly what was asked for.
+     */
+    #[Group('wpml')]
+    public function test_a_plan_that_swaps_two_languages_writes_nothing(): void {
+        WpStub::add_post(1, 'page', 'en', 7);
+        WpStub::add_post(2, 'page', 'de', 8);
+        $this->ours(1, 2);
+        // `plan()` builds source `en` / translation `de`; the site says the
+        // opposite of each.
+        WpStub::$posts[1]['language'] = 'de';
+        WpStub::$posts[2]['language'] = 'en';
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
+        $this->assertFalse($r['ok'], 'a plan that swaps two languages was written');
+        $this->assertSame('language_disagreement', $r['code']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * AND THE MEMBERS ARE FOUND WHEN THEY ARE DRAFTS, which is the state
+     * Cadence actually publishes into.
+     *
+     * Asked with three arguments, WPML reports only PUBLISHED posts outside an
+     * admin request, and a REST request is outside one. So the group below
+     * reads as EMPTY, the plan looks safe, and post 3's relation is destroyed.
+     * Measured live on WPML 5.0.1 in a REST request: three arguments gave `[]`
+     * for a group holding two drafts, `all_statuses` gave both.
+     *
+     * This test is the reason the stub models the status filter at all. Revert
+     * `members_outside_plan` to the three-argument call and this is the test
+     * that fails; the published case above keeps passing.
+     */
+    #[Group('wpml')]
+    public function test_a_group_of_drafts_is_not_read_as_an_empty_group(): void {
+        WpStub::add_post(1, 'page', 'en', null, true, 'draft');
+        WpStub::add_post(2, 'page', 'de', 7, true, 'draft');
+        WpStub::add_post(3, 'page', 'fr', 7, true, 'draft');   // not in the plan
+        $this->ours(1, 2);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
+        $this->assertFalse($r['ok'], 'a group of drafts was read as empty and the plan was allowed');
+        $this->assertSame('already_grouped', $r['code']);
+        $this->assertStringContainsString('3', $r['reason']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * A GROUP WPML WILL NOT ENUMERATE IS NOT AN EMPTY ONE.
+     *
+     * The destructive reading of silence: `apply_filters` hands the default
+     * straight back, so code treating `[]` as "no members" would regroup a post
+     * whose relations it never managed to read.
+     */
+    #[Group('wpml')]
+    public function test_creating_a_group_refuses_when_the_group_cannot_be_enumerated(): void {
+        WpStub::add_post(1, 'page', 'en', 7);
+        WpStub::add_post(2, 'page', 'de', 8);
+        WpStub::$wpml_group_unreadable = [7];
+        $this->ours(1, 2);
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
+        $this->assertFalse($r['ok']);
+        $this->assertSame('group_unknown', $r['code']);
         $this->assertSame([], WpStub::$writes);
     }
 
@@ -375,11 +483,24 @@ final class LinkRequestTest extends TestCase {
             },
             'already_grouped' => function () {
                 $this->twoPosts(9);
+                // A THIRD ELEMENT IN THAT GROUP, which the plan does not name.
+                // Two posts alone together in group 9 are all this plan's
+                // members and regroup safely; the refusal is about post 3's
+                // relation going away (#1430).
+                WpStub::add_post(3, 'page', 'fr', 9);
                 return $this->plan(['trid' => null, 'create_group' => true]);
             },
             'group_disagreement' => function () {
                 $this->twoPosts(9);
                 return $this->plan(['trid' => 5, 'create_group' => false]);
+            },
+            'language_disagreement' => function () {
+                // The site holds post 2 as `fr`; the plan calls it `de`, and
+                // the plan's code is what would go into WPML's write.
+                WpStub::add_post(1, 'page', 'en', 9);
+                WpStub::add_post(2, 'page', 'fr', 9);
+                $this->ours(1, 2);
+                return $this->plan(['trid' => 9, 'create_group' => false]);
             },
             'source_group_unset' => function () {
                 $this->twoPosts(null);
@@ -465,18 +586,21 @@ final class LinkRequestTest extends TestCase {
             $this->assertSame($expected, $r['code'] ?? null, $expected);
             $seen[] = $r['code'];
         }
-        // Twelve causes, twelve codes: a mapping that collapsed two of them would
-        // still pass every assertion above if both expectations were changed
+        // Thirteen causes, thirteen codes: a mapping that collapsed two of them
+        // would still pass every assertion above if both expectations were changed
         // together, and the caller could no longer tell them apart. The count is the
         // union of branches that each added to it -- eight after the scope
         // narrowing, ten after the create path's two, eleven once the scope split
         // into "not this connector's" and "not this key's", TEN again when that
         // split was merged back because the PAIR was a provenance oracle, eleven
-        // once the key's post types reached this route, and twelve once the route
-        // verified an attestation over the plan. So it is asserted against
-        // `REFUSAL_CODES` rather than retyped from any of them.
-        $this->assertCount(12, array_unique($seen));
-        $this->assertSame(12, count(CadenceLinkRequest::REFUSAL_CODES));
+        // once the key's post types reached this route, twelve once the route
+        // verified an attestation over the plan, and thirteen once the plan's
+        // language was checked against the site's -- a check that only became
+        // reachable when the create path stopped refusing every real post
+        // (#1430). So it is asserted against `REFUSAL_CODES` rather than retyped
+        // from any of them.
+        $this->assertCount(13, array_unique($seen));
+        $this->assertSame(13, count(CadenceLinkRequest::REFUSAL_CODES));
 
         // AND THE PUBLISHED LIST IS THAT LIST. `REFUSAL_CODES` is what the REST
         // layer maps to HTTP statuses; if a further refusal is added here and

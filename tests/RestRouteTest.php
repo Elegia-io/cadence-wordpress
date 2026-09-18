@@ -100,7 +100,8 @@ final class RestRouteTest extends TestCase {
      * many times it is sent.
      */
     public function test_a_stale_plan_is_409_and_a_wrong_one_is_400(): void {
-        foreach (['group_unknown', 'already_grouped', 'group_disagreement'] as $code) {
+        foreach (['group_unknown', 'already_grouped', 'group_disagreement',
+                  'language_disagreement'] as $code) {
             $r = CadenceRestRoute::respond(['ok' => false, 'code' => $code, 'reason' => 'x']);
             $this->assertSame(409, $r['status'], $code);
             $this->assertSame($code, $r['body']['code']);

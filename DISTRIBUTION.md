@@ -123,15 +123,27 @@ client:
      `409 capability_mismatch`, and a piece whose own language is not active on
      the site is refused `409 unsupported_language`.
 
-   Deliberately NOT covered by this run, and still open:
+   The run found three defects, all since fixed and re-proved against the same
+   site (`Elegia-io/cadence`#1428 and #1430):
 
-   * **The language a piece is actually filed under.** `/content` reports
-     `placed` from the request rather than from WPML, and a piece sent as `de`
-     is stored as `en` (`Elegia-io/cadence`#1428). The run at 7.1 is what found
-     it. `Tested up to` is a statement about WordPress core, not a statement
-     that this defect is absent.
-   * `/translation-group` trid grouping against the real plugin, and WPML
-     Translation Management, whose zip was not installed
+   * `/content` reported `placed` from the request and never told WPML the
+     piece's language, so a piece sent as `de` was stored as `en`. It now
+     records the language and reads `placed` back from WPML.
+   * `/translation-group` refused `already_grouped` on any post holding a trid,
+     which on a real site is every post, so creating a group was impossible.
+     It now refuses only over members the plan does not name.
+   * `wpml_get_element_translations` asked with three arguments reports
+     PUBLISHED posts only outside an admin request. Cadence places drafts, so a
+     group of drafts read as empty and its relations were destroyed. The call
+     now passes `all_statuses`.
+
+   Also exercised after those fixes: publish two languages, then group them,
+   which is the first time that workflow has run anywhere; and the refusal that
+   protects a draft relation, with the group verified intact afterwards.
+
+   Deliberately NOT covered by this run:
+
+   * WPML Translation Management, whose zip was not installed
      (`Elegia-io/cadence`#767).
    * The full spine-to-site publish round trip. Every request above was made by
      hand with `curl`.

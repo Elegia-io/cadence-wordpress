@@ -39,6 +39,28 @@ final class WpStub {
      */
     public static array $wpml_write_unreadable = [];
 
+    /**
+     * @var array<int, string> element id => the language the write ACTUALLY stores.
+     *
+     * WPML filing a post under something other than the code it was handed is
+     * not invented: it is #1428's own symptom from the site's side, where every
+     * post landed in the default language. Without a way to make the write
+     * disagree with its argument, a `placed` that echoes the request passes
+     * every assertion, because the stub's write sets the language to whatever
+     * was asked and the two strings can never differ.
+     */
+    public static array $wpml_write_lands_as = [];
+
+    /**
+     * @var list<int> trids WPML will not enumerate the members of.
+     *
+     * The create path has to know what a regroup would DETACH, and a filter
+     * nobody answers hands back the default. Without a way to reach that,
+     * a mutant reading silence as "the group is empty" -- the destructive
+     * reading, and the one #1430 was about -- passes the suite.
+     */
+    public static array $wpml_group_unreadable = [];
+
     /** The next group id WPML invents for a write that names none. */
     public static int $next_trid = 900;
 
@@ -183,6 +205,8 @@ final class WpStub {
         self::$wpml_writes = true;
         self::$wpml_write_detaches = [];
         self::$wpml_write_unreadable = [];
+        self::$wpml_group_unreadable = [];
+        self::$wpml_write_lands_as = [];
         self::$next_trid = 900;
         self::$wpml_declines = false;
         self::$inserted = [];
@@ -208,9 +232,11 @@ final class WpStub {
 
     public static function add_post(int $id, string $post_type = 'page',
                                     ?string $language = null, ?int $trid = null,
-                                    bool $wpml_knows = true): void {
+                                    bool $wpml_knows = true,
+                                    string $status = 'publish'): void {
         self::$posts[$id] = ['post_type' => $post_type, 'language' => $language,
-                             'trid' => $trid, 'wpml_knows' => $wpml_knows];
+                             'trid' => $trid, 'wpml_knows' => $wpml_knows,
+                             'status' => $status];
     }
 
     /**
@@ -301,7 +327,7 @@ function get_post_type(int $id) {
 }
 
 function get_post_status(int $id) {
-    return isset(WpStub::$posts[$id]) ? 'publish' : false;
+    return isset(WpStub::$posts[$id]) ? (WpStub::$posts[$id]['status'] ?? 'publish') : false;
 }
 
 /**
@@ -471,6 +497,51 @@ function apply_filters(string $hook, $value, ...$args) {
             'source_language_code' => null,
         ];
     }
+    if ($hook === 'wpml_get_element_translations') {
+        $trid = $args[0] ?? null;
+        $type = (string) ($args[1] ?? '');
+        // NEITHER OF THESE IS AN EMPTY GROUP. Both mean "WPML did not answer",
+        // and the create path must not read either as "nothing would be
+        // detached" -- so they return the caller's default untouched.
+        if (!is_int($trid) || in_array($trid, WpStub::$wpml_group_unreadable, true)) {
+            return $value;
+        }
+        // THE STATUS FILTER, WHICH IS NOT A DETAIL. Asked with three arguments,
+        // WPML answers about PUBLISHED posts only outside an admin request, and
+        // a REST request is outside one. Cadence places DRAFTS, so a caller
+        // that omits `all_statuses` is told a group of drafts is empty and goes
+        // on to detach them. Measured live on WPML 5.0.1 (see
+        // `members_outside_plan`); modelled here so the three-argument call
+        // cannot pass this suite.
+        $all_statuses = (bool) ($args[3] ?? false);
+        $out = [];
+        foreach (WpStub::$posts as $id => $p) {
+            if (($p['trid'] ?? null) !== $trid || 'post_' . $p['post_type'] !== $type) {
+                continue;
+            }
+            if (!($p['wpml_knows'] ?? true)) {
+                continue;
+            }
+            if (!$all_statuses && ($p['status'] ?? 'publish') !== 'publish') {
+                continue;
+            }
+            // KEYED BY LANGUAGE, AND EVERY SCALAR A STRING, because that is
+            // what WPML hands back: measured on WPML 5.0.1, where `element_id`
+            // comes out as `string(1) "5"`. A stub answering with integers
+            // would let a strict `in_array` in the caller pass here and fail
+            // on a real site.
+            $out[(string) $p['language']] = (object) [
+                'trid'                 => (string) $trid,
+                'translation_id'       => (string) $id,
+                'language_code'        => (string) $p['language'],
+                'element_id'           => (string) $id,
+                'source_language_code' => null,
+                'element_type'         => $type,
+                'original'             => '1',
+            ];
+        }
+        return $out;
+    }
     return $value;
 }
 
@@ -492,7 +563,8 @@ function do_action(string $hook, ...$args): void {
         if (!isset(WpStub::$posts[$id])) {
             return;
         }
-        WpStub::$posts[$id]['language'] = $d['language_code'] ?? null;
+        WpStub::$posts[$id]['language'] = WpStub::$wpml_write_lands_as[$id]
+            ?? ($d['language_code'] ?? null);
         WpStub::$posts[$id]['wpml_knows'] = !in_array($id, WpStub::$wpml_write_unreadable, true);
         if (in_array($id, WpStub::$wpml_write_detaches, true)) {
             WpStub::$posts[$id]['trid'] = null;   // the relation is gone

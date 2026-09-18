@@ -599,7 +599,7 @@ what the site says afterwards — and a `linked` built from the plan would repor
 every language the caller asked for, which is the request echoed back with an
 `ok` beside it. `written` is how many writes were *issued*; the two disagreeing
 is the signal, and it is the signal on the create path too — see the note below
-for what this route believes about WPML and has not observed.
+for what this route knows about WPML, and the one thing it still cannot see.
 
 The source's own language is not in `linked`. That is what `/content` reported
 under `placed` for this piece, and leaving it out makes an empty `linked`
@@ -614,8 +614,9 @@ the reason is prose and changes freely.
 | `contradictory_instructions` | 400 | `create_group` and a `trid` together |
 | `no_group_named` | 400 | neither of them |
 | `group_unknown` | 409 | WPML returned nothing usable for a post, which is not "in no group" |
-| `already_grouped` | 409 | a post is already in a group, and creating one would detach it |
+| `already_grouped` | 409 | a post's group holds an element this plan does not name, so creating a group would detach it. A post alone in its own group is admitted: that is the state WPML leaves every post in |
 | `group_disagreement` | 409 | the site's group for a post is not the one named |
+| `language_disagreement` | 409 | the site serves a post in a different language from the one the plan calls it. The plan's code is what would be written, so this would change the language the site serves |
 | `post_out_of_scope` | 403 | a post the plan names is not one the presenting key reaches — absent, not this connector's, or another key's, told apart by nothing the caller can read |
 | `replace_other_key` | 403 | the post a replacement names was published through a different connector key |
 | `post_type_out_of_scope` | 403 | the post type named is not one this key may create in |
@@ -636,22 +637,34 @@ the reason is prose and changes freely.
 | `update_failed` | 500 | WordPress refused the update, or returned no id |
 | `no_row_lock` | 503 | the site would not open a transaction, so the text could not be checked and written as one act |
 
-**What the create path believes about WPML, and has not observed.** Three things,
-two from WPML's documentation and one from nowhere:
+**What the create path knows about WPML, measured 2026-09-18 against WordPress
+7.1 and WPML 5.0.1.** Three things it used to only believe, two from WPML's
+documentation and one from nowhere. All three hold:
 
 1. a falsy `trid` creates a new trid for that element and drops its relations —
-   documented;
+   documented, and it behaves that way;
 2. it does so *per element*, so a set of such writes does not converge on one
-   group — the documented sentence is about one element, and this is the reading
-   of it;
+   group. Observed rather than reasoned: four pieces published through
+   `/content`, each recorded with a null trid in its own request, came back
+   holding trids 1, 2, 3 and 4. Nothing converged;
 3. a language-details read in the *same request* answers with the trid the write
    just invented — **not documented anywhere**, and the ordering above does not
-   work without it.
+   work without it. It does answer; the create path completes.
 
-None of the three has been measured against a live WPML 4.x. If the third is
-false, every `create_group` request refuses `source_group_unset` and writes only
-its source — visible, and never a wrong link. A live check is what would settle
-it. Joining an existing group with `trid` depends on none of this.
+What the documentation did not mention at all:
+`wpml_get_element_translations` reports only **published** posts unless it is
+asked with `all_statuses`, outside an admin request. Cadence places drafts, so
+the three-argument call reported a group of two drafts as empty. The same call
+answered correctly under `wp-cli`, which is why this took a request through the
+route to find.
+
+**The one thing still not observed.** Every post is read before the source is
+written, so a relation a human makes in wp-admin between that read and the write
+is destroyed without any later read noticing. The window did not exist while
+this path refused every post holding a trid, which was every post. WPML offers
+no compare-and-set, so there is no cheap close, and this is written down rather
+than implied to be handled. Joining an existing group with `trid` depends on
+none of the above.
 
 ## Development
 

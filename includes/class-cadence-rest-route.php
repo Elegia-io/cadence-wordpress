@@ -257,6 +257,7 @@ final class CadenceRestRoute {
         'group_unknown'              => 409,
         'already_grouped'            => 409,
         'group_disagreement'         => 409,
+        'language_disagreement'      => 409,
         'source_group_unset'         => 500,
         'source_group_unreadable'    => 500,
         'post_missing'               => 409,

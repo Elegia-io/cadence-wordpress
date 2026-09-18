@@ -164,6 +164,32 @@ final class LinkRequestTest extends TestCase {
     }
 
     /**
+     * A PLAN THAT WOULD SWAP TWO LANGUAGES IS REFUSED.
+     *
+     * The scenario the widened create path made reachable. `/content` placed A
+     * as `en` and B as `de`, each alone in its own group as WPML leaves them. A
+     * stale plan names them the other way round. Nothing is outside the plan,
+     * so the members check passes; `write_element` writes `language_code` from
+     * the PLAN, so the site would start serving each post as the other's
+     * language under an `hreflang` that lies. `linked` could not show it: it
+     * compares trids, and the trids would be exactly what was asked for.
+     */
+    #[Group('wpml')]
+    public function test_a_plan_that_swaps_two_languages_writes_nothing(): void {
+        WpStub::add_post(1, 'page', 'en', 7);
+        WpStub::add_post(2, 'page', 'de', 8);
+        $this->ours(1, 2);
+        // `plan()` builds source `en` / translation `de`; the site says the
+        // opposite of each.
+        WpStub::$posts[1]['language'] = 'de';
+        WpStub::$posts[2]['language'] = 'en';
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
+        $this->assertFalse($r['ok'], 'a plan that swaps two languages was written');
+        $this->assertSame('language_disagreement', $r['code']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
      * AND THE MEMBERS ARE FOUND WHEN THEY ARE DRAFTS, which is the state
      * Cadence actually publishes into.
      *
@@ -468,6 +494,14 @@ final class LinkRequestTest extends TestCase {
                 $this->twoPosts(9);
                 return $this->plan(['trid' => 5, 'create_group' => false]);
             },
+            'language_disagreement' => function () {
+                // The site holds post 2 as `fr`; the plan calls it `de`, and
+                // the plan's code is what would go into WPML's write.
+                WpStub::add_post(1, 'page', 'en', 9);
+                WpStub::add_post(2, 'page', 'fr', 9);
+                $this->ours(1, 2);
+                return $this->plan(['trid' => 9, 'create_group' => false]);
+            },
             'source_group_unset' => function () {
                 $this->twoPosts(null);
                 WpStub::$wpml_write_detaches = [1];
@@ -552,18 +586,21 @@ final class LinkRequestTest extends TestCase {
             $this->assertSame($expected, $r['code'] ?? null, $expected);
             $seen[] = $r['code'];
         }
-        // Twelve causes, twelve codes: a mapping that collapsed two of them would
-        // still pass every assertion above if both expectations were changed
+        // Thirteen causes, thirteen codes: a mapping that collapsed two of them
+        // would still pass every assertion above if both expectations were changed
         // together, and the caller could no longer tell them apart. The count is the
         // union of branches that each added to it -- eight after the scope
         // narrowing, ten after the create path's two, eleven once the scope split
         // into "not this connector's" and "not this key's", TEN again when that
         // split was merged back because the PAIR was a provenance oracle, eleven
-        // once the key's post types reached this route, and twelve once the route
-        // verified an attestation over the plan. So it is asserted against
-        // `REFUSAL_CODES` rather than retyped from any of them.
-        $this->assertCount(12, array_unique($seen));
-        $this->assertSame(12, count(CadenceLinkRequest::REFUSAL_CODES));
+        // once the key's post types reached this route, twelve once the route
+        // verified an attestation over the plan, and thirteen once the plan's
+        // language was checked against the site's -- a check that only became
+        // reachable when the create path stopped refusing every real post
+        // (#1430). So it is asserted against `REFUSAL_CODES` rather than retyped
+        // from any of them.
+        $this->assertCount(13, array_unique($seen));
+        $this->assertSame(13, count(CadenceLinkRequest::REFUSAL_CODES));
 
         // AND THE PUBLISHED LIST IS THAT LIST. `REFUSAL_CODES` is what the REST
         // layer maps to HTTP statuses; if a further refusal is added here and

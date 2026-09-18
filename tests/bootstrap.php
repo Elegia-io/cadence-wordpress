@@ -40,6 +40,18 @@ final class WpStub {
     public static array $wpml_write_unreadable = [];
 
     /**
+     * @var array<int, string> element id => the language the write ACTUALLY stores.
+     *
+     * WPML filing a post under something other than the code it was handed is
+     * not invented: it is #1428's own symptom from the site's side, where every
+     * post landed in the default language. Without a way to make the write
+     * disagree with its argument, a `placed` that echoes the request passes
+     * every assertion, because the stub's write sets the language to whatever
+     * was asked and the two strings can never differ.
+     */
+    public static array $wpml_write_lands_as = [];
+
+    /**
      * @var list<int> trids WPML will not enumerate the members of.
      *
      * The create path has to know what a regroup would DETACH, and a filter
@@ -194,6 +206,7 @@ final class WpStub {
         self::$wpml_write_detaches = [];
         self::$wpml_write_unreadable = [];
         self::$wpml_group_unreadable = [];
+        self::$wpml_write_lands_as = [];
         self::$next_trid = 900;
         self::$wpml_declines = false;
         self::$inserted = [];
@@ -550,7 +563,8 @@ function do_action(string $hook, ...$args): void {
         if (!isset(WpStub::$posts[$id])) {
             return;
         }
-        WpStub::$posts[$id]['language'] = $d['language_code'] ?? null;
+        WpStub::$posts[$id]['language'] = WpStub::$wpml_write_lands_as[$id]
+            ?? ($d['language_code'] ?? null);
         WpStub::$posts[$id]['wpml_knows'] = !in_array($id, WpStub::$wpml_write_unreadable, true);
         if (in_array($id, WpStub::$wpml_write_detaches, true)) {
             WpStub::$posts[$id]['trid'] = null;   // the relation is gone

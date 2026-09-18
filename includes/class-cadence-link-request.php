@@ -35,24 +35,32 @@
  * (`written`, and the report's `linked`) rather than leaving the caller to
  * infer it from a bare `ok: false`.
  *
- * DOCUMENTED, NOT OBSERVED. Three things this file believes about WPML come
- * from WPML's documentation and from nothing else -- there is no WordPress and
- * no WPML licence in the environment this was built in, and the suite's stub
- * models the documentation rather than a measurement:
+ * MEASURED 2026-09-18 against WordPress 7.1 and WPML 5.0.1, which is what the
+ * three notes below used to ask for. They were beliefs taken from WPML's
+ * documentation, written where there was no WordPress and no WPML licence:
  *
  *   1. that a falsy `trid` on `wpml_set_element_language_details` creates a new
- *      trid for that element and drops its existing relations (quoted above);
+ *      trid for that element and drops its existing relations (quoted above).
+ *      HOLDS.
  *   2. that it does so PER ELEMENT, so a set of such writes does not converge
  *      on one group -- the action is told about one element and has no way to
- *      know the call is one of a set;
+ *      know the call is one of a set. HOLDS, which is why the ordered write
+ *      below is still necessary.
  *   3. that `wpml_element_language_details` read immediately afterwards, in the
- *      SAME request, answers with the trid the write just invented. This third
- *      one is not documented at all, and the ordered write below does not work
- *      without it. If WPML defers or caches that write, the read returns the
- *      pre-write answer -- `null` -- and this route refuses
- *      `source_group_unset` on every create, which is a visible, non-destructive
- *      failure rather than a wrong link. A live check against WPML 4.x is what
- *      would settle all three; until then assume they are beliefs.
+ *      SAME request, answers with the trid the write just invented. HOLDS, and
+ *      it was the one nothing documented. The create path completed live, which
+ *      it could not have if WPML deferred that write.
+ *
+ * What the documentation did NOT say, and cost a live site to find: WPML reports
+ * only PUBLISHED posts from `wpml_get_element_translations` unless it is asked
+ * with `all_statuses`, outside an admin request. See `members_outside_plan`.
+ *
+ * STILL NOT OBSERVED, and the honest gap in the create path: every post is read
+ * before the source is written, so a relation a human makes in wp-admin between
+ * that read and the write is destroyed without any later read noticing. The
+ * window did not exist while this path refused every real post; it does now.
+ * There is no cheap close -- WPML offers no compare-and-set -- so it is written
+ * down here rather than implied to be handled.
  *
  * @package CadenceConnector
  * @license GPL-2.0-or-later
@@ -80,6 +88,7 @@ final class CadenceLinkRequest {
         'group_unknown',
         'already_grouped',
         'group_disagreement',
+        'language_disagreement',
         'source_group_unset',
         'source_group_unreadable',
         'wpml_unavailable',
@@ -98,8 +107,9 @@ final class CadenceLinkRequest {
      * A REFUSAL CARRIES A CODE AS WELL AS A REASON. The reason is prose, for
      * the human reading a log, and it is free to change. The code is the API:
      * the caller uses it to decide whether to re-read this site and retry
-     * (`group_unknown`, `already_grouped`, `group_disagreement` -- the site
-     * disagrees with the plan) or to stop and fix the plan itself (`bad_plan`,
+     * (`group_unknown`, `already_grouped`, `group_disagreement`,
+     * `language_disagreement` -- the site disagrees with the plan) or to stop
+     * and fix the plan itself (`bad_plan`,
      * `contradictory_instructions`, `no_group_named` -- no re-read can help).
      * A caller that had to tell those apart by matching the prose would be
      * matching on spellings this file changes freely.
@@ -437,6 +447,28 @@ final class CadenceLinkRequest {
                         count($outside) === 1 ? 'it' : 'them')];
                 }
             }
+            // AND THE PLAN'S LANGUAGE IS THE SITE'S LANGUAGE.
+            //
+            // `write_element` writes `language_code` from the PLAN, straight
+            // into WPML, and nothing compared it to what the site holds. Two
+            // posts this connector placed as `en` and `de`, each alone in its
+            // own group as WPML leaves them, named the other way round by a
+            // stale plan: the members check passes, because nothing is outside
+            // the plan, and the write swaps their languages. The site then
+            // serves an `hreflang` that lies, and `linked` cannot see it
+            // because it compares trids.
+            //
+            // The plan is refused rather than corrected: a caller whose read
+            // has gone stale needs to know, and picking a winner between two
+            // sources that disagree about a live article is the eager reading
+            // this file exists not to take.
+            $language = self::current_language($p['post_id'], $p['element_type']);
+            if ($language !== null && $language !== $p['language_code']) {
+                return ['ok' => false, 'code' => 'language_disagreement', 'reason' => sprintf(
+                    'post %d is in %s on this site, but the plan calls it %s; refusing to write a '
+                    . 'link that would change what language the site serves it as',
+                    $p['post_id'], $language, $p['language_code'])];
+            }
             if (!$create && $actual !== $trid) {
                 return ['ok' => false, 'code' => 'group_disagreement', 'reason' => sprintf(
                     'post %d is in translation group %s on this site, but the plan says %d; refusing to write a link over a disagreement',
@@ -469,10 +501,17 @@ final class CadenceLinkRequest {
                 // no id for the translations to join, and writing them with a
                 // null trid is the very behaviour this ordering exists to stop.
                 //
-                // Nothing was destroyed: the create path refuses above unless
-                // EVERY post is in no group, so the source had no relations to
-                // lose and the translations were not touched. A caller that
-                // re-reads and sends the identical plan again is safe.
+                // WHAT THIS MAY HAVE DESTROYED, now that the create path no
+                // longer requires every post to be in no group (#1430). The
+                // check above admits a group whose every member this plan
+                // names, so the source may have shared its group with the
+                // translations, and the null-trid write has just moved it out
+                // of that group and left them in it. Nothing OUTSIDE the plan
+                // can have been detached, which is what the check guarantees,
+                // and a caller that re-reads and sends the identical plan again
+                // heals it. The earlier version of this comment claimed nothing
+                // could be destroyed at all, and that stopped being true with
+                // the same change that made this path reachable.
                 return self::half_written('source_group_unset', sprintf(
                     'post %d was written with no trid and WPML still puts it in no group, so there is no group for the %d translation(s) to join; they were not written',
                     $source['post_id'], count($posts) - 1), $piece_id, $posts);
@@ -777,6 +816,30 @@ final class CadenceLinkRequest {
             return false;
         }
         return (int) $trid;
+    }
+
+    /**
+     * WHAT LANGUAGE THE SITE HOLDS ONE ELEMENT IN, or null if it will not say.
+     *
+     * Null is NOT a disagreement: a post WPML has no details for is already the
+     * `group_unknown` refusal in the loop above, which fires on the same read
+     * and does not need saying twice here.
+     *
+     * Read separately from `current_trid` rather than by widening it. That
+     * function is also called after the source's own write, where the trid is
+     * the only thing in question, and a second return value there would be a
+     * value that call site has no use for and would have to ignore correctly.
+     */
+    private static function current_language(int $post_id, string $element_type): ?string {
+        $details = apply_filters('wpml_element_language_details', false, [
+            'element_id'   => $post_id,
+            'element_type' => $element_type,
+        ]);
+        if (!is_object($details) || !isset($details->language_code)) {
+            return null;
+        }
+        $code = $details->language_code;
+        return is_string($code) && $code !== '' ? $code : null;
     }
 
     /**

@@ -825,6 +825,18 @@ final class CadenceLinkRequest {
      * `group_unknown` refusal in the loop above, which fires on the same read
      * and does not need saying twice here.
      *
+     * AND THE TWO CANNOT COME APART, so the null guard at the call site is
+     * defensive rather than a reachable branch. Measured on WPML 5.0.1:
+     *
+     *   trid           bigint(20)  NOT NULL
+     *   language_code  varchar(7)  NOT NULL
+     *
+     * A row in `icl_translations` therefore carries both, and no row carries
+     * neither. There is no state where the trid reads and the language does
+     * not, which is why the suite exercises this only for grouped posts: the
+     * stub answers null for a null trid, faithfully, because real WPML has no
+     * such row to answer from.
+     *
      * Read separately from `current_trid` rather than by widening it. That
      * function is also called after the source's own write, where the trid is
      * the only thing in question, and a second return value there would be a

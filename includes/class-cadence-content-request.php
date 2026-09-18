@@ -186,6 +186,12 @@ final class CadenceContentRequest {
             return ['ok' => false, 'code' => $languages['code'], 'reason' => $languages['reason']];
         }
         $unsupported = $languages['unsupported'];
+        // WHETHER THIS SITE HAS LANGUAGES AT ALL, carried down from the check
+        // that has already established it rather than asked again: two answers
+        // to the same question inside one request can disagree, and the one
+        // that gated the refusals above is the one the writes below must obey.
+        $multilingual = $languages['multilingual'];
+        $element_type = 'post_' . $fields['post_type'];
 
         // SCOPED TO THE ASKING KEY, so this branch cannot answer with a post
         // the key may not act on -- see `find_by_external_id`.
@@ -218,8 +224,15 @@ final class CadenceContentRequest {
             // means "this piece"; a body that differs under it means the caller
             // believes it is publishing something new, and the live article is
             // not this code's to overwrite on that belief.
+            // ASKED, NEVER WRITTEN. This post already exists, and
+            // `CadenceLanguageDeclaration::record` would hand it a new trid,
+            // which WPML documents as dropping every translation relation the
+            // post has -- including ones a human made by hand. So the repeat
+            // reports the language the site HOLDS, which is also how a caller
+            // discovers a post that predates the language ever being recorded.
             $answer = ['ok' => true, 'created' => false, 'post_id' => $existing,
-                       'report' => self::report($fields, $existing, $unsupported)]
+                       'report' => self::report($fields, $existing, $unsupported,
+                           self::placed($existing, $element_type, $fields['language'], $multilingual, false))]
                       + self::attested($attested);
             // WITH THE REVISION THE POST ACTUALLY HOLDS, which is how a caller
             // whose body no longer matches the site finds that out -- and how
@@ -308,7 +321,8 @@ final class CadenceContentRequest {
         // pipeline unable to replace what it published without a capability
         // it does not need in order to publish.
         return array_merge(self::attested($attested), ['ok' => true, 'created' => true, 'post_id' => $id,
-                             'report' => self::report($fields, $id, $unsupported)],
+                             'report' => self::report($fields, $id, $unsupported,
+                                 self::placed($id, $element_type, $fields['language'], $multilingual, true))],
                            CadenceRevision::answer($id));
     }
 
@@ -328,24 +342,68 @@ final class CadenceContentRequest {
      * a link this route did not make is the `200 {"written": 2}` on a site
      * with no WPML, one boundary further out.
      *
+     * `placed` IS PASSED IN, NOT DERIVED HERE. It used to be
+     * `[$fields['language']]`, the request's own language handed back, which is
+     * that same unearned report one field over: it agreed with the caller by
+     * construction and could not disagree with the site (#1428). It now comes
+     * from `placed()`, which asks WPML.
+     *
      * @param array{piece_id: string, language: string} $fields
      * @param list<string> $unsupported
+     * @param list<string> $placed The language the SITE holds, or empty.
      */
-    private static function report(array $fields, int $post_id, array $unsupported): array {
+    private static function report(array $fields, int $post_id, array $unsupported,
+                                   array $placed): array {
+        // A LANGUAGE THAT WAS ASKED FOR AND IS NOT HELD gets a row of its own,
+        // distinct from an inactive one: the site has this language, the piece
+        // simply is not in it. Without this an empty `placed` would carry no
+        // reason anywhere in the reply.
+        $not_recorded = !in_array($fields['language'], $placed, true)
+            ? [[$fields['language'], sprintf(
+                'this piece was published but WPML does not hold it as %s, so it is not readable '
+                . 'as that language on this site', $fields['language'])]]
+            : [];
         return [
             'piece_id' => $fields['piece_id'],
             'post_id'  => $post_id,
-            'placed'   => [$fields['language']],
+            'placed'   => $placed,
             'linked'   => [],
             // Per language, with the reason attached, so an operator reading
             // one row does not have to hold the request beside it. Disjoint
             // from `placed` by construction: a language that could not be
             // served never reached the insert.
-            'refused'  => array_map(static fn (string $code): array => [$code, sprintf(
-                'this site has no active WPML language %s, so nothing was placed in it', $code
-            )], $unsupported),
+            'refused'  => array_merge(
+                array_map(static fn (string $code): array => [$code, sprintf(
+                    'this site has no active WPML language %s, so nothing was placed in it', $code
+                )], $unsupported),
+                $not_recorded
+            ),
             'observed_unsupported' => $unsupported,
         ];
+    }
+
+    /**
+     * WHICH LANGUAGES THIS PIECE IS ACTUALLY IN, asked of the site.
+     *
+     * A monolingual site has no WPML to ask and exactly one language, and the
+     * declaration check has already established both, so the request's language
+     * is the site's answer there. It is NOT a fallback for a multilingual site
+     * that fails to answer: that is the case this whole change exists to stop
+     * reporting as a success.
+     *
+     * @param bool $record true on the create path, which writes the language;
+     *        false on the repeat, which must only read -- see the call sites.
+     * @return list<string>
+     */
+    private static function placed(int $post_id, string $element_type, string $language,
+                                   bool $multilingual, bool $record): array {
+        if (!$multilingual) {
+            return [$language];
+        }
+        $held = $record
+            ? CadenceLanguageDeclaration::record($post_id, $element_type, $language)
+            : CadenceLanguageDeclaration::stored_language($post_id, $element_type);
+        return $held === null ? [] : [$held];
     }
 
     /**

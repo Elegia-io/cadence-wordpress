@@ -384,6 +384,18 @@ final class PluginTest extends TestCase {
             $ids[$language] = $made->get_data()['post_id'];
         }
 
+        // THE PUBLISHES ARE SETUP, AND THEY NOW WRITE. `/content` records each
+        // piece's language with WPML (#1428), so the write log holds those two
+        // before the link route is called at all. Counting from zero here is
+        // what makes the assertion below about LINKING rather than about
+        // everything that has happened in this test.
+        //
+        // And each of those posts is now in a group of its own, exactly as WPML
+        // leaves every post it sees. That is the state `create_group` used to
+        // refuse (#1430), and this test is the one that said it did not.
+        $this->assertCount(2, WpStub::$writes, 'the two publishes each record a language');
+        WpStub::$writes = [];
+
         $linked = ($this->route[2]['callback'])(new WP_REST_Request([
             'piece_id' => 'piece-en', 'trid' => null, 'create_group' => true,
             'source' => ['post_id' => $ids['en'], 'language_code' => 'en',
@@ -566,6 +578,12 @@ final class PluginTest extends TestCase {
                  'translations' => [['post_id' => $ids['de'], 'language_code' => 'de',
                                      'element_type' => 'post_post', 'source_language_code' => 'en']]];
         $link = $this->route[2]['callback'];
+
+        // FROM ZERO, so the assertion below is about the LINK. The two
+        // publishes above each recorded a language with WPML (#1428), and
+        // counting those as evidence that tenant B linked something would make
+        // this boundary test pass or fail for the wrong reason.
+        WpStub::$writes = [];
 
         // Tenant B's key is genuine and carries `translation.link`, so the
         // capability tripwire says yes -- which is the point: the boundary is

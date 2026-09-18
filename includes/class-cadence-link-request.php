@@ -406,10 +406,36 @@ final class CadenceLinkRequest {
                     'post %d: WPML returned no language details, so its translation group is unknown; refusing to write one',
                     $p['post_id'])];
             }
+            // WHAT WOULD BE DETACHED, not merely whether a group exists.
+            //
+            // This used to refuse on `$actual !== null`, which reads as "this
+            // post is already grouped" and is TRUE OF EVERY POST on a real WPML
+            // site: WPML assigns a trid on save, to posts this connector
+            // created and to a post made by hand with `wp post create` alike.
+            // The create path was therefore unreachable in production, and the
+            // publish-then-link workflow refused at its first call. The stubs
+            // never assigned a trid, so nothing failed (#1430).
+            //
+            // The danger the refusal is for is the one WPML documents in this
+            // file's header: a new trid makes existing relations disappear. A
+            // post in a group of its OWN has no relations to lose, and that is
+            // the state WPML leaves every new post in. So the question is
+            // whether the group holds an element THIS PLAN DOES NOT NAME.
             if ($create && $actual !== null) {
-                return ['ok' => false, 'code' => 'already_grouped', 'reason' => sprintf(
-                    'post %d is already in translation group %d, so a new group cannot be created without detaching it',
-                    $p['post_id'], $actual)];
+                $outside = self::members_outside_plan($actual, $p['element_type'], $posts);
+                if ($outside === false) {
+                    return ['ok' => false, 'code' => 'group_unknown', 'reason' => sprintf(
+                        'post %d is in translation group %d, but WPML would not say which elements that '
+                        . 'group holds; refusing to regroup a post whose relations cannot be read',
+                        $p['post_id'], $actual)];
+                }
+                if ($outside !== []) {
+                    return ['ok' => false, 'code' => 'already_grouped', 'reason' => sprintf(
+                        'post %d is in translation group %d with %s, which this plan does not name, so a '
+                        . 'new group cannot be created without detaching %s',
+                        $p['post_id'], $actual, self::posts_phrase($outside),
+                        count($outside) === 1 ? 'it' : 'them')];
+                }
             }
             if (!$create && $actual !== $trid) {
                 return ['ok' => false, 'code' => 'group_disagreement', 'reason' => sprintf(
@@ -751,5 +777,74 @@ final class CadenceLinkRequest {
             return false;
         }
         return (int) $trid;
+    }
+
+    /**
+     * WHICH ELEMENTS OF A GROUP THIS PLAN DOES NOT NAME, or false if unreadable.
+     *
+     * The create path's whole question. An empty list means the group holds
+     * nothing but posts already in the plan, so making a new group for them
+     * detaches no relation that existed. A non-empty one names what would be
+     * lost.
+     *
+     * `false` IS THE DEFAULT, for the same reason `current_trid` uses it: an
+     * `apply_filters` nobody answers returns the default unchanged, so `[]`
+     * would make a silent site mean "the group is empty" -- the reading that
+     * writes. WPML keys this map by language code and gives each row as an
+     * object whose `element_id` is a STRING, so the ids are cast rather than
+     * compared loosely.
+     *
+     * THE LAST TWO ARGUMENTS ARE THE WHOLE POINT: `skip_missing` and
+     * `all_statuses`. Asked with three arguments, WPML answers about PUBLISHED
+     * posts only when the request is not an admin one, and a REST request is
+     * not. Cadence publishes drafts -- `status: draft` is what the pipeline
+     * sends and what `/content` places -- so the three-argument call returns an
+     * EMPTY MAP for a group full of drafts, which reads as "nothing would be
+     * detached" and writes. Measured on WPML 5.0.1 inside a live REST request,
+     * against one group holding two drafts:
+     *
+     *   3 args                        -> []
+     *   skip_missing false, all true  -> {"de":"10","en":"11"}
+     *   skip_missing true,  all true  -> {"de":"10","en":"11"}
+     *
+     * The same three-argument call answered CORRECTLY under wp-cli, which is
+     * why this could not be checked from a shell and had to be measured through
+     * the route. It is also why the stub models the status filter: without it,
+     * a revert to three arguments passes the whole suite and silently detaches
+     * drafts on a real site.
+     *
+     * @param list<array{post_id: int, element_type: string}> $posts the plan
+     * @return list<int>|false
+     */
+    private static function members_outside_plan(int $trid, string $element_type, array $posts) {
+        $rows = apply_filters('wpml_get_element_translations', false, $trid, $element_type,
+                              false, true);
+        if (!is_array($rows)) {
+            return false;
+        }
+        $named = array_map(static fn (array $p): int => (int) $p['post_id'], $posts);
+        $outside = [];
+        foreach ($rows as $row) {
+            $id = is_object($row) ? ($row->element_id ?? null)
+                : (is_array($row) ? ($row['element_id'] ?? null) : null);
+            // A row that will not give up an id is not an absence of members.
+            if ($id === null || is_bool($id) || !ctype_digit((string) $id)) {
+                return false;
+            }
+            if (!in_array((int) $id, $named, true)) {
+                $outside[] = (int) $id;
+            }
+        }
+        return array_values(array_unique($outside));
+    }
+
+    /**
+     * `post 12`, or `posts 12, 14`. The refusal names what it is protecting.
+     *
+     * @param list<int> $ids
+     */
+    private static function posts_phrase(array $ids): string {
+        sort($ids);
+        return (count($ids) === 1 ? 'post ' : 'posts ') . implode(', ', $ids);
     }
 }

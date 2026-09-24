@@ -1,8 +1,13 @@
 # Cadence Connector for WordPress
 
-Publishes content produced by [Cadence](https://elegia.io) into WordPress,
-replaces the pieces it published, and links the language variants of a piece
-into a single WPML translation group.
+[Cadence](https://elegia.io) is Elegia's content system. It drafts, translates and reviews articles
+in a brand's own voice, starting from what the brand has already published.
+This plugin is how those articles reach your site: Cadence sends each finished
+piece to WordPress, usually as a draft for you to review, and links its
+language versions as WPML translations so nobody has to do it by hand.
+
+The plugin publishes a piece, replaces a piece it published, and links the
+language variants of a piece into a single WPML translation group.
 
 ## Why it exists
 

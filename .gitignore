@@ -1,0 +1,13 @@
+vendor/
+.phpunit.result.cache
+.phpunit.phar
+
+# A built zip is a release asset, built by build-zip.py, never a tracked file.
+# Two spellings because there are two artifacts: the submission build keeps the
+# bare name, the client-install build carries its version and `-install`.
+/cadence-connector.zip
+/cadence-connector-*.zip
+
+# tests/build_zip_test.py imports build-zip.py to read one constant, which is
+# enough to make CPython write a cache directory beside it.
+__pycache__/

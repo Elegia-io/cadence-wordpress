@@ -1,0 +1,41 @@
+# Dependabot configuration.
+#
+# ONE ecosystem is scannable here, and the absence of the others is a fact about
+# this plugin rather than an oversight: there is no `composer.json`, no
+# `composer.lock`, no `vendor/` and no `package.json`. The plugin ships plain PHP
+# against the WordPress API and depends on `ext-sodium` (or the `sodium_compat`
+# polyfill a host provides), neither of which is a manifest Dependabot can read.
+# The GitHub Actions used by `ci.yml` are the only pinned third-party thing in the
+# tree.
+#
+# If a `composer.json` is ever added, add a `composer` ecosystem at that point --
+# and note the trap: a blanket ignore of
+# `version-update:semver-major` does NOT hold back 0.x dependencies, because
+# semver puts the breaking position in the minor for those.
+#
+# Deliberately NOT set: `target-branch` (main is correct) and anything that would
+# run Dependabot jobs on self-hosted runners -- that setting is what broke
+# Dependabot on Elegia-io/elegia.io for nine weeks, erroring "Self-hosted runner
+# unavailable" on every job while normal CI stayed green on ubuntu-latest and hid
+# it.
+#
+# SECURITY ALERTS DO NOT COME FROM THIS FILE. They are raised from the dependency
+# graph whether or not an ecosystem is listed here; what this file schedules is
+# ordinary version updates. The two are separate, and reading a quiet week here as
+# "nothing is vulnerable" is the mistake the distinction exists to prevent.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # One PR for the lot rather than one per action. This repository pins two
+    # actions in one workflow, so per-action PRs would be pure noise -- and each
+    # one costs a CI run on a shared Actions budget that was exhausted in
+    # September 2026.
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(deps)"

@@ -1,0 +1,164 @@
+# What this repository ENFORCES, on every pull request.
+#
+# Two jobs, because they answer different questions and one cannot answer the
+# other's:
+#
+#   `syntax` runs on the OLDEST PHP the plugin header claims to support (8.1).
+#   A newer PHP parses everything 8.1 parses and more, so linting only on 8.3
+#   would accept syntax that fatals on half the sites this declares itself
+#   compatible with.
+#
+#   `tests` runs the PHPUnit suite, which is the plugin's own REFUSALS -- what
+#   it checks before it writes. PHPUnit 11 needs PHP >= 8.2, so it runs on 8.3,
+#   the version ./run-tests.sh uses locally.
+#
+# THE SUITE RUNS IN TWO LANES, SPLIT AT THE WPML LINE.
+# Both are stubbed -- nothing here runs against a real WordPress -- but they are
+# not worth the same:
+#
+#   `--exclude-group wpml` reaches no WPML hook at all: 132 of the suite's 279
+#   test methods, which PHPUnit counts as 154 once a data provider's rows are
+#   counted separately. Its verdicts are the plugin's own refusals, and they
+#   are as true here as they would be on a live site.
+#
+#   `--group wpml` reaches one: the other 147 methods, 168 runs. Its verdicts
+#   are conditional on tests/bootstrap.php modelling WPML correctly, and three
+#   of the beliefs it models are documented by WPML and never observed -- see
+#   the header of includes/class-cadence-link-request.php. Green here is
+#   evidence about this plugin's logic, not about WPML.
+#
+# The third step is what keeps that line from decaying into a sentence nobody
+# maintains: it fails when a test crosses it in either direction. See
+# tests/wpml-boundary.php for what counts as crossing and why.
+#
+# THE REAL-WPML LANE IS NOT BUILT, AND THAT IS A PRICE, NOT A WALL. A
+# self-hosted runner carrying WordPress + WPML would need a WPML licence and a
+# machine to keep, patch and pay for; against a plugin whose entire CI is
+# three jobs on GitHub-hosted runners, that has not been worth it yet. Nobody
+# should record this as impossible.
+name: CI
+
+# PULL REQUESTS ONLY. A push to `main` is the merge of a pull request this workflow
+# already ran on, so the second run re-linted and re-tested a tree nobody had
+# changed: 14 pull_request runs beside 12 push runs in one month, for one answer.
+# `workflow_dispatch` stays as the way to re-run `main` deliberately.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  syntax:
+    name: php -l on the declared minimum
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          # Must match `Requires PHP` in cadence-connector.php. tests/PluginTest.php
+          # asserts that header is >= 8.1; this is the other half of that claim.
+          php-version: '8.1'
+          coverage: none
+
+      - name: Lint every PHP file
+        run: |
+          # Counted, and refused on zero: a walk that matched nothing would
+          # otherwise print no errors and exit 0, which reads exactly like a
+          # pass. `git ls-files` rather than `find` so a stray file in the
+          # runner's workspace cannot pad or fail the count.
+          mapfile -t files < <(git ls-files '*.php')
+          echo "${#files[@]} PHP file(s) to lint"
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no PHP files found, which is not a pass" >&2
+            exit 1
+          fi
+          failed=0
+          for f in "${files[@]}"; do
+            php -l "$f" || failed=1
+          done
+          exit "$failed"
+
+  tests:
+    name: PHPUnit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Fetch PHPUnit
+        # The same phar ./run-tests.sh fetches, for the reason recorded there:
+        # this plugin has no runtime dependencies, and adding a vendor tree to
+        # acquire a test runner would be the largest thing in the repository.
+        run: curl -sSfL -o .phpunit.phar https://phar.phpunit.de/phpunit-11.phar
+
+      # TWO STEPS, NOT ONE RUN AND A FILTER, so the two lanes' results are
+      # separately visible: a red `stubbed` lane is a defect in the plugin, and
+      # a red `wpml` lane may equally be a defect in what the stub believes.
+      #
+      # --fail-on-empty-test-suite on both so a bootstrap that loaded no tests,
+      # or a selector that matched none, is red rather than a green summary over
+      # nothing.
+      - name: Run the stubbed lane
+        run: |
+          php .phpunit.phar \
+            --bootstrap tests/bootstrap.php \
+            --do-not-cache-result \
+            --colors=never \
+            --fail-on-empty-test-suite \
+            --exclude-group wpml \
+            tests
+
+      - name: Run the wpml lane
+        run: |
+          php .phpunit.phar \
+            --bootstrap tests/bootstrap.php \
+            --do-not-cache-result \
+            --colors=never \
+            --fail-on-empty-test-suite \
+            --group wpml \
+            tests
+
+      - name: Check the boundary between them
+        # Runs both lanes again with the recorder armed and refuses if a test
+        # crossed either way. It re-runs rather than reading the steps above
+        # because what it needs is WHICH TEST reached WPML, which a pass/fail
+        # summary cannot say. The whole suite is under a second.
+        run: php tests/wpml-boundary.php
+
+  readme:
+    name: Repository checks that need no PHP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # No `setup-php` and no PHPUnit: this leg reads two text files and
+      # compares two strings. It is separate from `tests` because the suite is
+      # the plugin's own refusals -- what it checks before it writes -- and
+      # this checks the REPOSITORY: that the number WordPress.org builds a
+      # release from (`Stable tag`) is the number every install will report
+      # (the header's `Version`). python3 is preinstalled on the runner.
+      - name: Stable tag vs Version
+        run: python3 check-readme-version.py
+
+      # AND WHAT THE BUILD SCRIPT WILL BUILD, in the same leg and for the same
+      # reason: it reads text files and needs no PHP. It lives here rather than
+      # only in `./run-tests.sh` because this workflow does NOT call that
+      # script -- it re-spells the PHPUnit invocation above -- so a check added
+      # there alone gates nothing on a pull request and runs only when a
+      # maintainer happens to type the script's name.
+      - name: A client install credits nobody, a submission needs the name twice
+        run: python3 tests/build_zip_test.py

@@ -21,9 +21,9 @@ action, plus endpoints to publish a piece and to replace one it published.
 Callers authenticate with a connector key issued on the settings screen, not as
 a WordPress user, and every request carries an Ed25519 signature over its own
 bytes: the key says a caller may publish here, the signature says this body is
-the one that caller composed. A request that disagrees with the site's state —
-a duplicate identifier, a language the site does not run, a post this key did
-not publish — is refused rather than reconciled.
+the one that caller composed. A request that disagrees with the site's state
+is refused rather than reconciled: a duplicate identifier, a language the site
+does not run, a post this key did not publish.
 
 Nothing else is added: no post types, no front-end output, no telemetry, and no
 network requests of its own. The plugin never calls out; it only answers.

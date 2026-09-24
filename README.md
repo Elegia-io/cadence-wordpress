@@ -70,7 +70,7 @@ X-Cadence-Key: <the key>
 
 A connector key is a bearer credential: it says a caller is *entitled* to
 publish here, not that *this body* is the one that caller composed. Anything
-that ever reads one — a proxy, a log, a mirror — can replay a publish or edit
+that ever reads one (a proxy, a log, a mirror) can replay a publish or edit
 the text inside it. So all three routes also verify an
 Ed25519 signature over the bytes of the request:
 
@@ -79,13 +79,13 @@ X-Cadence-Attestation: v1 <16 lowercase hex key id> <86 characters of unpadded b
 ```
 
 The signature is over a SHA-256 of a canonical rendering of the fields the
-route signs — for `/content` that is `piece_id`, `language`, `post_type`,
+route signs: for `/content` that is `piece_id`, `language`, `post_type`,
 `status`, `title` and `content`, in that order; for `/content/replace`,
 `piece_id`, `post_id`, `revision`, `title` and `content`. The route's own path
 is inside it, so a signature captured off a publish cannot verify a rewrite.
 
 `/translation-group` signs `trid`, `create_group`, `piece_id` and then every
-member of the group — the source first, then the translations **sorted by
+member of the group: the source first, then the translations **sorted by
 language code**, each contributing its `post_id`, `language_code`,
 `element_type` and `source_language_code`. The sort is why re-serialising the
 body, or a client library that hands `translations` back in a different order,
@@ -96,7 +96,7 @@ source.
 **Paste the public half by hand**, on *Settings → Cadence Connector*, beside the
 key it belongs to. There is no upload route and no API that can write it, and
 that is the point: whoever can set the verifying key can sign anything as that
-tenant. A key holds **two** at once so a rotation has an overlap window — paste
+tenant. A key holds **two** at once so a rotation has an overlap window: paste
 the arriving key, watch replies name it, then remove the retiring one.
 
 Every reply says what happened, under `attestation`: `verified` (with
@@ -105,7 +105,7 @@ no `attestation` field at all is a connector older than this, which is a
 different fact from `exempt` and should not be folded into it.
 
 **Migrating a live site** without an outage: tick *Allow unsigned publishes from
-this key*. That exempts an **absent** header and nothing else — a request that
+this key*. That exempts an **absent** header and nothing else: a request that
 carries a header which does not verify is still refused, on an exempt key
 exactly as on any other. Absence is a site that has not been upgraded yet; a bad
 signature is not. The screen warns, by name, for every key that carries it.
@@ -127,22 +127,22 @@ granted separately.
 **What a capability may act on is a second question from what it may do.**
 `translation.link` reaches the posts this connector created and nothing else, so
 a key cannot write a translation group over a page a human wrote, a shop product
-or the site's front page — and a group written over posts that already had one
+or the site's front page. A group written over posts that already had one
 *destroys* the relations they had, including ones made by hand in wp-admin. The
 set is identified by the `_cadence_external_id` this plugin writes in the same
 call that creates a post, so it needs no configuration here and stays current by
 itself: a key issued today covers the posts the pipeline makes tomorrow and never
 covers anything else. A post outside it is refused with `post_out_of_scope` and a
-`403`. `content.replace` adds a stricter comparison on top — the stored
+`403`. `content.replace` adds a stricter comparison on top: the stored
 identifier must *be* the `piece_id` the request names.
 
 **And of those, only the posts the asking key itself published.** "Cadence made
 this" and "you made this" are the same question on a site holding one connector
-key and different questions on a site holding two — a client with two brands on
+key and different questions on a site holding two: a client with two brands on
 one WordPress, or an agency site serving two tenants. So `/content` stamps the
 creating key's **public id** beside the identifier, in the same call, and a link
 request naming a post another key published is refused with `post_out_of_scope`
-and a `403` — *the same refusal, word for word, as a post this connector never
+and a `403`: *the same refusal, word for word, as a post this connector never
 published at all*. The id and never the secret: the site stores only a SHA-256 of
 that, and a meta row travels in every database dump.
 
@@ -152,7 +152,7 @@ post ids and sort every one of them into "another tenant's Cadence post" and
 "everything else", one `403` at a time, and *which of two tenants published a
 given post* is the fact per-key scope exists to protect. The walk cost only a
 leaked connector key while that route verified no attestation; it verifies one
-now, and the merge stays — a signature narrows *who can ask*, and a site
+now, and the merge stays: a signature narrows *who can ask*, and a site
 carrying the unsigned-publish exemption asks with none. The price is
 paid by the legitimate caller: the code no longer says whether to republish the
 piece through `/content` or to present the key that owns it. What it keeps is
@@ -165,8 +165,8 @@ before the stamp existed carries none and refusing those would break every link
 over content already live. That set never grows.
 
 **A replacement is asked the same question, and asked it first.** The
-`piece_id` is not a secret — it travels in plan payloads, ledger rows and a
-tenant's own operator surface — so "is this the post you name" was never the
+`piece_id` is not a secret (it travels in plan payloads, ledger rows and a
+tenant's own operator surface), so "is this the post you name" was never the
 same question as "is this post yours", and a replacement *overwrites a
 published title and body*. A replace naming a post another key published is
 refused with `replace_other_key` and a `403`, before the identifier is compared
@@ -176,22 +176,22 @@ which a signature in front of the route narrows but does not undo. One refusal e
 *nothing was written*, and a
 caller matching on the code to decide what did not happen must not be told
 about an act it never asked for. The refusal names the post id the caller
-already sent and nothing else — not the key that holds the post, not its type,
-title, author or revision — and it is the same sentence whether or not the post
+already sent and nothing else (not the key that holds the post, not its type,
+title, author or revision), and it is the same sentence whether or not the post
 carries the identifier named, so it cannot be used to ask which.
 
 **A post published before this version carries no key stamp, and stays reachable
 by any key that reaches it**, on both routes. That is deliberate, and it is what makes the change
 safe to install over content that is already live: refusing every piece already
 on a client's site would break every link over work the pipeline has already
-done, which is worse than the widening it closes. The set never grows — every
+done, which is worse than the widening it closes. The set never grows: every
 post created from here on carries a stamp.
 
 **`content.publish` is scoped by the post types named on the key.** Creating
 cannot be scoped by an identifier the post does not have yet, so this is the one
 scope an operator declares rather than the plugin deriving it: type the post
 types the tenant's pipeline publishes into, comma-separated, when the key is
-issued. They are checked against the site *then* — a key naming a type this site
+issued. They are checked against the site *then*: a key naming a type this site
 does not register is refused on the screen, where somebody can fix the typo,
 rather than 403-ing every publish afterwards. A request for a type the key does
 not name is refused with `post_type_out_of_scope` and a `403`, and that refusal
@@ -202,17 +202,17 @@ site has only for the types it already names.
 over the posts that predate the key stamp, where "did *you* make this" admits
 everything: a key that names `post` does not rewrite a `page` this connector
 published before it recorded which key made it. It also makes a narrowing
-effective over the pieces a key already has — `/content` refuses to hand out
+effective over the pieces a key already has: `/content` refuses to hand out
 the id and the revision of such a piece, but a caller that recorded the pair
 before the scope changed keeps it, so withholding it is a disclosure control
 and not a door. A rewrite outside the list is refused with
-`existing_post_type_out_of_scope` and a `403`, the same code and the same fix —
-re-issue the key wider — as the repeat on `/content`.
+`existing_post_type_out_of_scope` and a `403`, the same code and the same fix
+(re-issue the key wider) as the repeat on `/content`.
 
 **Leave the field blank and the key publishes into any registered type**, which
-is what every key issued before this version does — they carry no post types at
+is what every key issued before this version does: they carry no post types at
 all, and go on publishing exactly as they did. The key list marks those rows
-*any type — re-issue to scope*. A key is worth what its widest grant is worth, so
+*any type: re-issue to scope*. A key is worth what its widest grant is worth, so
 scope it when you issue it.
 
 **Registering a post this connector did not create is not possible**, and a link
@@ -229,7 +229,7 @@ on.
 
 A key issued by an earlier version of this plugin carries no byline and goes on
 publishing exactly as it did, with no author. The key list marks those rows
-*none — re-issue to set one*; re-issuing is the only way to give one a byline,
+*none: re-issue to set one*; re-issuing is the only way to give one a byline,
 since the old key's secret cannot be recovered to edit in place.
 
 **Revoking** is the *Revoke* button beside the key. It takes effect on the next
@@ -243,14 +243,14 @@ site into all of them, and revoking it for one revokes it for all.
 
 A WordPress application password, and any WordPress account, is scoped to a
 **user**. A credential that can create a draft can also edit every published
-post, read every draft on the site and enumerate users — none of which this
+post, read every draft on the site and enumerate users: none of which this
 plugin needs, and all of which whoever holds the credential now has.
 
 A connector key is scoped to a **capability** and carries no WordPress identity
 at all: `wp_get_current_user()` is 0 for a request authenticated this way, so
 every other REST route on the site, core's included, still refuses it. The two
 routes below are therefore the whole of what the key can reach. The byline is
-not an exception to this — it is an id written into one field of the post, never
+not an exception to this: it is an id written into one field of the post, never
 a user the request becomes.
 
 There is no fallback: a WordPress administrator logged in with every capability
@@ -292,7 +292,7 @@ translations of each other.
 POST /wp-json/cadence/v1/content
 ```
 
-Requires a key carrying `content.publish`, and a `post_type` the key names — or
+Requires a key carrying `content.publish`, and a `post_type` the key names, or
 any registered type, if it names none. The post carries the creating key's public
 id, which is what later scopes `translation.link` to this key's own pieces.
 
@@ -378,7 +378,7 @@ appeared:
 | `post_id` | the integer WordPress assigned; the caller type-checks it before verifying anything else |
 | `placed` | the languages the piece landed in |
 | `linked` | the languages associated as translations. Always empty here: linking is the other endpoint's write, and it reports them |
-| `refused` | `[language, reason]` pairs — this connector's own refusals, not transport failures |
+| `refused` | `[language, reason]` pairs: this connector's own refusals, not transport failures |
 | `observed_unsupported` | requested languages this site cannot serve |
 
 `placed` and `observed_unsupported` never overlap. `ok` and `created` are kept:
@@ -392,8 +392,8 @@ Trashed posts still answer for their identifier, so a piece somebody deleted is
 not resurrected by the next run of the pipeline.
 
 **That rule has not changed.** What has changed is that a caller which really
-does mean to rewrite the article now has somewhere to say so — the endpoint
-below — instead of hoping this one would infer it.
+does mean to rewrite the article now has somewhere to say so (the endpoint
+below) instead of hoping this one would infer it.
 
 `revision` names the text the post holds right now: the title and the content,
 hashed. It is derived from the post every time it is answered and stored
@@ -416,7 +416,7 @@ POST /wp-json/cadence/v1/content/replace
 ```
 
 Requires a key carrying `content.replace`. `content.publish` alone does not
-open this route — a key that may create must not silently also be able to
+open this route: a key that may create must not silently also be able to
 overwrite. And it reaches only the posts that key itself published, plus the
 ones that predate the key stamp, within the post types named on the key: whose
 post it is is asked before which post it is, and before the row is touched.
@@ -442,11 +442,11 @@ the `revision` the request names. Nothing is written on any refusal.
 
 `post_id` and `piece_id` must agree with each other on this site: the post
 named has to be the piece named. The refusal says which of the two ways they
-disagree — that post is a different piece of this plugin's, or it is none of
-its — without naming the identifier the site stores, which is protected meta
+disagree (that post is a different piece of this plugin's, or it is none of
+its), without naming the identifier the site stores, which is protected meta
 the REST API does not expose either. A caller's map from its own identifier to a
-WordPress post id lives on another machine and goes stale — a restore from
-backup, a migration, a post deleted and re-created — and the post at that id is
+WordPress post id lives on another machine and goes stale (a restore from
+backup, a migration, a post deleted and re-created), and the post at that id is
 then somebody else's article.
 
 The title and the content are replaced. The post's status is not: whether the
@@ -467,8 +467,8 @@ the one that lands between the two. So the text is read from the row itself,
 `FOR UPDATE`, inside a transaction the write then happens in, and the row is
 released either way.
 
-That makes two overlapping `/content/replace` calls — the shape a client-side
-timeout and retry produces — sequential: the second waits on the row, reads
+That makes two overlapping `/content/replace` calls (the shape a client-side
+timeout and retry produces) sequential: the second waits on the row, reads
 what the first wrote, and refuses. A human's save in wp-admin takes no lock of
 this plugin's, but it takes the row's, so it either commits before the read
 here, and is seen and refuses this request, or waits until this one commits and
@@ -478,11 +478,11 @@ Two limits worth stating rather than claiming away. On a site whose `wp_posts`
 is MyISAM the transaction is accepted and does nothing, and this is back to a
 check followed by a write. And the identifier is matched before the row is
 held, from post meta rather than from the locked row, because the identifier is
-not what a rewrite destroys — the title and the content are, and those are what
+not what a rewrite destroys: the title and the content are, and those are what
 the lock covers.
 
-**A replacement is not idempotent, and that is deliberate.** Sent twice — the
-shape a lost response produces — the second is refused with `revision_mismatch`,
+**A replacement is not idempotent, and that is deliberate.** Sent twice (the
+shape a lost response produces), the second is refused with `revision_mismatch`,
 because after the first the site no longer holds the text the request names. The
 refusal names the revision the site does hold, which is the one the first
 attempt answered with, so a caller that lost that answer still learns the post's
@@ -496,11 +496,11 @@ POST /wp-json/cadence/v1/translation-group
 
 Requires a key carrying `translation.link`. Once the key answers,
 `CadenceRestRoute::names_posts()` refuses a body naming no posts, or one whose
-shape it cannot read — an empty request authorises nothing, so there is nothing
+shape it cannot read: an empty request authorises nothing, so there is nothing
 there to say yes to.
 
 **And the plan must carry an attestation**, verified *before this site is asked
-anything at all* — before WPML is looked for, before the scope is settled,
+anything at all*: before WPML is looked for, before the scope is settled,
 before a group is read. Every refusal under it discloses something about the
 client's site, and the signature is what earns the right to look. The one thing
 decided ahead of it is whether the plan can be rendered into bytes at all: a
@@ -509,14 +509,14 @@ decided ahead of it is whether the plan can be rendered into bytes at all: a
 
 **Every post the plan names must be one this connector published.** The
 capability answers for the route; this answers for the posts, and it is checked
-before the plan's own group logic is interpreted — so a caller that may not touch
+before the plan's own group logic is interpreted, so a caller that may not touch
 a post does not learn that post's translation group from a `group_disagreement`
 either. One post outside the scope refuses the whole plan: this route writes
 every member, and a partly-written group has one member in it.
 
 **And every post must be in a post type the key names**, refused with
 `link_post_type_out_of_scope` and a `403`. A key narrowed to `post` no longer
-links a `page`, the same way it no longer publishes or replaces one — the scope
+links a `page`, the same way it no longer publishes or replaces one: the scope
 is one scope and not three. It is its own code and not
 `existing_post_type_out_of_scope`: that one is asked of a *piece* named by
 identifier on the two routes that write text and ends *nothing was written*,
@@ -546,15 +546,15 @@ different things and one of them destroys relations.
 `piece_id` is the piece the source post is, the same identifier `/content` was
 given for it. It is optional: without it the answer is the bare `{"ok": true,
 "written": N}` this route has always sent, because a report filed under no
-identifier is one nothing can be joined to. Present and blank — or present and
-not a string — is refused, for the reason `/content` refuses it.
+identifier is one nothing can be joined to. Present and blank (or present and
+not a string) is refused, for the reason `/content` refuses it.
 
 Every post is read before any post is written, so a request that is wrong about
 its last post writes nothing about its first.
 
 **`create_group` writes the source first and reads its new group back.** The
 group id does not exist until something creates it, and WPML documents a falsy
-`trid` as creating a new one for *that* element — so a null trid sent for every
+`trid` as creating a new one for *that* element, so a null trid sent for every
 element builds one group per post and links nothing. The source is therefore
 written alone, the id the site now holds for it is read back, and each
 translation is written under that id. That is the only place this route can stop
@@ -569,10 +569,10 @@ every post is in no group to begin with.
 |---|---|---|
 | `200` | Written. `written` is how many, and the report below says which. | Nothing. |
 | `400` | The request is wrong on its face. | Fix it; re-sending cannot help. |
-| `403` | The key is genuine and does not reach what the request names. | Read `code`: it names which. `post_out_of_scope` — the presenting key does not reach that post, and the refusal does not say whether the post is absent, not this connector's, or another key's; `replace_other_key` — a replacement naming a post another key published. `post_type_out_of_scope` — the type the request names is not on this key; `existing_post_type_out_of_scope` — the piece is already placed in a type that is not; `link_post_type_out_of_scope` — the post a link names is in a type that is not. The last three are re-issued keys, not requests to re-send. |
+| `403` | The key is genuine and does not reach what the request names. | Read `code`: it names which. `post_out_of_scope`: the presenting key does not reach that post, and the refusal does not say whether the post is absent, not this connector's, or another key's; `replace_other_key`: a replacement naming a post another key published. `post_type_out_of_scope`: the type the request names is not on this key; `existing_post_type_out_of_scope`: the piece is already placed in a type that is not; `link_post_type_out_of_scope`: the post a link names is in a type that is not. The last three are re-issued keys, not requests to re-send. |
 | `409` | The site disagrees with the request. | Re-read the site and try again. |
 | `503` | The site cannot do this at all. | Fix the site; the request is fine. |
-| `500` | This server tried and failed — including a `create_group` that wrote the source and could not finish — or refused for a reason this version cannot classify. | Read the body: `written` says what was applied. |
+| `500` | This server tried and failed (including a `create_group` that wrote the source and could not finish) or refused for a reason this version cannot classify. | Read the body: `written` says what was applied. |
 
 A request naming a `piece_id` is answered with the same report as `/content`,
 flat in the body:
@@ -603,10 +603,10 @@ measured.
 
 **`linked` is read back from the site, never copied out of the request.** WPML's
 action returns nothing whatever it does, so the only evidence a link was made is
-what the site says afterwards — and a `linked` built from the plan would report
+what the site says afterwards. A `linked` built from the plan would report
 every language the caller asked for, which is the request echoed back with an
 `ok` beside it. `written` is how many writes were *issued*; the two disagreeing
-is the signal, and it is the signal on the create path too — see the note below
+is the signal, and it is the signal on the create path too: see the note below
 for what this route knows about WPML, and the one thing it still cannot see.
 
 The source's own language is not in `linked`. That is what `/content` reported
@@ -625,10 +625,10 @@ the reason is prose and changes freely.
 | `already_grouped` | 409 | a post's group holds an element this plan does not name, so creating a group would detach it. A post alone in its own group is admitted: that is the state WPML leaves every post in |
 | `group_disagreement` | 409 | the site's group for a post is not the one named |
 | `language_disagreement` | 409 | the site serves a post in a different language from the one the plan calls it. The plan's code is what would be written, so this would change the language the site serves |
-| `post_out_of_scope` | 403 | a post the plan names is not one the presenting key reaches — absent, not this connector's, or another key's, told apart by nothing the caller can read |
+| `post_out_of_scope` | 403 | a post the plan names is not one the presenting key reaches: absent, not this connector's, or another key's, told apart by nothing the caller can read |
 | `replace_other_key` | 403 | the post a replacement names was published through a different connector key |
 | `post_type_out_of_scope` | 403 | the post type named is not one this key may create in |
-| `existing_post_type_out_of_scope` | 403 | the piece is already on a post of a type this key does not name — on a `/content` repeat, or on a replacement |
+| `existing_post_type_out_of_scope` | 403 | the piece is already on a post of a type this key does not name: on a `/content` repeat, or on a replacement |
 | `link_post_type_out_of_scope` | 403 | a post the plan names is in a type this key does not name |
 | `source_group_unset` | 500 | the source was written and the site still puts it in no group, so there was no group for the translations to join. **The source was written**; the translations were not |
 | `source_group_unreadable` | 500 | the source was written and WPML then said nothing usable about it, so its group cannot be named. **The source was written**; the translations were not |
@@ -650,7 +650,7 @@ properties of `wpml_set_element_language_details` and
 `wpml_get_element_translations`, two from WPML's own documentation and one
 from neither:
 
-1. a falsy `trid` creates a new trid for that element and drops its relations —
+1. a falsy `trid` creates a new trid for that element and drops its relations:
    documented, and the plugin relies on it;
 2. it does so *per element*: writing several elements with a null trid each
    gives each one its own new trid rather than converging on one group, which
@@ -686,7 +686,7 @@ machine, only podman or docker.
 `workflow_dispatch`): `php -l` over every tracked PHP file on **PHP 8.1**, the version the
 plugin header declares as its minimum, the PHPUnit suite on PHP 8.3, and
 `check-readme-version.py`, which refuses a tree whose `readme.txt` `Stable tag`
-and plugin-header `Version` disagree — the pair WordPress.org builds a release
+and plugin-header `Version` disagree: the pair WordPress.org builds a release
 from against the number every install reports.
 
 ## Licence

@@ -482,6 +482,25 @@ final class CadenceAttestation {
     }
 
     /**
+     * The `site` a signed adopt, release or rewrite confirmation must name:
+     * this install's home URL as its lowercased host, a port only when it is
+     * not the scheme's default, and its path with no trailing slash, with no
+     * scheme. `example.test` or `example.test/blog`. The path is part of it
+     * so two installs sharing one host cannot accept each other's body.
+     */
+    public static function site(): string {
+        $parts = wp_parse_url(home_url());
+        $parts = is_array($parts) ? $parts : [];
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        $site = strtolower((string) ($parts['host'] ?? ''));
+        $port = $parts['port'] ?? null;
+        if ($port !== null && $port !== (['https' => 443, 'http' => 80][$scheme] ?? null)) {
+            $site .= ':' . $port;
+        }
+        return $site . rtrim((string) ($parts['path'] ?? ''), '/');
+    }
+
+    /**
      * WHETHER THIS BODY WAS SIGNED BY A KEY THIS TENANT PASTED, and if not,
      * which of five different things went wrong.
      *

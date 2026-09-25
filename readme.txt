@@ -76,6 +76,8 @@ monolingual site with no WPML installed.
   Cadence" row action does the same from the posts list in wp-admin.
 * Rewriting an adopted post's title or text through the replace endpoint now
   needs a signed, time-limited, one-time confirmation from the caller.
+* Signed adopt, release and rewrite requests name the site by host and path,
+  so two installs on one host cannot accept each other's requests.
 * Trashed pieces are now found by the duplicate-piece lookup, so a piece
   already trashed on the site is not published a second time.
 * A status or password change made by hand while a rewrite is in flight is no

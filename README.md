@@ -593,6 +593,13 @@ about to be claimed or released before anything happens:
  "site": "example.test", "issued_at": "2026-09-25T10:00:00Z"}
 ```
 
+`site` is this site's home URL written as its lowercased host, then a port
+only when it is not the default one, then its path with no trailing slash,
+and no scheme: `example.test`, or `example.test/blog` for a site at
+`https://example.test/blog/`. Every adopt and release body carries it, and
+so does a rewrite confirmation (below). A body that names another site is
+refused, including another install on the same host under a different path.
+
 The link accepted is either this site's own wp-admin edit link
 (`post.php?post=<id>`, on this site's own host) or the post's public
 permalink; anything else, including an edit link for another site, resolves

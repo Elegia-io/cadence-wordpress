@@ -1301,6 +1301,16 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     #[Group('wpml')]
+    public function test_a_confirmation_for_another_path_on_the_same_host_is_refused(): void {
+        WpStub::$home = 'https://example.test/shop';
+        $p = $this->adopted();
+        $r = $this->replace($this->body($p, self::confirmation(['site' => 'example.test/blog'])));
+        $this->assert_refused_unwritten('confirmation_wrong_site', 403, $r, $p['post_id']);
+
+        $this->assertTrue($this->replace($this->body($p, self::confirmation(['site' => 'example.test/shop'])))['ok']);
+    }
+
+    #[Group('wpml')]
     public function test_a_confirmation_for_another_site_is_refused_and_its_own_host_passes(): void {
         $p = $this->adopted();
         $r = $this->replace($this->body($p, self::confirmation(['site' => 'staging.example.test'])));

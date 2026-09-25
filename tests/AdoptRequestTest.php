@@ -165,6 +165,22 @@ final class AdoptRequestTest extends TestCase {
             self::preview(self::preview_body(['site' => 'other.test']))['code']);
     }
 
+    public function test_row_3_two_sites_on_one_host_are_told_apart_by_path(): void {
+        // A subdirectory install: `/blog` and `/shop` share the host and a key.
+        WpStub::$home = 'https://example.test/shop/';
+        $this->assertSame('adopt_wrong_site',
+            self::adopt(self::body(['site' => 'example.test/blog']))['code']);
+        $this->assertSame('adopt_wrong_site',
+            self::preview(self::preview_body(['site' => 'example.test/blog']))['code']);
+        $this->assertSame('adopt_wrong_site', self::adopt(self::body(['site' => 'example.test']))['code']);
+    }
+
+    #[Group('wpml')]
+    public function test_row_3_twin_the_matching_path_is_accepted(): void {
+        WpStub::$home = 'https://Example.TEST/blog/';
+        $this->assertTrue(self::adopt(self::body(['site' => 'example.test/blog']))['ok']);
+    }
+
     public function test_row_4_a_body_outside_the_window_is_expired(): void {
         $this->assertSame('adopt_expired', self::adopt(self::body(['issued_at' => self::now(-301)]))['code']);
         $this->assertSame('adopt_expired', self::adopt(self::body(['issued_at' => self::now(301)]))['code']);

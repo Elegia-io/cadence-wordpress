@@ -87,11 +87,11 @@ final class AttestationTest extends TestCase {
         [
             'label'    => 'adopt',
             'route'    => '/adopt',
-            'fields'   => ['piece_id' => 'acme-blog-2026-09-24-adopt', 'post_id' => 41, 'language' => 'en-gb', 'site' => 'example.test', 'issued_at' => '2026-09-24T12:00:00Z'],
-            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2Fkb3B0CnBpZWNlX2lkOjI2OmFjbWUtYmxvZy0yMDI2LTA5LTI0LWFkb3B0CnBvc3RfaWQ6Mjo0MQpsYW5ndWFnZTo1OmVuLWdiCnNpdGU6MTI6ZXhhbXBsZS50ZXN0Cmlzc3VlZF9hdDoyMDoyMDI2LTA5LTI0VDEyOjAwOjAwWgo=',
-            'bytes'    => 149,
-            'digest'   => '694c2d2df121a951369710a39e0c035d58e0a6b9b0118000c229551123fcba07',
-            'header'   => 'v1 45da37c57dd21b36 7_LNHDSuT07vTDlwXCm0rUXurwkW9rAB-xnEEB3yEOY520dwDZTOx9Y_ip0m0S3R7TFvnJXQNc3bPYbheXjuBA',
+            'fields'   => ['piece_id' => 'acme-blog-2026-09-24-adopt', 'post_id' => 41, 'language' => 'en-gb', 'site' => 'example.test/blog', 'issued_at' => '2026-09-24T12:00:00Z'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2Fkb3B0CnBpZWNlX2lkOjI2OmFjbWUtYmxvZy0yMDI2LTA5LTI0LWFkb3B0CnBvc3RfaWQ6Mjo0MQpsYW5ndWFnZTo1OmVuLWdiCnNpdGU6MTc6ZXhhbXBsZS50ZXN0L2Jsb2cKaXNzdWVkX2F0OjIwOjIwMjYtMDktMjRUMTI6MDA6MDBaCg==',
+            'bytes'    => 154,
+            'digest'   => '896169b19bc6dd10b085ba1818803a47010d8359c93e60a77be1c26336541348',
+            'header'   => 'v1 45da37c57dd21b36 hQkFAaLQj6disj41wAPBQj8Zb9YgwxKMTwRHzDtS3QbIA5oKLmaePr0lvmE4eys2zSzDIVMlEsxF33bQs79FAg',
         ],
         [
             'label'    => 'adopt-release-preview',
@@ -105,22 +105,22 @@ final class AttestationTest extends TestCase {
         [
             'label'    => 'adopt-release',
             'route'    => '/adopt/release',
-            'fields'   => ['piece_id' => 'acme-blog-2026-09-24-adopt', 'post_id' => 41, 'site' => 'example.test', 'issued_at' => '2026-09-24T12:00:00Z'],
-            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2Fkb3B0L3JlbGVhc2UKcGllY2VfaWQ6MjY6YWNtZS1ibG9nLTIwMjYtMDktMjQtYWRvcHQKcG9zdF9pZDoyOjQxCnNpdGU6MTI6ZXhhbXBsZS50ZXN0Cmlzc3VlZF9hdDoyMDoyMDI2LTA5LTI0VDEyOjAwOjAwWgo=',
-            'bytes'    => 140,
-            'digest'   => 'dc2f8d8acae73b43a4379bfa967bdef6ec093e101163e9e930bd6b329f5fc2eb',
-            'header'   => 'v1 45da37c57dd21b36 6hAr0kj0DX0m6S7OE6aw8Iy0Ja9AsRBsULrzW4YYEPXmNAeGlW1m7NcvMUI78hIEOdPJhrNGudOX3DpElD9GDg',
+            'fields'   => ['piece_id' => 'acme-blog-2026-09-24-adopt', 'post_id' => 41, 'site' => 'example.test/blog', 'issued_at' => '2026-09-24T12:00:00Z'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2Fkb3B0L3JlbGVhc2UKcGllY2VfaWQ6MjY6YWNtZS1ibG9nLTIwMjYtMDktMjQtYWRvcHQKcG9zdF9pZDoyOjQxCnNpdGU6MTc6ZXhhbXBsZS50ZXN0L2Jsb2cKaXNzdWVkX2F0OjIwOjIwMjYtMDktMjRUMTI6MDA6MDBaCg==',
+            'bytes'    => 145,
+            'digest'   => 'e8c2434e8cfe8d645bfa7798a5b708dfa70ea8381d522c8a16791fde3535ca3e',
+            'header'   => 'v1 45da37c57dd21b36 LGYJIvzqgoznGAeTQfozUl5xwE0SlxvspTlXOP_LVA5ghxfDVW1AT3OTZMaJcML015iaHTlViWHzM8MFvVBbDg',
         ],
         [
             'label'    => 'replace-with-rewrite-confirmation',
             'route'    => '/content/replace',
             // THE BODY'S OWN BOOLEAN, reduced by the route's own rendering: a
             // `1` or a `True` would fail the byte diff below.
-            'fields'   => CadenceReplaceRequest::signable(['piece_id' => 'acme-blog-2026-09-12-attestation', 'post_id' => 41, 'revision' => 'sha256:653d0e03211c28bf6d86ba229a45a6f055ee1586e700e99b0bd141423652a024', 'title' => 'Signing what we send (corrected)', 'content' => '<p>The wire carries a digest now, and the rewrite carries one too.</p>', 'overwrite_adopted' => true, 'site' => 'example.test', 'issued_at' => '2026-09-24T12:00:00Z']),
-            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQvcmVwbGFjZQpwaWVjZV9pZDozMjphY21lLWJsb2ctMjAyNi0wOS0xMi1hdHRlc3RhdGlvbgpwb3N0X2lkOjI6NDEKcmV2aXNpb246NzE6c2hhMjU2OjY1M2QwZTAzMjExYzI4YmY2ZDg2YmEyMjlhNDVhNmYwNTVlZTE1ODZlNzAwZTk5YjBiZDE0MTQyMzY1MmEwMjQKdGl0bGU6MzI6U2lnbmluZyB3aGF0IHdlIHNlbmQgKGNvcnJlY3RlZCkKY29udGVudDo3MDo8cD5UaGUgd2lyZSBjYXJyaWVzIGEgZGlnZXN0IG5vdywgYW5kIHRoZSByZXdyaXRlIGNhcnJpZXMgb25lIHRvby48L3A+Cm92ZXJ3cml0ZV9hZG9wdGVkOjQ6dHJ1ZQpzaXRlOjEyOmV4YW1wbGUudGVzdAppc3N1ZWRfYXQ6MjA6MjAyNi0wOS0yNFQxMjowMDowMFoK',
-            'bytes'    => 381,
-            'digest'   => 'b4ac9c9c1521253c977bc24c49d3b63e3fb6a472e7555c380a3b66def3f8b78b',
-            'header'   => 'v1 45da37c57dd21b36 i3ehOlB3xkZg1gX5TFDHMxax9YuV62881YIvcHbwBQydZcDASkSNEFt83o-eVWQQZsnkuBEbsEOxbPbCjbEpBA',
+            'fields'   => CadenceReplaceRequest::signable(['piece_id' => 'acme-blog-2026-09-12-attestation', 'post_id' => 41, 'revision' => 'sha256:653d0e03211c28bf6d86ba229a45a6f055ee1586e700e99b0bd141423652a024', 'title' => 'Signing what we send (corrected)', 'content' => '<p>The wire carries a digest now, and the rewrite carries one too.</p>', 'overwrite_adopted' => true, 'site' => 'example.test/blog', 'issued_at' => '2026-09-24T12:00:00Z']),
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQvcmVwbGFjZQpwaWVjZV9pZDozMjphY21lLWJsb2ctMjAyNi0wOS0xMi1hdHRlc3RhdGlvbgpwb3N0X2lkOjI6NDEKcmV2aXNpb246NzE6c2hhMjU2OjY1M2QwZTAzMjExYzI4YmY2ZDg2YmEyMjlhNDVhNmYwNTVlZTE1ODZlNzAwZTk5YjBiZDE0MTQyMzY1MmEwMjQKdGl0bGU6MzI6U2lnbmluZyB3aGF0IHdlIHNlbmQgKGNvcnJlY3RlZCkKY29udGVudDo3MDo8cD5UaGUgd2lyZSBjYXJyaWVzIGEgZGlnZXN0IG5vdywgYW5kIHRoZSByZXdyaXRlIGNhcnJpZXMgb25lIHRvby48L3A+Cm92ZXJ3cml0ZV9hZG9wdGVkOjQ6dHJ1ZQpzaXRlOjE3OmV4YW1wbGUudGVzdC9ibG9nCmlzc3VlZF9hdDoyMDoyMDI2LTA5LTI0VDEyOjAwOjAwWgo=',
+            'bytes'    => 386,
+            'digest'   => 'fa2212dd17ca803f80d29e2a6c242be83769ac47f1560d811aec6c04475cada3',
+            'header'   => 'v1 45da37c57dd21b36 uQK4W-BHVNM0-MeseKH8ke3aDKFN_INtuLa2O6IHLy-SvZdMXWMbqU1U1H_Q3oWYgF4AxD3lEIBvv9VXk5ImDg',
         ],
         ];
         // THE LINK VECTORS JOIN THEM, reduced to the same flat shape by the ONE

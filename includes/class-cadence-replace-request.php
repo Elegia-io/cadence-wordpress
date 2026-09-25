@@ -505,8 +505,7 @@ final class CadenceReplaceRequest {
                 'a confirmation to rewrite an adopted post is honoured only when signed, and this '
                 . 'request carried no signature; nothing was written'];
         }
-        $host = strtolower((string) wp_parse_url(home_url(), PHP_URL_HOST));
-        if ($fields['site'] !== $host) {
+        if ($fields['site'] !== CadenceAttestation::site()) {
             return ['ok' => false, 'code' => 'confirmation_wrong_site', 'reason' =>
                 'the confirmation was signed for another site; nothing was written'];
         }

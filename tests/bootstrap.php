@@ -11,6 +11,8 @@
 declare(strict_types=1);
 
 final class WpStub {
+    /** The site's home URL, as `home_url()` answers it. */
+    public static string $home = 'https://example.test/';
     /** @var array<int, array{post_type: string, language: string, trid: int|null}> */
     public static array $posts = [];
     /** @var list<array> every wpml_set_element_language_details call */
@@ -312,6 +314,7 @@ final class WpStub {
     }
 
     public static function reset(): void {
+        self::$home = 'https://example.test/';
         self::$posts = [];
         self::$writes = [];
         self::$capabilities = [];
@@ -1052,7 +1055,7 @@ function wp_slash($value) {
 }
 
 function home_url(string $path = ''): string {
-    return 'https://example.test/' . ltrim($path, '/');
+    return rtrim(WpStub::$home, '/') . '/' . ltrim($path, '/');
 }
 
 function wp_parse_url(string $url, int $component = -1) {

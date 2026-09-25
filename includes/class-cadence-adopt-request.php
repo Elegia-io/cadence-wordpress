@@ -511,8 +511,7 @@ final class CadenceAdoptRequest {
             return ['ok' => false, 'code' => CadenceAttestation::CODE, 'attestation_branch' => 'exempt_refused',
                     'reason' => 'this route takes no exemption; nothing was read or written'];
         }
-        $host = strtolower((string) wp_parse_url(home_url(), PHP_URL_HOST));
-        if ($fields['site'] !== $host) {
+        if ($fields['site'] !== CadenceAttestation::site()) {
             return self::refuse('adopt_wrong_site',
                 'the request was signed for another site; nothing was read or written');
         }

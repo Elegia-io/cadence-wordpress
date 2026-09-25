@@ -86,6 +86,8 @@ monolingual site with no WPML installed.
 * A translation group now holds one post type only; linking a plan that mixes
   types is refused.
 * The settings screen no longer uses dashes.
+* An attestation public key already attached to one connector key is refused
+  on another, so each connector key needs its own signing key.
 
 = 0.7.0 =
 * The translation-linking route now requires an Ed25519 attestation over the

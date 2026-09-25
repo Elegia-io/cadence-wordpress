@@ -524,7 +524,7 @@ final class AttestationTest extends TestCase {
         $keys = get_option(CadenceKey::OPTION, []);
         $keys[self::KEY]['verify'] = [
             ['kid' => 'ffffffffffffffff', 'pk' => base64_encode('short'), 'added' => 0],
-            ['kid' => CadenceAttest::KID, 'pk' => CadenceAttest::public_key_base64(),
+            ['kid' => CadenceAttest::KID, 'pk' => CadenceAttest::public_key_base64(self::KEY),
              'added' => 1],
         ];
         update_option(CadenceKey::OPTION, $keys);
@@ -994,18 +994,45 @@ final class AttestationTest extends TestCase {
      */
     public function test_one_tenants_public_key_does_not_verify_anothers_request(): void {
         $other = 'ca11ab1e0000key3';
-        CadenceAttest::install($other, 'cccccccccccccccc');
+        $pair = sodium_crypto_sign_keypair();
+        CadenceAttest::install($other);
+        $this->assertTrue(CadenceKey::add_verify_key($other, 'cccccccccccccccc',
+            base64_encode(sodium_crypto_sign_publickey($pair))));
         $fields = $this->content_fields();
 
-        // Signed by the suite's key, naming the kid only the OTHER record holds.
-        $header = 'v1 cccccccccccccccc '
-                . CadenceAttest::sign(CadenceAttestation::material('/content', $fields));
+        // Signed by the other tenant's key, naming the kid only the OTHER record holds.
+        $header = 'v1 cccccccccccccccc ' . CadenceAttest::sign(CadenceAttestation::material('/content', $fields),
+                                                                sodium_crypto_sign_secretkey($pair));
         $r = CadenceAttestation::verify($header, '/content', $fields, self::KEY);
 
         $this->assertFalse($r['ok'], 'a key on another tenant\'s record verified this request');
         $this->assertSame('unknown_kid', $r['branch']);
         // And it verifies against the record that actually holds it.
         $this->assertTrue(CadenceAttestation::verify($header, '/content', $fields, $other)['ok']);
+    }
+
+    /**
+     * ONE PUBLIC KEY IS NEVER ON TWO CONNECTOR KEYS. The signed bytes do not
+     * name the connector key, so the same public key on two of them would
+     * let a body signed for one verify as the other's.
+     */
+    public function test_a_public_key_already_on_another_connector_key_is_refused(): void {
+        $other = 'ca11ab1e0000key3';
+        CadenceAttest::install(self::KEY);
+        CadenceAttest::install($other);
+        $r = CadenceKey::add_verify_key($other, 'cccccccccccccccc', ' ' . CadenceAttest::public_key_base64(self::KEY));
+        $this->assertIsString($r);
+        $this->assertStringContainsString('already attached to another connector key', $r);
+
+        $fields = $this->content_fields();
+        $header = CadenceAttest::header('/content', $fields, self::KEY);
+        $this->assertTrue(CadenceAttestation::verify($header, '/content', $fields, self::KEY)['ok'],
+                          'the twin: it verifies under the key it was made for');
+        $this->assertFalse(CadenceAttestation::verify($header, '/content', $fields, $other)['ok']);
+
+        // THE TWIN: the same key id on its own record takes a different public key.
+        $this->assertTrue(CadenceKey::add_verify_key($other, 'cccccccccccccccc',
+            base64_encode(sodium_crypto_sign_publickey(sodium_crypto_sign_keypair()))));
     }
 
     /**

@@ -615,6 +615,21 @@ final class CadenceKey {
                            . 'so nothing was stored',
                            SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES, strlen($raw));
         }
+        // ONE PUBLIC KEY, ONE CONNECTOR KEY. The signed bytes do not name the
+        // connector key, so a public key held by two of them would let a body
+        // signed for one verify as the other's.
+        foreach (array_keys($keys) as $other) {
+            if ((string) $other === $id) {
+                continue;
+            }
+            foreach (self::verify_keys((string) $other) as $record) {
+                if (base64_decode($record['pk'], true) === $raw) {
+                    return 'this public key is already attached to another connector key on this site; '
+                         . 'each connector key needs its own signing key, so a body signed for one can '
+                         . 'never pass as another\'s. Nothing was stored';
+                }
+            }
+        }
         $stored = self::verify_keys($id);
         foreach ($stored as $record) {
             if (($record['kid'] ?? null) === $kid) {

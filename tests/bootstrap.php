@@ -1352,21 +1352,26 @@ final class CadenceAttest {
     /** The attestation key id those requests name. 16 lowercase hex. */
     public const KID = 'a1b2c3d4e5f60718';
 
-    /** @var array{pk: string, sk: string}|null */
-    private static $pair = null;
+    /** @var array<string, array{pk: string, sk: string}> */
+    private static array $pairs = [];
 
-    /** One keypair per suite run, so no test can pass against a pinned signature. */
-    public static function pair(): array {
-        if (self::$pair === null) {
+    /**
+     * One keypair per connector key per suite run, so no test can pass
+     * against a pinned signature, and no public key is on two connector keys,
+     * which the key store refuses.
+     */
+    public static function pair(?string $key_id = null): array {
+        $key_id ??= self::KEY_ID;
+        if (!isset(self::$pairs[$key_id])) {
             $keypair = sodium_crypto_sign_keypair();
-            self::$pair = ['pk' => sodium_crypto_sign_publickey($keypair),
-                           'sk' => sodium_crypto_sign_secretkey($keypair)];
+            self::$pairs[$key_id] = ['pk' => sodium_crypto_sign_publickey($keypair),
+                                     'sk' => sodium_crypto_sign_secretkey($keypair)];
         }
-        return self::$pair;
+        return self::$pairs[$key_id];
     }
 
-    public static function public_key_base64(): string {
-        return base64_encode(self::pair()['pk']);
+    public static function public_key_base64(?string $key_id = null): string {
+        return base64_encode(self::pair($key_id)['pk']);
     }
 
     /** The signed field set a body reduces to, with the alias resolved as the routes do. */
@@ -1426,7 +1431,8 @@ final class CadenceAttest {
         if ($key_id !== null) {
             self::install($key_id, $kid);
         }
-        return 'v1 ' . $kid . ' ' . self::sign(CadenceAttestation::material($route, $fields));
+        return 'v1 ' . $kid . ' ' . self::sign(CadenceAttestation::material($route, $fields),
+                                               self::pair($key_id)['sk']);
     }
 
     /**
@@ -1490,6 +1496,6 @@ final class CadenceAttest {
                 return;
             }
         }
-        CadenceKey::add_verify_key($key_id, $kid, self::public_key_base64());
+        CadenceKey::add_verify_key($key_id, $kid, self::public_key_base64($key_id));
     }
 }

@@ -29,7 +29,7 @@ use PHPUnit\Framework\TestCase;
 
 final class AttestationTest extends TestCase {
 
-    /** The public key the contract's three vectors were signed with. */
+    /** The public key the contract's vectors were signed with. */
     private const VECTOR_PK = '+i1Vuctx8r3KSxWjQoTs8SLzLxqR2n2ve5pmiSr4GOI=';
 
     /** The kid those vectors name. */
@@ -39,7 +39,7 @@ final class AttestationTest extends TestCase {
     private const KEY = 'ca11ab1e0000key2';
 
     /**
-     * THE CONTRACT'S SEVEN VECTORS, verbatim.
+     * THE CONTRACT'S TWELVE VECTORS, verbatim: eight flat ones here, four link ones below.
      *
      * `material` is base64 of the exact bytes hashed -- carried so a failure
      * can be diffed as BYTES. A digest that differs tells you the layout is
@@ -74,6 +74,53 @@ final class AttestationTest extends TestCase {
             'bytes'    => 301,
             'digest'   => 'a4b919391a033f9c28d86d20ede57a56bc04a8529631d0ae5ab605bda18feb8b',
             'header'   => 'v1 45da37c57dd21b36 H_xyN7u_R9yeNfg5T6X6gPDY9u4aHf0mBXO6faB_FHjbwLrCxXFJxtfEMKHo7xFtAUwbgbxeenITyUv_gYg2Ag',
+        ],
+        [
+            'label'    => 'adopt-preview',
+            'route'    => '/adopt/preview',
+            'fields'   => ['piece_id' => 'acme-blog-2026-09-24-adopt', 'link' => 'https://example.test/?p=41', 'site' => 'example.test', 'issued_at' => '2026-09-24T12:00:00Z'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2Fkb3B0L3ByZXZpZXcKcGllY2VfaWQ6MjY6YWNtZS1ibG9nLTIwMjYtMDktMjQtYWRvcHQKbGluazoyNjpodHRwczovL2V4YW1wbGUudGVzdC8/cD00MQpzaXRlOjEyOmV4YW1wbGUudGVzdAppc3N1ZWRfYXQ6MjA6MjAyNi0wOS0yNFQxMjowMDowMFoK',
+            'bytes'    => 162,
+            'digest'   => 'c1223fc10238415554bc20ac29d77f4f6185bf839a15e96f183728d3a2b4421b',
+            'header'   => 'v1 45da37c57dd21b36 FY3jy4t-GUvhdRtzTgIUwi_wNvATch7L0JXSYDWQW1z-4y1wNk8P13LDHG9bXWfifnKirWmUnFjV4u8LN9N4Dg',
+        ],
+        [
+            'label'    => 'adopt',
+            'route'    => '/adopt',
+            'fields'   => ['piece_id' => 'acme-blog-2026-09-24-adopt', 'post_id' => 41, 'language' => 'en-gb', 'site' => 'example.test/blog', 'issued_at' => '2026-09-24T12:00:00Z'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2Fkb3B0CnBpZWNlX2lkOjI2OmFjbWUtYmxvZy0yMDI2LTA5LTI0LWFkb3B0CnBvc3RfaWQ6Mjo0MQpsYW5ndWFnZTo1OmVuLWdiCnNpdGU6MTc6ZXhhbXBsZS50ZXN0L2Jsb2cKaXNzdWVkX2F0OjIwOjIwMjYtMDktMjRUMTI6MDA6MDBaCg==',
+            'bytes'    => 154,
+            'digest'   => '896169b19bc6dd10b085ba1818803a47010d8359c93e60a77be1c26336541348',
+            'header'   => 'v1 45da37c57dd21b36 hQkFAaLQj6disj41wAPBQj8Zb9YgwxKMTwRHzDtS3QbIA5oKLmaePr0lvmE4eys2zSzDIVMlEsxF33bQs79FAg',
+        ],
+        [
+            'label'    => 'adopt-release-preview',
+            'route'    => '/adopt/release/preview',
+            'fields'   => ['link' => 'https://example.test/?p=41', 'site' => 'example.test', 'issued_at' => '2026-09-24T12:00:00Z'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2Fkb3B0L3JlbGVhc2UvcHJldmlldwpsaW5rOjI2Omh0dHBzOi8vZXhhbXBsZS50ZXN0Lz9wPTQxCnNpdGU6MTI6ZXhhbXBsZS50ZXN0Cmlzc3VlZF9hdDoyMDoyMDI2LTA5LTI0VDEyOjAwOjAwWgo=',
+            'bytes'    => 131,
+            'digest'   => 'cc4681e501d5d20131a840f1ceef8b141fabb049f8288a212eb3412a27200190',
+            'header'   => 'v1 45da37c57dd21b36 qTP7trX5QwoeLCZwe3AP7kGR3VNrvjk2XsMHngsiG7aHhNKWjW7qiYQhzYvwNrgQBnTYx-U75T1K7pnGm_VOAQ',
+        ],
+        [
+            'label'    => 'adopt-release',
+            'route'    => '/adopt/release',
+            'fields'   => ['piece_id' => 'acme-blog-2026-09-24-adopt', 'post_id' => 41, 'site' => 'example.test/blog', 'issued_at' => '2026-09-24T12:00:00Z'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2Fkb3B0L3JlbGVhc2UKcGllY2VfaWQ6MjY6YWNtZS1ibG9nLTIwMjYtMDktMjQtYWRvcHQKcG9zdF9pZDoyOjQxCnNpdGU6MTc6ZXhhbXBsZS50ZXN0L2Jsb2cKaXNzdWVkX2F0OjIwOjIwMjYtMDktMjRUMTI6MDA6MDBaCg==',
+            'bytes'    => 145,
+            'digest'   => 'e8c2434e8cfe8d645bfa7798a5b708dfa70ea8381d522c8a16791fde3535ca3e',
+            'header'   => 'v1 45da37c57dd21b36 LGYJIvzqgoznGAeTQfozUl5xwE0SlxvspTlXOP_LVA5ghxfDVW1AT3OTZMaJcML015iaHTlViWHzM8MFvVBbDg',
+        ],
+        [
+            'label'    => 'replace-with-rewrite-confirmation',
+            'route'    => '/content/replace',
+            // THE BODY'S OWN BOOLEAN, reduced by the route's own rendering: a
+            // `1` or a `True` would fail the byte diff below.
+            'fields'   => CadenceReplaceRequest::signable(['piece_id' => 'acme-blog-2026-09-12-attestation', 'post_id' => 41, 'revision' => 'sha256:653d0e03211c28bf6d86ba229a45a6f055ee1586e700e99b0bd141423652a024', 'title' => 'Signing what we send (corrected)', 'content' => '<p>The wire carries a digest now, and the rewrite carries one too.</p>', 'overwrite_adopted' => true, 'site' => 'example.test/blog', 'issued_at' => '2026-09-24T12:00:00Z']),
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQvcmVwbGFjZQpwaWVjZV9pZDozMjphY21lLWJsb2ctMjAyNi0wOS0xMi1hdHRlc3RhdGlvbgpwb3N0X2lkOjI6NDEKcmV2aXNpb246NzE6c2hhMjU2OjY1M2QwZTAzMjExYzI4YmY2ZDg2YmEyMjlhNDVhNmYwNTVlZTE1ODZlNzAwZTk5YjBiZDE0MTQyMzY1MmEwMjQKdGl0bGU6MzI6U2lnbmluZyB3aGF0IHdlIHNlbmQgKGNvcnJlY3RlZCkKY29udGVudDo3MDo8cD5UaGUgd2lyZSBjYXJyaWVzIGEgZGlnZXN0IG5vdywgYW5kIHRoZSByZXdyaXRlIGNhcnJpZXMgb25lIHRvby48L3A+Cm92ZXJ3cml0ZV9hZG9wdGVkOjQ6dHJ1ZQpzaXRlOjE3OmV4YW1wbGUudGVzdC9ibG9nCmlzc3VlZF9hdDoyMDoyMDI2LTA5LTI0VDEyOjAwOjAwWgo=',
+            'bytes'    => 386,
+            'digest'   => 'fa2212dd17ca803f80d29e2a6c242be83769ac47f1560d811aec6c04475cada3',
+            'header'   => 'v1 45da37c57dd21b36 uQK4W-BHVNM0-MeseKH8ke3aDKFN_INtuLa2O6IHLy-SvZdMXWMbqU1U1H_Q3oWYgF4AxD3lEIBvv9VXk5ImDg',
         ],
         ];
         // THE LINK VECTORS JOIN THEM, reduced to the same flat shape by the ONE
@@ -477,7 +524,7 @@ final class AttestationTest extends TestCase {
         $keys = get_option(CadenceKey::OPTION, []);
         $keys[self::KEY]['verify'] = [
             ['kid' => 'ffffffffffffffff', 'pk' => base64_encode('short'), 'added' => 0],
-            ['kid' => CadenceAttest::KID, 'pk' => CadenceAttest::public_key_base64(),
+            ['kid' => CadenceAttest::KID, 'pk' => CadenceAttest::public_key_base64(self::KEY),
              'added' => 1],
         ];
         update_option(CadenceKey::OPTION, $keys);
@@ -722,14 +769,14 @@ final class AttestationTest extends TestCase {
     }
 
     /** THE BRANCH VOCABULARY IS CLOSED, and the contract's list is that list. */
-    public function test_the_branch_vocabulary_is_exactly_five(): void {
+    public function test_the_branch_vocabulary_is_exactly_six(): void {
         $source = file_get_contents(__DIR__ . '/../includes/class-cadence-attestation.php');
-        foreach (['absent', 'malformed', 'unknown_kid', 'no_public_key', 'mismatch'] as $branch) {
+        foreach (['absent', 'exempt_refused', 'malformed', 'unknown_kid', 'no_public_key', 'mismatch'] as $branch) {
             $this->assertSame(1, substr_count($source, "self::refuse('" . $branch . "'"),
                 $branch . ' is refused from a number of places that is not one');
         }
-        $this->assertSame(5, substr_count($source, 'self::refuse('),
-            'a sixth branch was added, or one was removed');
+        $this->assertSame(6, substr_count($source, 'self::refuse('),
+            'a seventh branch was added, or one was removed');
     }
 
     /** A HEADER THAT VERIFIES IS `verified`, AND CARRIES THE KID THAT VERIFIED IT. */
@@ -947,18 +994,45 @@ final class AttestationTest extends TestCase {
      */
     public function test_one_tenants_public_key_does_not_verify_anothers_request(): void {
         $other = 'ca11ab1e0000key3';
-        CadenceAttest::install($other, 'cccccccccccccccc');
+        $pair = sodium_crypto_sign_keypair();
+        CadenceAttest::install($other);
+        $this->assertTrue(CadenceKey::add_verify_key($other, 'cccccccccccccccc',
+            base64_encode(sodium_crypto_sign_publickey($pair))));
         $fields = $this->content_fields();
 
-        // Signed by the suite's key, naming the kid only the OTHER record holds.
-        $header = 'v1 cccccccccccccccc '
-                . CadenceAttest::sign(CadenceAttestation::material('/content', $fields));
+        // Signed by the other tenant's key, naming the kid only the OTHER record holds.
+        $header = 'v1 cccccccccccccccc ' . CadenceAttest::sign(CadenceAttestation::material('/content', $fields),
+                                                                sodium_crypto_sign_secretkey($pair));
         $r = CadenceAttestation::verify($header, '/content', $fields, self::KEY);
 
         $this->assertFalse($r['ok'], 'a key on another tenant\'s record verified this request');
         $this->assertSame('unknown_kid', $r['branch']);
         // And it verifies against the record that actually holds it.
         $this->assertTrue(CadenceAttestation::verify($header, '/content', $fields, $other)['ok']);
+    }
+
+    /**
+     * ONE PUBLIC KEY IS NEVER ON TWO CONNECTOR KEYS. The signed bytes do not
+     * name the connector key, so the same public key on two of them would
+     * let a body signed for one verify as the other's.
+     */
+    public function test_a_public_key_already_on_another_connector_key_is_refused(): void {
+        $other = 'ca11ab1e0000key3';
+        CadenceAttest::install(self::KEY);
+        CadenceAttest::install($other);
+        $r = CadenceKey::add_verify_key($other, 'cccccccccccccccc', ' ' . CadenceAttest::public_key_base64(self::KEY));
+        $this->assertIsString($r);
+        $this->assertStringContainsString('already attached to another connector key', $r);
+
+        $fields = $this->content_fields();
+        $header = CadenceAttest::header('/content', $fields, self::KEY);
+        $this->assertTrue(CadenceAttestation::verify($header, '/content', $fields, self::KEY)['ok'],
+                          'the twin: it verifies under the key it was made for');
+        $this->assertFalse(CadenceAttestation::verify($header, '/content', $fields, $other)['ok']);
+
+        // THE TWIN: the same key id on its own record takes a different public key.
+        $this->assertTrue(CadenceKey::add_verify_key($other, 'cccccccccccccccc',
+            base64_encode(sodium_crypto_sign_publickey(sodium_crypto_sign_keypair()))));
     }
 
     /**
@@ -1198,5 +1272,94 @@ final class AttestationTest extends TestCase {
             'the rewrite reply dropped the attestation state');
         $this->assertSame(CadenceAttest::KID, $r['attestation_kid'] ?? null);
         $this->assertSame('verified', CadenceRestRoute::respond($r)['body']['attestation']);
+    }
+
+    /**
+     * EACH VECTOR VERIFIES AGAINST ITS OWN ROUTE AND AGAINST NO OTHER. The
+     * route line is the first thing in the material, so a signature for one
+     * route must not verify a body presented to another, even where the two
+     * sign the same names.
+     */
+    public function test_every_contract_vector_verifies_only_against_its_own_route(): void {
+        $this->install_vector_key();
+        $vectors = $this->vectors();
+        $routes = array_unique(array_column($vectors, 'route'));
+        $crossed = 0;
+        foreach ($vectors as $v) {
+            foreach ($routes as $route) {
+                if ($route === $v['route']) {
+                    continue;
+                }
+                try {
+                    $r = CadenceAttestation::verify($v['header'], $route, $v['fields'], self::KEY);
+                } catch (InvalidArgumentException $e) {
+                    // The other route signs a name this body does not carry:
+                    // no material, so no verification either.
+                    $crossed++;
+                    continue;
+                }
+                $this->assertFalse($r['ok'], $v['label'] . ' verified against ' . $route);
+                $this->assertSame('mismatch', $r['branch'], $v['label'] . ' against ' . $route);
+                $crossed++;
+            }
+        }
+        $this->assertSame(count($vectors) * (count($routes) - 1), $crossed);
+        $this->assertGreaterThan(0, $crossed);
+    }
+
+    /**
+     * THE FIVE-FIELD AND THE EIGHT-FIELD REWRITE ARE TWO SIGNATURES. Each
+     * verifies against its own body and not the other's: the confirmation
+     * cannot be stripped from a signed body, nor added to one.
+     */
+    public function test_a_five_field_and_an_eight_field_rewrite_do_not_verify_each_other(): void {
+        $this->install_vector_key();
+        $by = array_column($this->vectors(), null, 'label');
+        $five = $by['replace'];
+        $eight = $by['replace-with-rewrite-confirmation'];
+        $this->assertTrue(CadenceAttestation::verify($five['header'], '/content/replace', $five['fields'], self::KEY)['ok']);
+        $this->assertTrue(CadenceAttestation::verify($eight['header'], '/content/replace', $eight['fields'], self::KEY)['ok']);
+        foreach ([[$five['header'], $eight['fields']], [$eight['header'], $five['fields']]] as [$header, $fields]) {
+            $r = CadenceAttestation::verify($header, '/content/replace', $fields, self::KEY);
+            $this->assertFalse($r['ok']);
+            $this->assertSame('mismatch', $r['branch']);
+        }
+        // AND THE FIVE-FIELD BODY'S ORDER NAMES NONE OF THE THREE.
+        $this->assertSame(['piece_id', 'post_id', 'revision', 'title', 'content'],
+            CadenceAttestation::signed_field_order('/content/replace', $five['fields']));
+        $this->assertSame(['piece_id', 'post_id', 'revision', 'title', 'content',
+                           'overwrite_adopted', 'site', 'issued_at'],
+            CadenceAttestation::signed_field_order('/content/replace', $eight['fields']));
+    }
+
+    /**
+     * THE SAME LIST, IN THE SAME ORDER, AS THE SIGNER'S LIST'S `SITE_PARITY`. Each
+     * side pins the other's output: a row changed on one side only is a site
+     * that refuses every adopt, release and rewrite confirmation as signed
+     * for another site.
+     */
+    public static function site_parity(): array {
+        $rows = [
+            ['https://[::1]/blog', '[::1]/blog'],
+            ['https://[::1]:8443/blog', '[::1]:8443/blog'],
+            ['https://[2001:DB8::1]:8443/', '[2001:db8::1]:8443'],
+            ["https://\u{00C9}XAMPLE.TEST/", "\u{00E9}xample.test"],
+            ['https://example.test:443/', 'example.test'],
+            ['http://example.test:80/', 'example.test'],
+            ['https://example.test:80/', 'example.test:80'],
+            ['http://example.test:443/', 'example.test:443'],
+            ['https://Example.TEST/Blog/', 'example.test/Blog'],
+            ['https://example.test/index.php', 'example.test/index.php'],
+            ['https://example.test/blog/', 'example.test/blog'],
+            ['https://example.test', 'example.test'],
+        ];
+        return array_combine(array_column($rows, 0), $rows);
+    }
+
+    #[DataProvider('site_parity')]
+    public function test_site_matches_the_signers_normalisation(string $home, string $site): void {
+        WpStub::reset();
+        WpStub::$options['home'] = $home;
+        $this->assertSame($site, CadenceAttestation::site());
     }
 }

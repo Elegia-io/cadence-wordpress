@@ -22,7 +22,7 @@ final class CadenceRestRoute {
      * which reads the header directly and fails the moment a release bumps one
      * without the other, so drift is caught rather than merely discouraged.
      */
-    public const VERSION = '0.7.0';
+    public const VERSION = '0.8.0';
 
     /**
      * THE REPLY'S OWN SHAPE, as a number the caller can compare with `<=`
@@ -240,8 +240,30 @@ final class CadenceRestRoute {
         'no_group_named'             => 400,
         'bad_request'                => 400,
         'bad_replacement'            => 400,
+        'bad_adoption'               => 400,
+        'bad_release'                => 400,
+        'adopt_wrong_site'           => 403,
+        'adopt_expired'              => 403,
+        'adopt_types_unscoped'       => 403,
+        'adopt_post_type_out_of_scope' => 403,
+        'adopt_site_page'            => 403,
+        'adopt_post_unavailable'     => 409,
+        'post_already_identified'    => 409,
+        'adopt_repeat'               => 409,
+        'adopt_piece_taken'          => 409,
+        'adopt_busy'                 => 409,
+        'adopt_link_unresolved'      => 409,
+        'not_adopted'                => 409,
+        'adopt_failed'               => 500,
         'post_out_of_scope'          => 403,
         'replace_other_key'          => 403,
+        // An adopted post's rewrite, refused for want of the client's
+        // confirmation: absent, unsigned, for another site, stale, or spent.
+        'post_adopted'               => 403,
+        'confirmation_unsigned'      => 403,
+        'confirmation_wrong_site'    => 403,
+        'confirmation_expired'       => 403,
+        'confirmation_spent'         => 409,
         'post_type_out_of_scope'     => 403,
         'existing_post_type_out_of_scope' => 403,
         'link_post_type_out_of_scope' => 403,

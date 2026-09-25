@@ -123,7 +123,9 @@ final class RestRouteTest extends TestCase {
         $published = array_merge(
             CadenceLinkRequest::REFUSAL_CODES,
             CadenceContentRequest::REFUSAL_CODES,
-            CadenceReplaceRequest::REFUSAL_CODES
+            CadenceReplaceRequest::REFUSAL_CODES,
+            CadenceAdoptRequest::REFUSAL_CODES,
+            CadenceAdoptRequest::RELEASE_REFUSAL_CODES
         );
         $this->assertNotEmpty($published);
         foreach ($published as $code) {
@@ -346,6 +348,7 @@ final class RestRouteTest extends TestCase {
             ['class-cadence-admin.php', 'CadenceAdmin'],
             ['class-cadence-replace-request.php', 'CadenceReplaceRequest'],
             ['class-cadence-revision.php', 'CadenceRevision'],
+            ['class-cadence-adopt-request.php', 'CadenceAdoptRequest'],
         ];
     }
 

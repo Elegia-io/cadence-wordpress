@@ -48,9 +48,95 @@ final class CadenceAdmin {
     /** How long an uncollected secret waits. One redirect, not one session. */
     private const STASH_TTL = 60;
 
+    /** The "Release from Cadence" row action's admin-post action, and its nonce's prefix. */
+    public const RELEASE_ACTION = 'cadence_connector_release';
+
+    /** Where the outcome of a release waits for the redirect to land, per user. */
+    private const RELEASE_NOTICE = 'cadence_connector_released_';
+
     public static function boot(): void {
         add_action('admin_menu', [self::class, 'menu']);
         add_action('admin_post_' . self::ACTION, [self::class, 'handle']);
+        add_filter('post_row_actions', [self::class, 'row_actions'], 10, 2);
+        add_filter('page_row_actions', [self::class, 'row_actions'], 10, 2);
+        add_action('admin_post_' . self::RELEASE_ACTION, [self::class, 'handle_release']);
+        add_action('admin_notices', [self::class, 'release_notice']);
+    }
+
+    /**
+     * "RELEASE FROM CADENCE", on a post carrying the adoption record and for a
+     * user holding `manage_options`, the authority that issues keys. The link
+     * carries a nonce bound to this post: a GET that changes the site with no
+     * nonce is a request any page the administrator visits can make.
+     */
+    public static function row_actions(array $actions, $post): array {
+        if (!$post instanceof WP_Post || !current_user_can('manage_options')
+                || get_post_meta($post->ID, CadenceAdoptRequest::ADOPTED_META, true) === '') {
+            return $actions;
+        }
+        $url = wp_nonce_url(add_query_arg(['action' => self::RELEASE_ACTION, 'post' => $post->ID],
+                                          admin_url('admin-post.php')),
+                            self::RELEASE_ACTION . '_' . $post->ID);
+        $actions['cadence_release'] = '<a href="' . esc_url($url) . '">' . esc_html('Release from Cadence') . '</a>';
+        return $actions;
+    }
+
+    /**
+     * The row action's request: `manage_options`, then this post's nonce, then
+     * the release rows with no key and no signature. Every decision about the
+     * post is `CadenceAdoptRequest::release_by_admin`'s.
+     */
+    public static function handle_release(): void {
+        if (!current_user_can('manage_options')) {
+            wp_die('You do not have permission to release posts from Cadence.', '', ['response' => 403]);
+        }
+        $raw = (string) (wp_unslash($_GET)['post'] ?? '');
+        $post_id = ctype_digit($raw) ? (int) $raw : 0;
+        check_admin_referer(self::RELEASE_ACTION . '_' . $post_id);
+        $result = CadenceAdoptRequest::release_by_admin($post_id);
+        set_transient(self::RELEASE_NOTICE . get_current_user_id(),
+                      ['ok' => ($result['ok'] ?? false) === true, 'message' => self::release_message($post_id, $result)],
+                      self::STASH_TTL);
+        $type = $post_id > 0 ? get_post_type($post_id) : false;
+        wp_safe_redirect(add_query_arg(['post_type' => is_string($type) ? $type : 'post'],
+                                       admin_url('edit.php')));
+        exit;
+    }
+
+    /** The outcome of the last release, once, as an admin notice. */
+    public static function release_notice(): void {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        $key = self::RELEASE_NOTICE . get_current_user_id();
+        $notice = get_transient($key);
+        if (!is_array($notice) || !is_string($notice['message'] ?? null)) {
+            return;
+        }
+        delete_transient($key);
+        echo '<div class="notice ' . (($notice['ok'] ?? false) === true ? 'notice-success' : 'notice-error')
+            . ' is-dismissible"><p>' . esc_html($notice['message']) . '</p></div>';
+    }
+
+    /** What happened, in plain words. */
+    public static function release_message(int $post_id, array $result): string {
+        if (($result['ok'] ?? false) === true) {
+            return sprintf('Post %d was released from Cadence. Its text, status and translations are unchanged, '
+                . 'and Cadence can no longer link it.', $post_id);
+        }
+        $why = [
+            'wpml_unavailable' => 'WPML is not active on this site, so its translation group cannot be checked.',
+            'post_missing'     => 'it could not be found.',
+            'not_adopted'      => 'Cadence did not adopt it, so there is nothing to release.',
+            'group_unknown'    => 'WPML could not say which translation group it is in. Try again later.',
+            'already_grouped'  => 'it has translations. Remove it from its translation group in WPML first, '
+                . 'then release it.',
+        ];
+        if (($result['code'] ?? null) === 'adopt_failed') {
+            return sprintf('Post %d was only partly released. Release it again to finish.', $post_id);
+        }
+        return sprintf('Post %d was not released: %s', $post_id,
+                       $why[$result['code'] ?? ''] ?? 'the site refused the change.');
     }
 
     public static function menu(): void {
@@ -175,6 +261,10 @@ final class CadenceAdmin {
         // dismissed. Nothing at all is printed when no key carries it, so the
         // warning stays a warning rather than furniture.
         foreach (CadenceKey::all() as $warn_id => $warn_record) {
+            // PHP casts an all-digit id to an int array key on the way out of
+            // `CadenceKey::all()`; cast it back before it reaches a function
+            // typed `string $id`, or a key like `1234567890123456` fatals here.
+            $warn_id = (string) $warn_id;
             $flag = CadenceKey::unsigned_ok($warn_id);
             if ($flag === null) {
                 continue;
@@ -193,6 +283,8 @@ final class CadenceAdmin {
         }
         echo '<table class="widefat"><thead><tr><th>Label</th><th>Id</th><th>Grants</th><th>Publishes in</th><th>Byline</th><th>Attestation</th><th>State</th><th></th></tr></thead><tbody>';
         foreach (CadenceKey::all() as $id => $record) {
+            // Same all-digit-id cast as above.
+            $id = (string) $id;
             echo '<tr><td>' . esc_html((string) $record['label']) . '</td>'
                 . '<td><code>' . esc_html($id) . '</code></td>'
                 . '<td>' . esc_html(implode(', ', $record['caps'])) . '</td>'
@@ -294,6 +386,8 @@ final class CadenceAdmin {
             . ' at once, so a rotation has an overlap window; remove the retired one to make room '
             . 'for the next.</p>';
         foreach ($keys as $id => $record) {
+            // Same all-digit-id cast as above.
+            $id = (string) $id;
             echo '<h3>' . esc_html((string) $record['label'])
                 . ' <code>' . esc_html($id) . '</code></h3>';
             foreach (CadenceKey::verify_keys($id) as $stored) {

@@ -813,7 +813,7 @@ final class CadenceLinkRequest {
      *
      * @return int|null|false
      */
-    private static function current_trid(int $post_id, string $element_type) {
+    public static function current_trid(int $post_id, string $element_type) {
         // THE DEFAULT IS THE UNUSABLE ONE. `apply_filters` returns this
         // unchanged when nothing answers, so the default is what the code
         // believes about a silent site -- and `null` would make silence mean
@@ -860,7 +860,7 @@ final class CadenceLinkRequest {
      * the only thing in question, and a second return value there would be a
      * value that call site has no use for and would have to ignore correctly.
      */
-    private static function current_language(int $post_id, string $element_type): ?string {
+    public static function current_language(int $post_id, string $element_type): ?string {
         // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- WPML's own hook, which cannot carry this plugin's prefix.
         $details = apply_filters('wpml_element_language_details', false, [
             'element_id'   => $post_id,
@@ -909,7 +909,7 @@ final class CadenceLinkRequest {
      * @param list<array{post_id: int, element_type: string}> $posts the plan
      * @return list<int>|false
      */
-    private static function members_outside_plan(int $trid, string $element_type, array $posts) {
+    public static function members_outside_plan(int $trid, string $element_type, array $posts) {
         // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- WPML's own hook, which cannot carry this plugin's prefix.
         $rows = apply_filters('wpml_get_element_translations', false, $trid, $element_type,
                               false, true);

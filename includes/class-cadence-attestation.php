@@ -98,13 +98,30 @@ final class CadenceAttestation {
      */
     public const MEMBERS = '@members';
 
+    /**
+     * THE PREFIX THAT MARKS A FIELD SIGNED ONLY WHEN THE BODY CARRIES IT.
+     *
+     * Not a character any field name can start with. `signed_field_order`
+     * strips it and keeps the name exactly when the field map holds that key.
+     */
+    public const OPTIONAL = '?';
+
     /** The four fields every member signs, in order, under its own prefix. */
     public const MEMBER_FIELDS = ['post_id', 'language_code', 'element_type',
                                   'source_language_code'];
 
     public const FIELDS = [
         '/content'           => ['piece_id', 'language', 'post_type', 'status', 'title', 'content'],
-        '/content/replace'   => ['piece_id', 'post_id', 'revision', 'title', 'content'],
+        // THE REWRITE CONFIRMATION, LAST AND SIGNED ONLY WHEN PRESENT. An
+        // adopted post is rewritten only over a client's confirmation, and the
+        // three names below carry it. Optional the way `@members` is expanded:
+        // present in the body means present in the material, so an
+        // intermediary can neither add one nor strip one without a `mismatch`,
+        // and a five-field body from a caller that never adopts verifies
+        // exactly as it did before the three existed.
+        '/content/replace'   => ['piece_id', 'post_id', 'revision', 'title', 'content',
+                                 self::OPTIONAL . 'overwrite_adopted', self::OPTIONAL . 'site',
+                                 self::OPTIONAL . 'issued_at'],
         // `/translation-group` signs `source_language_code` on every member
         // BECAUSE IT REACHES A WRITE: it goes straight into WPML's
         // `wpml_set_element_language_details`, so an intermediary that added or
@@ -118,7 +135,23 @@ final class CadenceAttestation {
         // it and adding one appends a block. Either way the material differs. A
         // count would be a second spelling of a fact the framing already carries.
         '/translation-group' => ['trid', 'create_group', 'piece_id', self::MEMBERS],
+        // THE ADOPT ROUTES SIGN WHICH SITE AND WHEN, last. Without `site` one
+        // signed body serves every site the tenant's public key is pasted on;
+        // without `issued_at` it serves again after a release.
+        '/adopt/preview'     => ['piece_id', 'link', 'site', 'issued_at'],
+        '/adopt'             => ['piece_id', 'post_id', 'language', 'site', 'issued_at'],
+        '/adopt/release/preview' => ['link', 'site', 'issued_at'],
+        '/adopt/release'     => ['piece_id', 'post_id', 'site', 'issued_at'],
     ];
+
+    /**
+     * ROUTES THE UNSIGNED-PUBLISH EXEMPTION DOES NOT REACH. They read and
+     * stamp posts this plugin did not write, and their refusals are finer
+     * than one "out of scope": every one of them must cost a signing key,
+     * not a connector key alone. A key carrying the exemption and sending no
+     * header is refused here under its own branch.
+     */
+    public const NO_EXEMPTION = ['/adopt', '/adopt/preview', '/adopt/release', '/adopt/release/preview'];
 
     /**
      * THE SIGNED FIELD ORDER FOR ONE BODY, with `@members` expanded.
@@ -140,6 +173,13 @@ final class CadenceAttestation {
         }
         $order = [];
         foreach (self::FIELDS[$route] as $name) {
+            if (strncmp($name, self::OPTIONAL, 1) === 0) {
+                $name = substr($name, 1);
+                if (array_key_exists($name, $fields)) {
+                    $order[] = $name;
+                }
+                continue;
+            }
             if ($name !== self::MEMBERS) {
                 $order[] = $name;
                 continue;
@@ -442,6 +482,33 @@ final class CadenceAttestation {
     }
 
     /**
+     * The `site` a signed adopt, release or rewrite confirmation must name:
+     * this install's home URL as its lowercased host, a port only when it is
+     * not the scheme's default, and its path with no trailing slash, with no
+     * scheme. `example.test` or `example.test/blog`. The path is part of it
+     * so two installs sharing one host cannot accept each other's body.
+     *
+     * THE `home` OPTION, NEVER `home_url()`: WPML's directory mode filters
+     * that to the current language's URL (`example.test/de`), which is not
+     * the endpoint Cadence signs. An IPv6 host keeps its brackets
+     * (`[::1]:8443`). A non-ASCII host is lowercased with mbstring where the
+     * site has it; without it only ASCII letters are, so an uppercase
+     * non-ASCII letter refuses as another site and never matches one.
+     */
+    public static function site(): string {
+        $parts = wp_parse_url((string) get_option('home'));
+        $parts = is_array($parts) ? $parts : [];
+        $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+        $host = (string) ($parts['host'] ?? '');
+        $site = function_exists('mb_strtolower') ? mb_strtolower($host, 'UTF-8') : strtolower($host);
+        $port = $parts['port'] ?? null;
+        if ($port !== null && $port !== (['https' => 443, 'http' => 80][$scheme] ?? null)) {
+            $site .= ':' . $port;
+        }
+        return $site . rtrim((string) ($parts['path'] ?? ''), '/');
+    }
+
+    /**
      * WHETHER THIS BODY WAS SIGNED BY A KEY THIS TENANT PASTED, and if not,
      * which of five different things went wrong.
      *
@@ -477,6 +544,11 @@ final class CadenceAttestation {
         // the only one that is not evidence of anything. A header that is there
         // falls through to every check below it even on an exempt key.
         if ($presented === null || trim($presented) === '') {
+            if ($exempt && in_array($route, self::NO_EXEMPTION, true)) {
+                return self::refuse('exempt_refused',
+                    'this route takes no exemption: this key carries the unsigned-publish exemption, '
+                    . 'and a request here must be signed all the same; nothing was read or written');
+            }
             if ($exempt) {
                 return ['ok' => true, 'attestation' => 'exempt'];
             }

@@ -115,13 +115,14 @@ carries a header which does not verify is still refused, on an exempt key
 exactly as on any other. Absence is a site that has not been upgraded yet; a bad
 signature is not. The screen warns, by name, for every key that carries it.
 
-Three capabilities exist, and a key carries only the ones it was issued for:
+Four capabilities exist, and a key carries only the ones it was issued for:
 
 | Capability | Opens | May act on |
 |---|---|---|
 | `content.publish` | `POST /content` | the post types named on the key |
 | `content.replace` | `POST /content/replace` | the posts **this key** published, and the ones that predate the stamp, in the post types named on the key, carrying the `piece_id` named |
 | `translation.link` | `POST /translation-group` | the posts **this key** published, and the ones that predate the stamp, in the post types named on the key |
+| `content.adopt` | `POST /adopt`, `POST /adopt/preview`, `POST /adopt/release`, `POST /adopt/release/preview` | to adopt: a post this connector did not create, in a post type named on the key; to release: a post **this key** adopted |
 
 `content.publish` and `content.replace` are separate on purpose: a key that may
 create must not silently also be able to overwrite. A pipeline that both
@@ -219,11 +220,6 @@ is what every key issued before this version does: they carry no post types at
 all, and go on publishing exactly as they did. The key list marks those rows
 *any type: re-issue to scope*. A key is worth what its widest grant is worth, so
 scope it when you issue it.
-
-**Registering a post this connector did not create is not possible**, and a link
-request naming one is refused. A translation group whose source is a
-hand-written post therefore cannot be written through this route; the group has
-to be made in wp-admin, or the source republished through `/content`.
 
 **The byline** is a WordPress user on this site, defaulting to whoever is
 issuing the key. It fills `post_author` on the posts this key creates and does
@@ -568,6 +564,108 @@ half-way, and the two codes for it (`source_group_unset`,
 says what was done. Nothing is destroyed either way: the path refuses unless
 every post is in no group to begin with.
 
+### Adopting an existing post
+
+```
+POST /wp-json/cadence/v1/adopt/preview
+POST /wp-json/cadence/v1/adopt
+POST /wp-json/cadence/v1/adopt/release/preview
+POST /wp-json/cadence/v1/adopt/release
+```
+
+Requires a key carrying `content.adopt`, its own capability, disjoint from
+`content.publish`, `content.replace` and `translation.link`: a key that may
+deliver a piece and link its translations does not thereby reach a post this
+connector never made.
+
+Adoption brings a post this connector did not create, such as one written by
+hand, into one key's scope, so `/translation-group`
+can make it the source of a translation group the same way it would a post
+this connector published. **It writes three meta rows and nothing else**:
+the post's title, text, status and translation group are untouched.
+
+**Preview, then confirm.** `/adopt/preview` and `/adopt/release/preview`
+take a `link` rather than a `post_id`, so a caller can show a human what is
+about to be claimed or released before anything happens:
+
+```json
+{"link": "https://example.test/wp-admin/post.php?post=41&action=edit",
+ "site": "example.test", "issued_at": "2026-09-25T10:00:00Z"}
+```
+
+`site` is this site's home URL written as its lowercased host, then a port
+only when it is not the default one, then its path with no trailing slash,
+and no scheme: `example.test`, or `example.test/blog` for a site at
+`https://example.test/blog/`. Every adopt and release body carries it, and
+so does a rewrite confirmation (below). A body that names another site is
+refused, including another install on the same host under a different path.
+
+The home URL here is the **Site Address** in *Settings > General*, not a
+language's URL: with WPML adding the language as a directory
+(`example.test/de`), the site is still `example.test`. An IPv6 address keeps
+its brackets (`[2001:db8::1]:8443`).
+
+**Configure Cadence with the Site Address exactly as WordPress spells it.**
+A domain with non-ASCII letters has two spellings, the Unicode one
+(`bücher.example`) and the punycode one (`xn--bcher-kva.example`), and they
+do not match each other. If the Site Address uses one, the endpoint Cadence is
+given must use the same one, or every adopt, release and rewrite confirmation
+is refused as signed for another site.
+
+On a server without the PHP mbstring extension, a Site Address whose host has
+uppercase non-ASCII letters is not matched; write the host in lowercase.
+
+The link accepted is either this site's own wp-admin edit link
+(`post.php?post=<id>`, on this site's own host) or the post's public
+permalink; anything else, including an edit link for another site, resolves
+to nothing and is refused `adopt_link_unresolved`, and so is a link carrying
+a fragment (`#...`). A preview writes nothing. `/adopt/preview` answers with
+the report `/adopt` would, `adopted: false` and without the post's content:
+`piece_id`, `post_id`, `language`, `post_type`, `title` and `status`.
+`/adopt/release/preview` answers `post_id`, `post_type`, `title`, `status`
+and `language`. The caller then confirms with the resolved `post_id`:
+
+```json
+{"piece_id": "piece-2026-08-31-en", "post_id": 41, "language": "en",
+ "site": "example.test", "issued_at": "2026-09-25T10:00:00Z"}
+```
+
+`/adopt` writes three meta rows, all or nothing: `_cadence_external_id` and
+`_cadence_key`, the same two `/content` writes on a post it creates, and
+`_cadence_adopted`, an audit record of which key adopted the post, when, and
+what it was before. They are written in one database transaction, the record
+first and `_cadence_external_id` last, so a failure that cannot be undone in
+full still leaves the record, and the post can be released. Only a post in `publish`, `draft`, `pending`, `future`
+or `private`, carrying no password, of a type the key names, not one of this
+site's own pages (front page, posts page, privacy policy), and not already
+carrying any of the three rows, may be adopted. A post already adopted under
+the same piece by the same key repeats without writing again (`adopt_repeat`,
+carrying the piece's current title, content and status); any other post
+already carrying an identity refuses `post_already_identified`.
+
+**Undoing an adoption** is `/adopt/release`, which removes the same three
+rows and touches nothing else: no WPML relation is written or destroyed. It
+takes `post_id` and `piece_id`, both required and signed the same way as an
+adopt; `piece_id` must be the piece the post carries. Called through the API
+it reaches only a post the presenting key itself adopted: a post another key
+adopted and a post never adopted are both refused `not_adopted`, so a key
+learns nothing about posts it does not own. It is also refused while the
+post's translations are still attached to it (`already_grouped`), in which
+case it has to be removed from its translation group first. In wp-admin, a **"Release from Cadence"**
+row action appears on the posts list for any post carrying the adoption
+record, visible only to someone holding `manage_options`; it calls the same
+release with no key and no signature, because the administrator is the
+authority that issued the keys in the first place.
+
+**Rewriting an adopted post needs a signed confirmation.** `/content/replace`
+refuses to touch an adopted post's title or text unless the body also
+carries `overwrite_adopted: true`, `site` and `issued_at`, all three or
+none, signed in the same attestation as the rest of the body. The
+confirmation must name this site, be no more than 300 seconds old, and not
+already have been spent by an earlier rewrite: each confirmed rewrite
+records the signed material's digest, so the exact same confirmed body sent
+again inside the window is refused rather than reapplied.
+
 ### Answers
 
 | Status | Meaning | What the caller should do |
@@ -649,6 +747,26 @@ the reason is prose and changes freely.
 | `revision_mismatch` | 409 | the post holds text the replacement does not name |
 | `update_failed` | 500 | WordPress refused the update, or returned no id |
 | `no_row_lock` | 503 | the site would not open a transaction, so the text could not be checked and written as one act |
+| `post_adopted` | 403 | the post is adopted, not made by this connector, and the request carries no confirmation to rewrite it; nothing was written |
+| `confirmation_unsigned` | 403 | a confirmation to rewrite an adopted post is honoured only when signed, and this one was not; nothing was written |
+| `confirmation_wrong_site` | 403 | the confirmation was signed for another site; nothing was written |
+| `confirmation_expired` | 403 | the confirmation is more than 300 seconds from this site's clock; nothing was written |
+| `confirmation_spent` | 409 | this exact confirmed rewrite has already been applied; nothing was written |
+| `bad_adoption` | 400 | the adopt or its preview body is not the shape it claims |
+| `bad_release` | 400 | the release or its preview body is not the shape it claims |
+| `adopt_wrong_site` | 403 | the request was signed for another site; nothing was read or written |
+| `adopt_expired` | 403 | `issued_at` is more than 300 seconds from this site's clock; nothing was read or written |
+| `adopt_link_unresolved` | 409 | the link is not this site's own wp-admin edit link or a permalink of a post on this site; nothing was read |
+| `adopt_types_unscoped` | 403 | the key names no post types, and adopting needs a key scoped to the types it may reach |
+| `adopt_post_type_out_of_scope` | 403 | the post is of a type this key may not adopt; nothing was written |
+| `adopt_post_unavailable` | 409 | the post is in a state that cannot be adopted, or carries a password |
+| `adopt_site_page` | 403 | the post is one of this site's own pages (front page, posts page, privacy policy); nothing was written |
+| `post_already_identified` | 409 | the post already carries a piece identity, so it cannot be adopted; or, on release, the post this key adopted carries another key's stamp or another piece |
+| `adopt_repeat` | 409 | the post is already adopted under this piece by this key; nothing was written again |
+| `adopt_piece_taken` | 409 | this piece is already on another post on this site; nothing was written |
+| `adopt_busy` | 409 | another adoption holds this post or piece right now; nothing was written |
+| `not_adopted` | 409 | the post was not adopted by the presenting key (from wp-admin: not adopted at all), so there is nothing to release |
+| `adopt_failed` | 500 | the adoption or release record could not be written, or removed, in full |
 
 **What the create path relies on, beyond what WPML documents.** Three
 properties of `wpml_set_element_language_details` and

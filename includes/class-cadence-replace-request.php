@@ -76,7 +76,22 @@ final class CadenceReplaceRequest {
         'update_failed',
         'no_row_lock',
         CadenceAttestation::CODE,
+        'post_adopted',
+        'confirmation_unsigned',
+        'confirmation_wrong_site',
+        'confirmation_expired',
+        'confirmation_spent',
     ];
+
+    /**
+     * THE SPENT CONFIRMATIONS. One row per confirmed rewrite this post took,
+     * each the sha256 of its verified material, written under the row lock in
+     * the same transaction as the text.
+     */
+    public const SPENT_META = '_cadence_rewrite_spent';
+
+    /** The three fields a confirmed rewrite of an adopted post carries, all or none. */
+    public const CONFIRMATION = ['overwrite_adopted', 'site', 'issued_at'];
 
     /**
      * A REFUSAL CARRIES A CODE AS WELL AS A REASON. The reason is prose for a
@@ -125,7 +140,8 @@ final class CadenceReplaceRequest {
         //
         // `validate` has already refused a `post_id` that is not an integer, so
         // the material's decimal-ASCII rendering of it is never a coercion.
-        $attested = CadenceAttestation::verify($attestation, '/content/replace', $fields, $key_id);
+        $signable = self::signable($fields);
+        $attested = CadenceAttestation::verify($attestation, '/content/replace', $signable, $key_id);
         if ($attested['ok'] !== true) {
             return ['ok' => false, 'code' => $attested['code'],
                     'reason' => $attested['reason'],
@@ -183,6 +199,31 @@ final class CadenceReplaceRequest {
                 'post %d was published through a different connector key, and a key may '
                 . 'replace only its own pieces; nothing was written',
                 $fields['post_id'])];
+        }
+
+        // AN ADOPTED POST IS REWRITTEN ONLY OVER THE CLIENT'S CONFIRMATION.
+        //
+        // Its text was written by a person, not by this connector, and a
+        // rewrite overwrites it with no copy kept here. So the rewrite must
+        // carry a confirmation, and each of five conjuncts has its own code:
+        // the confirmation is there and says yes; it was signed, because an
+        // exempt key sends no header and its fields would then be nobody's
+        // statement; it names this site, because a staging clone verifies the
+        // same public key; it is fresh; and it has not already been spent on
+        // this post, because the revision is only a hash of the text and a
+        // restore from WordPress Revisions puts a post back on the revision a
+        // captured confirmation names.
+        //
+        // AFTER the identity check, so none of the five answers anything about
+        // a post this key does not reach. On a post this connector created
+        // none of them is asked: its text is the pipeline's own.
+        $spent = null;
+        if (get_post_meta($fields['post_id'], CadenceAdoptRequest::ADOPTED_META, true) !== '') {
+            $confirmed = self::confirmed($fields, $attested);
+            if (isset($confirmed['code'])) {
+                return $confirmed;
+            }
+            $spent = $confirmed['spent'];
         }
 
         // THE POST AND THE PIECE HAVE TO BE THE SAME THING. The caller holds a
@@ -337,6 +378,25 @@ final class CadenceReplaceRequest {
             clean_post_cache($fields['post_id']);
             wp_cache_delete($fields['post_id'], 'posts');
 
+            // THE FIFTH CONJUNCT, IN THE SAME CRITICAL SECTION AS ITS WRITE.
+            // Asked before the lock, two copies of one confirmed body could
+            // both pass it and then both write, the second over the same text
+            // when the rewrite leaves the text as it was. Here the second
+            // waits on the row, and reads the first one's record. EVERY spent
+            // digest is kept, one row each: a post restored twice sits on the
+            // captured revision again, and only the full list still names the
+            // older confirmation. The meta cache is dropped first for the
+            // reason the post cache is dropped above; the read that follows is
+            // the transaction's first consistent read, taken after the lock.
+            if ($spent !== null) {
+                wp_cache_delete($fields['post_id'], 'post_meta');
+                if (in_array($spent, (array) get_post_meta($fields['post_id'], self::SPENT_META, false), true)) {
+                    return self::release($wpdb, ['ok' => false, 'code' => 'confirmation_spent',
+                        'reason' => sprintf('this confirmation already rewrote post %d; a new rewrite '
+                            . 'needs a new confirmation, and nothing was written', $fields['post_id'])]);
+                }
+            }
+
             // AND THE TEXT HAS TO BE THE TEXT THE CALLER SAW. Read from the
             // locked row, not from the request and not from the cached copy: a
             // revision the request carried on both sides would be the caller's
@@ -350,7 +410,7 @@ final class CadenceReplaceRequest {
                         $fields['post_id'], $actual, $fields['revision'])]);
             }
 
-            return self::write($wpdb, $fields, $attested);
+            return self::write($wpdb, $fields, $attested, $spent);
         } catch (Throwable $e) {
             // Any plugin on the site can hang code on `save_post`, and code
             // that throws inside an open transaction would otherwise leave the
@@ -375,7 +435,7 @@ final class CadenceReplaceRequest {
      *
      * @param array{piece_id: string, post_id: int, revision: string, title: string, content: string} $fields
      */
-    private static function write(object $wpdb, array $fields, array $attested): array {
+    private static function write(object $wpdb, array $fields, array $attested, ?string $spent): array {
         $id = wp_update_post([
             'ID'           => $fields['post_id'],
             'post_title'   => $fields['title'],
@@ -400,6 +460,14 @@ final class CadenceReplaceRequest {
                 'reason' => 'WordPress returned no post id and no error']);
         }
 
+        // THE CONFIRMATION IS SPENT IN THE SAME TRANSACTION AS THE TEXT, so a
+        // rewrite that commits has always recorded it and one that rolls back
+        // never has.
+        if ($spent !== null && add_post_meta($id, self::SPENT_META, $spent) === false) {
+            return self::release($wpdb, ['ok' => false, 'code' => 'update_failed',
+                'reason' => 'the confirmation could not be recorded as spent, so the rewrite was not kept']);
+        }
+
         // `created` is false and says so, rather than being left out: the two
         // endpoints answer in one vocabulary, and a caller reading `created`
         // never has to know which one it called.
@@ -417,6 +485,54 @@ final class CadenceReplaceRequest {
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- transaction control has no WordPress API, and must not be cached.
         $wpdb->query('COMMIT');
         return $answer;
+    }
+
+    /**
+     * Four of the five conjuncts over an adopted post, in order. A refusal,
+     * or the digest the fifth, `confirmation_spent`, is asked about under
+     * the row lock.
+     *
+     * @return array{spent: string}|array{ok: false, code: string, reason: string}
+     */
+    private static function confirmed(array $fields, array $attested): array {
+        if (($fields['overwrite_adopted'] ?? null) !== true) {
+            return ['ok' => false, 'code' => 'post_adopted', 'reason' => sprintf(
+                'post %d was adopted, not made by this connector; a rewrite needs the client\'s '
+                . 'confirmation, and nothing was written', $fields['post_id'])];
+        }
+        if (($attested['attestation'] ?? null) !== 'verified') {
+            return ['ok' => false, 'code' => 'confirmation_unsigned', 'reason' =>
+                'a confirmation to rewrite an adopted post is honoured only when signed, and this '
+                . 'request carried no signature; nothing was written'];
+        }
+        if ($fields['site'] !== CadenceAttestation::site()) {
+            return ['ok' => false, 'code' => 'confirmation_wrong_site', 'reason' =>
+                'the confirmation was signed for another site; nothing was written'];
+        }
+        $at = CadenceAdoptRequest::issued_at($fields['issued_at']);
+        if ($at === null || abs(time() - $at) > CadenceAdoptRequest::WINDOW) {
+            return ['ok' => false, 'code' => 'confirmation_expired', 'reason' => sprintf(
+                'the confirmation is more than %d seconds from this site\'s clock; nothing was written',
+                CadenceAdoptRequest::WINDOW)];
+        }
+        // THE DIGEST OF THE VERIFIED MATERIAL, so the record names exactly the
+        // bytes that were signed and nothing a caller can vary without a new
+        // signature. Whether it is already spent is asked under the row lock,
+        // in `run`, where the record is also written.
+        return ['spent' => hash('sha256',
+            CadenceAttestation::material('/content/replace', self::signable($fields)))];
+    }
+
+    /**
+     * The validated fields as the material signs them: the confirmation's
+     * boolean rendered `true` or `false`, as `create_group` is. The decision
+     * reads the raw boolean from `$fields`, never this rendering.
+     */
+    public static function signable(array $fields): array {
+        if (array_key_exists('overwrite_adopted', $fields) && is_bool($fields['overwrite_adopted'])) {
+            $fields['overwrite_adopted'] = $fields['overwrite_adopted'] ? 'true' : 'false';
+        }
+        return $fields;
     }
 
     /**
@@ -455,12 +571,34 @@ final class CadenceReplaceRequest {
         if (!is_int($body['post_id'] ?? null) || $body['post_id'] < 1) {
             return 'post_id must be a positive integer, and is never read from a string';
         }
+        // THE CONFIRMATION: all three or none, tested by presence, so a
+        // `null` is present and refused rather than read as absent.
+        $present = array_values(array_filter(self::CONFIRMATION,
+            static fn (string $name): bool => array_key_exists($name, $body)));
+        if ($present !== [] && $present !== self::CONFIRMATION) {
+            return 'overwrite_adopted, site and issued_at travel together: all three or none';
+        }
+        $confirmation = [];
+        if ($present !== []) {
+            if (!is_bool($body['overwrite_adopted'])) {
+                return 'overwrite_adopted must be a JSON boolean';
+            }
+            if (!is_string($body['site']) || trim($body['site']) === '') {
+                return 'site must be a non-blank string';
+            }
+            if (!is_string($body['issued_at']) || CadenceAdoptRequest::issued_at($body['issued_at']) === null) {
+                return 'issued_at must be a UTC ISO-8601 time';
+            }
+            foreach (self::CONFIRMATION as $name) {
+                $confirmation[$name] = $body[$name];
+            }
+        }
         return [
             'piece_id'    => $body['piece_id'],
             'post_id'     => $body['post_id'],
             'revision'    => $body['revision'],
             'title'       => $body['title'],
             'content'     => $body['content'],
-        ];
+        ] + $confirmation;
     }
 }

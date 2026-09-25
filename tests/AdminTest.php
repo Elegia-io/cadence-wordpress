@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 /**
  * THE SCREEN THAT MINTS AND WITHDRAWS A PUBLISHING CREDENTIAL.
@@ -72,6 +73,57 @@ final class AdminTest extends TestCase {
         CadenceAdmin::screen();
         $out = ob_get_clean();
         $this->assertStringContainsString('Cadence Connector', $out);
+    }
+
+    /**
+     * THE ISSUING FORM WALKS `CadenceKey::CAPABILITIES` -- one checkbox per
+     * entry, none pinned to a name here, so a capability added to the
+     * constant reaches this screen with no change to this file.
+     */
+    public function test_screen_renders_one_checkbox_per_capability(): void {
+        $this->grantManageOptions();
+        ob_start();
+        CadenceAdmin::screen();
+        $out = ob_get_clean();
+        $this->assertSame(count(CadenceKey::CAPABILITIES), substr_count($out, 'type="checkbox"'),
+            'the number of rendered checkboxes did not match the number of capabilities');
+    }
+
+    /**
+     * AN ALL-DIGIT KEY ID DOES NOT FATAL THE SCREEN. `bin2hex(random_bytes(8))`
+     * lands on 16 decimal digits about once in 1900 keys, and PHP casts a
+     * decimal-integer string array key to an int on the way out of
+     * `CadenceKey::all()` -- exactly like this seeded option row -- which
+     * used to reach `CadenceKey::unsigned_ok(string $id)` as an int and throw
+     * a TypeError.
+     */
+    public function test_screen_renders_an_all_digit_key_id_without_a_typeerror(): void {
+        $this->grantManageOptions();
+        WpStub::$options[CadenceKey::OPTION] = [
+            '1234567890123456' => [
+                'label' => 'tenant-a', 'hash' => 'x', 'caps' => ['content.publish'],
+                'author' => 7, 'created' => time(), 'revoked_at' => null,
+            ],
+        ];
+        ob_start();
+        CadenceAdmin::screen();
+        $out = ob_get_clean();
+        $this->assertStringContainsString('1234567890123456', $out);
+    }
+
+    /** THE TWIN: a hex id with letters is not an int array key and behaved this way already. */
+    public function test_screen_renders_a_hex_letter_key_id(): void {
+        $this->grantManageOptions();
+        WpStub::$options[CadenceKey::OPTION] = [
+            'ab34567890123456' => [
+                'label' => 'tenant-a', 'hash' => 'x', 'caps' => ['content.publish'],
+                'author' => 7, 'created' => time(), 'revoked_at' => null,
+            ],
+        ];
+        ob_start();
+        CadenceAdmin::screen();
+        $out = ob_get_clean();
+        $this->assertStringContainsString('ab34567890123456', $out);
     }
 
     /**
@@ -431,5 +483,141 @@ final class AdminTest extends TestCase {
         // can choose is a provenance field an operator can disown.
         $this->assertSame(get_current_user_id(), $flag['by_user']);
         $this->assertNotSame(1, $flag['by_user']);
+    }
+
+    // ------------------------------------------------------------------
+    // "Release from Cadence", the row action on an adopted post.
+    // ------------------------------------------------------------------
+
+    /** Post 41, a draft `post` alone in its group, adopted by the test key. */
+    private function adoptedPost(): void {
+        WpStub::add_post(41, 'post', 'en', 541, true, 'draft');
+        WpStub::$posts[41]['post_status'] = 'draft';
+        WpStub::$posts[41]['post_title'] = 'A title';
+        WpStub::$posts[41]['post_content'] = 'Some text';
+        WpStub::$posts[41]['post_password'] = '';
+        WpStub::$meta[41] = ['_cadence_external_id' => 'piece-new', '_cadence_key' => CadenceAttest::KEY_ID,
+                             '_cadence_adopted' => json_encode(['key' => CadenceAttest::KEY_ID])];
+    }
+
+    private function rowActions(int $id): array {
+        return CadenceAdmin::row_actions(['edit' => '<a>Edit</a>'], get_post($id));
+    }
+
+    private function releaseFromRow(int $id): string {
+        $_GET = ['action' => CadenceAdmin::RELEASE_ACTION, 'post' => (string) $id, '_wpnonce' => 'stub-nonce'];
+        try {
+            CadenceAdmin::handle_release();
+            $this->fail('handle_release() did not reach the redirect');
+        } catch (CadenceTestRedirected $e) {
+        }
+        ob_start();
+        CadenceAdmin::release_notice();
+        return (string) ob_get_clean();
+    }
+
+    public function test_the_row_action_is_shown_on_an_adopted_post_under_manage_options(): void {
+        $this->grantManageOptions();
+        $this->adoptedPost();
+        $actions = $this->rowActions(41);
+        $this->assertArrayHasKey('edit', $actions);
+        $this->assertArrayHasKey('cadence_release', $actions);
+        $this->assertStringContainsString('Release from Cadence', $actions['cadence_release']);
+        $this->assertStringContainsString('action=' . CadenceAdmin::RELEASE_ACTION, $actions['cadence_release']);
+        $this->assertStringContainsString('post=41', $actions['cadence_release']);
+        $this->assertStringContainsString('_wpnonce=', $actions['cadence_release'], 'the link carries no nonce');
+        $this->assertSame([CadenceAdmin::RELEASE_ACTION . '_41'], WpStub::$nonces_made);
+    }
+
+    public function test_the_row_action_is_not_shown_without_manage_options(): void {
+        $this->adoptedPost();
+        $this->assertArrayNotHasKey('cadence_release', $this->rowActions(41));
+    }
+
+    public function test_the_row_action_is_not_shown_on_a_post_that_was_not_adopted(): void {
+        $this->grantManageOptions();
+        $this->adoptedPost();
+        unset(WpStub::$meta[41]['_cadence_adopted']);
+        $this->assertArrayNotHasKey('cadence_release', $this->rowActions(41), 'a created post');
+        unset(WpStub::$meta[41]);
+        $this->assertArrayNotHasKey('cadence_release', $this->rowActions(41), 'a post with no rows');
+    }
+
+    public function test_the_release_handler_refuses_without_manage_options_before_any_change(): void {
+        $this->adoptedPost();
+        $before = WpStub::$meta[41];
+        $_GET = ['action' => CadenceAdmin::RELEASE_ACTION, 'post' => '41', '_wpnonce' => 'stub-nonce'];
+        try {
+            CadenceAdmin::handle_release();
+            $this->fail('handle_release() did not refuse a user without manage_options');
+        } catch (CadenceTestDied $e) {
+        }
+        $this->assertSame($before, WpStub::$meta[41]);
+    }
+
+    public function test_the_release_handler_refuses_an_invalid_nonce_before_any_change(): void {
+        $this->grantManageOptions();
+        $this->adoptedPost();
+        $before = WpStub::$meta[41];
+        WpStub::$referer_valid = false;
+        $_GET = ['action' => CadenceAdmin::RELEASE_ACTION, 'post' => '41', '_wpnonce' => 'forged'];
+        try {
+            CadenceAdmin::handle_release();
+            $this->fail('handle_release() did not refuse an invalid nonce');
+        } catch (CadenceTestDied $e) {
+        }
+        $this->assertSame($before, WpStub::$meta[41]);
+        $this->assertSame([CadenceAdmin::RELEASE_ACTION . '_41'], WpStub::$referers_checked,
+            'the nonce checked is not the one for this post');
+    }
+
+    #[Group('wpml')]
+    public function test_the_release_handler_releases_and_says_so_once_in_plain_words(): void {
+        $this->grantManageOptions();
+        $this->adoptedPost();
+        $shown = $this->releaseFromRow(41);
+        $this->assertSame([], WpStub::$meta[41]);
+        $this->assertStringContainsString('Post 41 was released from Cadence', $shown);
+        $this->assertStringContainsString('notice-success', $shown);
+        $this->assertStringNotContainsString("\u{2014}", $shown);
+        ob_start();
+        CadenceAdmin::release_notice();
+        $this->assertSame('', ob_get_clean(), 'the notice was shown twice');
+    }
+
+    /** The administrator releases a post another key adopted, which no key can over the wire. */
+    #[Group('wpml')]
+    public function test_the_release_handler_releases_a_post_another_key_adopted(): void {
+        $this->grantManageOptions();
+        $this->adoptedPost();
+        WpStub::$meta[41]['_cadence_key'] = 'someoneelse00key';
+        $this->assertStringContainsString('was released', $this->releaseFromRow(41));
+        $this->assertSame([], WpStub::$meta[41]);
+    }
+
+    /** It refuses a post with translations exactly as the route does. */
+    #[Group('wpml')]
+    public function test_the_release_handler_refuses_already_grouped_like_the_route(): void {
+        $this->grantManageOptions();
+        $this->adoptedPost();
+        WpStub::add_post(42, 'post', 'de', 541, true, 'draft');
+        $before = WpStub::$meta[41];
+        $shown = $this->releaseFromRow(41);
+        $this->assertSame($before, WpStub::$meta[41], 'a refused release removed something');
+        $this->assertStringContainsString('Post 41 was not released', $shown);
+        $this->assertStringContainsString('translations', $shown);
+        $this->assertStringContainsString('notice-error', $shown);
+        $this->assertStringNotContainsString("\u{2014}", $shown);
+    }
+
+    /** Every refusal the admin release can answer has its own plain sentence, with no dash. */
+    public function test_every_release_refusal_has_a_plain_sentence(): void {
+        foreach (['wpml_unavailable', 'post_missing', 'not_adopted', 'group_unknown', 'already_grouped',
+                  'adopt_failed'] as $code) {
+            $said = CadenceAdmin::release_message(41, ['ok' => false, 'code' => $code]);
+            $this->assertStringContainsString('Post 41', $said, $code);
+            $this->assertStringNotContainsString($code, $said, $code . ' shows its code, not a sentence');
+            $this->assertStringNotContainsString("\u{2014}", $said, $code);
+        }
     }
 }

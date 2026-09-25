@@ -11,6 +11,8 @@
 declare(strict_types=1);
 
 final class WpStub {
+    /** The site's home URL, as `home_url()` answers it. */
+    public static string $home = 'https://example.test/';
     /** @var array<int, array{post_type: string, language: string, trid: int|null}> */
     public static array $posts = [];
     /** @var list<array> every wpml_set_element_language_details call */
@@ -220,6 +222,12 @@ final class WpStub {
      */
     public static bool $referer_valid = true;
 
+    /** Every action `check_admin_referer` was asked to verify, in order. */
+    public static array $referers_checked = [];
+
+    /** Every action `wp_nonce_url` minted a nonce for, in order. */
+    public static array $nonces_made = [];
+
     /**
      * THE TRANSIENT STORE, which is where a just-issued key waits for the
      * redirect to land instead of travelling in the URL. Kept separate from
@@ -230,7 +238,102 @@ final class WpStub {
      */
     public static array $transients = [];
 
+    /**
+     * EVERY READ OF THE SITE, counted per function, so a refusal that must
+     * come before the site is asked anything can be measured as zero reads of
+     * every kind rather than zero calls to `get_post` alone. `get_option` is
+     * counted per option name, because the key store is itself an option and
+     * the attestation has to read it to have a key to verify with.
+     */
+    public static array $reads = [];
+
+    /** Meta keys whose `add_post_meta` answers false, as a failed write would. */
+    public static array $meta_add_fails = [];
+
+    /** Every `add_post_meta` call that stored something, in order, as [id, key, raw value]. */
+    public static array $meta_added = [];
+
+    /**
+     * EVERY ROW OF A KEY, for a key written more than once without `$unique`.
+     * `$meta` keeps the first row, which is what a single read answers.
+     */
+    public static array $meta_rows = [];
+
+    /**
+     * Called once, just before a `SELECT ... FOR UPDATE` returns: a second
+     * request that took the row lock first and committed while this one
+     * waited on it.
+     */
+    public static $on_lock = null;
+
+    /** Meta keys whose `delete_post_meta` answers false and removes nothing, as a failed delete would. */
+    public static array $meta_delete_fails = [];
+
+    /** Every `delete_post_meta` call that removed something, in order, as [id, key]. */
+    public static array $meta_deleted = [];
+
+    /** Public path => post id, the permalinks `url_to_postid` resolves. */
+    public static array $permalinks = [];
+
+    /**
+     * Run once, inside the next `INSERT IGNORE` into the options table, before
+     * that insert looks for a row: the moment a second request would have to
+     * land in to race the first.
+     */
+    public static $on_claim = null;
+
+    /**
+     * AN OPT-IN META CACHE, as WordPress keeps one per request: the first
+     * `get_post_meta` for a post primes every row it has, and later reads
+     * answer from that copy until this process writes the post's meta or
+     * calls `wp_cache_delete($id, 'post_meta')`. A write made straight into
+     * `$meta` is another request's, and a primed copy does not see it.
+     */
+    public static bool $meta_cache_on = false;
+    /** @var array<int, array{0: array, 1: array}> */
+    public static array $meta_cache = [];
+
+    /**
+     * AN OPT-IN QUERY CACHE for `get_posts`, keyed on its arguments, unless the
+     * caller passes `'cache_results' => false`. Stands in for the result a
+     * request already holds for the same query.
+     */
+    public static bool $query_cache_on = false;
+    /** @var array<string, array> */
+    public static array $query_cache = [];
+
+    /**
+     * @var array<string, callable> option name => a hook `get_option` runs
+     * once, after it has read the value and before it answers with it: what
+     * another request does between this one's read and its next statement.
+     */
+    public static array $on_option_read = [];
+
+    /**
+     * A FILTER ON `home_url`, as WPML's directory mode adds one: `home_url()`
+     * then answers the current language's URL (`https://x/de`) while the
+     * `home` option still holds the site address.
+     *
+     * @var callable|null
+     */
+    public static $home_url_filter = null;
+
+    /**
+     * NAMES `get_option` ANSWERS AS ABSENT whatever the table holds: the
+     * `notoptions` cache a persistent object cache keeps, poisoned by a read
+     * made before another request wrote the row. Only a query on the options
+     * table itself sees past it.
+     *
+     * @var list<string>
+     */
+    public static array $notoptions = [];
+
+    public static function read(string $what): void {
+        self::$reads[$what] = (self::$reads[$what] ?? 0) + 1;
+    }
+
     public static function reset(): void {
+        self::$home = 'https://example.test/';
         self::$posts = [];
         self::$writes = [];
         self::$capabilities = [];
@@ -263,7 +366,25 @@ final class WpStub {
         self::$options = [];
         self::$users = [7 => 'A Real Person'];
         self::$referer_valid = true;
+        self::$referers_checked = [];
+        self::$nonces_made = [];
         self::$transients = [];
+        self::$reads = [];
+        self::$meta_add_fails = [];
+        self::$meta_added = [];
+        self::$meta_rows = [];
+        self::$on_lock = null;
+        self::$meta_delete_fails = [];
+        self::$meta_deleted = [];
+        self::$permalinks = [];
+        self::$on_claim = null;
+        self::$meta_cache_on = false;
+        self::$meta_cache = [];
+        self::$query_cache_on = false;
+        self::$query_cache = [];
+        self::$on_option_read = [];
+        self::$home_url_filter = null;
+        self::$notoptions = [];
     }
 
     public static function add_post(int $id, string $post_type = 'page',
@@ -285,6 +406,15 @@ final class WpStub {
      * value is what `/content` would have written -- the caller's identifier
      * for the piece -- and only its non-blankness is read.
      */
+    /**
+     * WORDPRESS REVISIONS, RESTORING AN EARLIER TEXT. Core's restore is an
+     * ordinary `wp_update_post` back to the stored title and content, which
+     * is all a rewrite's revision is a hash of.
+     */
+    public static function restore_revision(int $id, string $title, string $content): void {
+        wp_update_post(['ID' => $id, 'post_title' => $title, 'post_content' => $content]);
+    }
+
     public static function cadence_published(int $id, ?string $piece_id = null): void {
         self::$meta[$id][CadenceContentRequest::META] = $piece_id ?? 'piece-' . $id;
     }
@@ -305,15 +435,31 @@ final class WpdbStub {
     /** The posts table's name, as WordPress exposes it. */
     public string $posts = 'wp_posts';
 
+    /** The options table's name. */
+    public string $options = 'wp_options';
+
+    /** The post meta table's name. */
+    public string $postmeta = 'wp_postmeta';
+
+    /** What the last statement's error was, or blank. */
+    public string $last_error = '';
+
     /** @var list<string> every statement, in the order it was issued */
     public array $log = [];
 
     /** A statement prefix `query` answers false to, as a failing one does. */
     public ?string $fails_on = null;
 
+    /** When true, `get_col` fails as a real one does: an empty array and `last_error` set. */
+    public bool $get_col_fails = false;
+
+    /** When true, `get_var` fails as a real one does: null and `last_error` set. */
+    public bool $get_var_fails = false;
+
     public function prepare(string $sql, ...$args): string {
         foreach ($args as $arg) {
-            $sql = preg_replace('/%d/', (string) (int) $arg, $sql, 1);
+            $sql = preg_replace_callback('/%[ds]/', static fn (array $m): string => $m[0] === '%d'
+                ? (string) (int) $arg : "'" . addslashes((string) $arg) . "'", $sql, 1);
         }
         return $sql;
     }
@@ -324,7 +470,86 @@ final class WpdbStub {
         if ($this->fails_on !== null && stripos($sql, $this->fails_on) === 0) {
             return false;
         }
+        // THE OPTIONS TABLE'S `INSERT IGNORE`, modelled on what MySQL does
+        // with the unique `option_name`: one row inserted and 1 answered, or
+        // the row already there and 0 answered. Never an update.
+        if (preg_match("/\\AINSERT IGNORE INTO `wp_options` .*VALUES \\('([^']*)', '([^']*)'/s", $sql, $m) === 1) {
+            if (WpStub::$on_claim !== null) {
+                $hook = WpStub::$on_claim;
+                WpStub::$on_claim = null;
+                $hook($m[1]);
+            }
+            if (array_key_exists($m[1], WpStub::$options)) {
+                return 0;
+            }
+            WpStub::$options[$m[1]] = $m[2];
+            return 1;
+        }
+        // A COMPARE-AND-DELETE on one option: 1 when the row held that value
+        // and is gone, 0 when it held another or was not there.
+        if (preg_match("/\\ADELETE FROM `wp_options` WHERE `option_name` = '([^']*)' AND `option_value` = '([^']*)'\\z/s",
+                       $sql, $m) === 1) {
+            $name = stripslashes($m[1]);
+            if (array_key_exists($name, WpStub::$options) && (string) WpStub::$options[$name] === stripslashes($m[2])) {
+                unset(WpStub::$options[$name]);
+                return 1;
+            }
+            return 0;
+        }
         return true;
+    }
+
+    /**
+     * One column. Only the post meta lookup by exact key and value, over
+     * every row the stub holds and never through the meta cache.
+     */
+    public function get_col(string $sql): array {
+        $this->log[] = $sql;
+        WpStub::read('wpdb:get_col');
+        if ($this->get_col_fails) {
+            $this->last_error = 'Deadlock found when trying to get lock';
+            return [];
+        }
+        if (preg_match("/\\ASELECT `post_id` FROM `wp_postmeta` WHERE `meta_key` = '((?:[^'\\\\]|\\\\.)*)' AND `meta_value` = '((?:[^'\\\\]|\\\\.)*)'\\z/s",
+                       $sql, $m) !== 1) {
+            return [];
+        }
+        [$key, $value] = [stripslashes($m[1]), stripslashes($m[2])];
+        $ids = [];
+        foreach (WpStub::$meta as $id => $meta) {
+            $rows = WpStub::$meta_rows[$id][$key] ?? (array_key_exists($key, $meta) ? [$meta[$key]] : []);
+            foreach ($rows as $row) {
+                if ($row === $value) {
+                    $ids[] = (string) $id;
+                }
+            }
+        }
+        return $ids;
+    }
+
+    /**
+     * One value. Only one option's value by exact name, read from the table
+     * and never through `get_option`'s caches; null when the row is absent.
+     */
+    public function get_var(string $sql): ?string {
+        $this->log[] = $sql;
+        if ($this->get_var_fails) {
+            $this->last_error = 'Deadlock found when trying to get lock';
+            return null;
+        }
+        if (preg_match("/\\ASELECT `option_value` FROM `wp_options` WHERE `option_name` = '([^']*)'\\z/s",
+                       $sql, $m) !== 1) {
+            return null;
+        }
+        $name = stripslashes($m[1]);
+        WpStub::read('wpdb:option:' . $name);
+        $value = array_key_exists($name, WpStub::$options) ? (string) WpStub::$options[$name] : null;
+        if (isset(WpStub::$on_option_read[$name])) {
+            $hook = WpStub::$on_option_read[$name];
+            unset(WpStub::$on_option_read[$name]);
+            $hook();
+        }
+        return $value;
     }
 
     /** The row, or null -- for a row that is not there and for a failed read alike. */
@@ -334,6 +559,11 @@ final class WpdbStub {
             return null;
         }
         $id = (int) $m[1];
+        if (WpStub::$on_lock !== null && stripos($sql, 'FOR UPDATE') !== false) {
+            $hook = WpStub::$on_lock;
+            WpStub::$on_lock = null;
+            $hook();
+        }
         if (!isset(WpStub::$posts[$id]) || in_array($id, WpStub::$rows_gone, true)) {
             return null;
         }
@@ -372,6 +602,7 @@ function get_post_status(int $id) {
  * naming a post that is not here is talking about a different site.
  */
 function get_post($post_id = null): ?WP_Post {
+    WpStub::read('get_post');
     if (WpStub::$post_read_fails) {
         return null;
     }
@@ -419,6 +650,9 @@ function wp_cache_delete(int $id, string $group = ''): bool {
     if ($group === 'posts') {
         WpStub::$cache_cleared[$id] = true;
     }
+    if ($group === 'post_meta') {
+        unset(WpStub::$meta_cache[$id]);
+    }
     return true;
 }
 
@@ -434,11 +668,20 @@ function is_post_type_viewable(string $type): bool {
 
 /** Single-value meta, including WordPress's own answer for meta that is not there. */
 function get_post_meta(int $post_id, string $key = '', bool $single = false) {
-    $value = WpStub::$meta[$post_id][$key] ?? null;
+    WpStub::read('get_post_meta');
+    [$meta, $rows] = [WpStub::$meta, WpStub::$meta_rows];
+    if (WpStub::$meta_cache_on) {
+        WpStub::$meta_cache[$post_id] ??= [WpStub::$meta[$post_id] ?? [], WpStub::$meta_rows[$post_id] ?? []];
+        [$meta, $rows] = [[$post_id => WpStub::$meta_cache[$post_id][0]], [$post_id => WpStub::$meta_cache[$post_id][1]]];
+    }
+    $value = $meta[$post_id][$key] ?? null;
     if ($single) {
         // `''`, not null and not false. A plugin reading this as "no value" by
         // truthiness cannot tell it from a meta value that is an empty string.
         return $value ?? '';
+    }
+    if (isset($rows[$post_id][$key])) {
+        return $rows[$post_id][$key];
     }
     return $value === null ? [] : [$value];
 }
@@ -543,6 +786,9 @@ function apply_filters(string $hook, $value, ...$args) {
     // an answer about WPML, and a test that leans on it has crossed the line
     // just as surely as one that reads a trid back.
     WpmlBoundary::reached($hook);
+    if (str_starts_with($hook, 'wpml_')) {
+        WpStub::read('wpml');
+    }
     // EXACTLY WHAT WORDPRESS DOES WITH NO LISTENER: return the default,
     // unchanged and without complaint. Not an error, not null -- the value the
     // caller itself supplied, which is why an absent WPML is invisible to any
@@ -683,11 +929,13 @@ function current_user_can(string $cap, ...$args): bool {
  */
 function has_filter(string $hook, $callback = false) {
     WpmlBoundary::reached($hook);
+    WpStub::read('wpml');
     return $hook === 'wpml_element_language_details' ? WpStub::$wpml_reads : false;
 }
 
 function has_action(string $hook, $callback = false) {
     WpmlBoundary::reached($hook);
+    WpStub::read('wpml');
     return $hook === 'wpml_set_element_language_details' ? WpStub::$wpml_writes : false;
 }
 
@@ -813,7 +1061,92 @@ function wp_update_post(array $postarr, bool $wp_error = false) {
     return $id;
 }
 
+/**
+ * `add_post_meta` AS WORDPRESS BEHAVES: with `$unique` it refuses a key the
+ * post already carries, and it UNSLASHES what it is given (`add_metadata`
+ * calls `wp_unslash`), which is why a caller passes its value through
+ * `wp_slash` first. Modelled with `stripslashes` here rather than by changing
+ * the `wp_unslash` stub, which the settings screen's tests read as identity.
+ */
+function add_post_meta(int $post_id, string $key, $value, bool $unique = false) {
+    unset(WpStub::$meta_cache[$post_id]);
+    if (in_array($key, WpStub::$meta_add_fails, true)) {
+        return false;
+    }
+    if ($unique && array_key_exists($key, WpStub::$meta[$post_id] ?? [])) {
+        return false;
+    }
+    WpStub::$meta_added[] = [$post_id, $key, $value];
+    $value = is_string($value) ? stripslashes($value) : $value;
+    // A SECOND ROW UNDER THE SAME KEY, never an overwrite: a single read
+    // still answers the first row, and a list read answers them all.
+    if (!$unique && array_key_exists($key, WpStub::$meta[$post_id] ?? [])) {
+        WpStub::$meta_rows[$post_id][$key] ??= [WpStub::$meta[$post_id][$key]];
+        WpStub::$meta_rows[$post_id][$key][] = $value;
+        return 1;
+    }
+    WpStub::$meta[$post_id][$key] = $value;
+    return 1;
+}
+
+function delete_post_meta(int $post_id, string $key, $value = ''): bool {
+    unset(WpStub::$meta_cache[$post_id]);
+    if (in_array($key, WpStub::$meta_delete_fails, true)) {
+        return false;
+    }
+    $had = array_key_exists($key, WpStub::$meta[$post_id] ?? []);
+    unset(WpStub::$meta[$post_id][$key], WpStub::$meta_rows[$post_id][$key]);
+    if ($had) {
+        WpStub::$meta_deleted[] = [$post_id, $key];
+    }
+    return $had;
+}
+
+function wp_json_encode($data, int $options = 0, int $depth = 512) {
+    return json_encode($data, $options, $depth);
+}
+
+function wp_slash($value) {
+    return is_string($value) ? addslashes($value) : $value;
+}
+
+function home_url(string $path = ''): string {
+    $url = rtrim(WpStub::$home, '/') . '/' . ltrim($path, '/');
+    return WpStub::$home_url_filter !== null ? (WpStub::$home_url_filter)($url, $path) : $url;
+}
+
+function wp_parse_url(string $url, int $component = -1) {
+    return parse_url($url, $component);
+}
+
+/**
+ * `url_to_postid` AS CORE WRITES IT, in the parts this plugin relies on: a
+ * host other than the site's answers 0; `?p=`, `?page_id=` and
+ * `?attachment_id=` answer their id whether or not a post has it; a
+ * permalink answers the post it is the path of, and anything else 0.
+ */
+function url_to_postid(string $url): int {
+    WpStub::read('url_to_postid');
+    $host = parse_url($url, PHP_URL_HOST);
+    if (is_string($host) && $host !== parse_url(home_url(), PHP_URL_HOST)) {
+        return 0;
+    }
+    if (preg_match('#[?&](p|page_id|attachment_id)=(\d+)#', $url, $m) === 1 && (int) $m[2] > 0) {
+        return (int) $m[2];
+    }
+    $path = (string) parse_url($url, PHP_URL_PATH);
+    return WpStub::$permalinks[$path] ?? 0;
+}
+
+function delete_option(string $name): bool {
+    $had = array_key_exists($name, WpStub::$options);
+    unset(WpStub::$options[$name]);
+    return $had;
+}
+
 function update_post_meta(int $post_id, string $key, $value): bool {
+    unset(WpStub::$meta_cache[$post_id]);
+    unset(WpStub::$meta_rows[$post_id][$key]);
     WpStub::$meta[$post_id][$key] = $value;
     return true;
 }
@@ -838,6 +1171,12 @@ function get_post_stati(): array {
 
 /** Only the meta_key/meta_value/fields=ids shape the plugin asks for. */
 function get_posts(array $args = []): array {
+    WpStub::read('get_posts');
+    $cache_key = serialize($args);
+    $cached = WpStub::$query_cache_on && ($args['cache_results'] ?? true) !== false;
+    if ($cached && array_key_exists($cache_key, WpStub::$query_cache)) {
+        return WpStub::$query_cache[$cache_key];
+    }
     $key = $args['meta_key'] ?? null;
     $value = $args['meta_value'] ?? null;
     $want_status = $args['post_status'] ?? 'publish';
@@ -876,6 +1215,9 @@ function get_posts(array $args = []): array {
         }
         $found[] = $id;
     }
+    if ($cached) {
+        WpStub::$query_cache[$cache_key] = $found;
+    }
     return $found;
 }
 
@@ -912,7 +1254,19 @@ function delete_transient(string $key): bool {
 }
 
 function get_option(string $name, $default = false) {
-    return array_key_exists($name, WpStub::$options) ? WpStub::$options[$name] : $default;
+    WpStub::read('get_option:' . $name);
+    // The site address, stored with no trailing slash, unless a test set its own.
+    if ($name === 'home' && !array_key_exists('home', WpStub::$options)) {
+        return rtrim(WpStub::$home, '/');
+    }
+    $value = !in_array($name, WpStub::$notoptions, true) && array_key_exists($name, WpStub::$options)
+        ? WpStub::$options[$name] : $default;
+    if (isset(WpStub::$on_option_read[$name])) {
+        $hook = WpStub::$on_option_read[$name];
+        unset(WpStub::$on_option_read[$name]);
+        $hook();
+    }
+    return $value;
 }
 
 function update_option(string $name, $value, $autoload = null): bool {
@@ -957,6 +1311,7 @@ function wp_die($message = '', $title = '', $args = []): void {
  * one thing a test controls about it.
  */
 function check_admin_referer($action = -1, $query_arg = '_wpnonce') {
+    WpStub::$referers_checked[] = $action;
     if (!WpStub::$referer_valid) {
         wp_die('The link you followed has expired.');
     }
@@ -980,7 +1335,7 @@ function add_query_arg(array $args, string $url): string {
 }
 
 function admin_url(string $path = ''): string {
-    return 'http://cadence-connector.test/wp-admin/' . $path;
+    return 'https://example.test/wp-admin/' . $path;
 }
 
 function wp_nonce_field($action = -1, $name = '_wpnonce', $referer = true, $echo = true): string {
@@ -989,6 +1344,11 @@ function wp_nonce_field($action = -1, $name = '_wpnonce', $referer = true, $echo
         echo $field;
     }
     return $field;
+}
+
+function wp_nonce_url(string $url, $action = -1, string $name = '_wpnonce'): string {
+    WpStub::$nonces_made[] = $action;
+    return add_query_arg([$name => 'stub-nonce'], $url);
 }
 
 function wp_dropdown_users(array $args = []): ?string {
@@ -1034,6 +1394,8 @@ define('ABSPATH', '/wordpress/');
 final class WpHooks {
     /** @var array<string, list<callable>> */
     public static array $actions = [];
+    /** @var array<string, list<callable>> */
+    public static array $filters = [];
     /** @var list<array{string, string, array}> */
     public static array $routes = [];
 
@@ -1046,6 +1408,11 @@ final class WpHooks {
 
 function add_action(string $hook, callable $cb, int $priority = 10, int $args = 1): bool {
     WpHooks::$actions[$hook][] = $cb;
+    return true;
+}
+
+function add_filter(string $hook, callable $cb, int $priority = 10, int $args = 1): bool {
+    WpHooks::$filters[$hook][] = $cb;
     return true;
 }
 
@@ -1120,6 +1487,7 @@ require_once __DIR__ . '/../includes/class-cadence-revision.php';
 require_once __DIR__ . '/../includes/class-cadence-content-request.php';
 require_once __DIR__ . '/../includes/class-cadence-admin.php';
 require_once __DIR__ . '/../includes/class-cadence-replace-request.php';
+require_once __DIR__ . '/../includes/class-cadence-adopt-request.php';
 
 /**
  * THE SIGNING SIDE, IN THE TEST SUITE ONLY.
@@ -1147,21 +1515,26 @@ final class CadenceAttest {
     /** The attestation key id those requests name. 16 lowercase hex. */
     public const KID = 'a1b2c3d4e5f60718';
 
-    /** @var array{pk: string, sk: string}|null */
-    private static $pair = null;
+    /** @var array<string, array{pk: string, sk: string}> */
+    private static array $pairs = [];
 
-    /** One keypair per suite run, so no test can pass against a pinned signature. */
-    public static function pair(): array {
-        if (self::$pair === null) {
+    /**
+     * One keypair per connector key per suite run, so no test can pass
+     * against a pinned signature, and no public key is on two connector keys,
+     * which the key store refuses.
+     */
+    public static function pair(?string $key_id = null): array {
+        $key_id ??= self::KEY_ID;
+        if (!isset(self::$pairs[$key_id])) {
             $keypair = sodium_crypto_sign_keypair();
-            self::$pair = ['pk' => sodium_crypto_sign_publickey($keypair),
-                           'sk' => sodium_crypto_sign_secretkey($keypair)];
+            self::$pairs[$key_id] = ['pk' => sodium_crypto_sign_publickey($keypair),
+                                     'sk' => sodium_crypto_sign_secretkey($keypair)];
         }
-        return self::$pair;
+        return self::$pairs[$key_id];
     }
 
-    public static function public_key_base64(): string {
-        return base64_encode(self::pair()['pk']);
+    public static function public_key_base64(?string $key_id = null): string {
+        return base64_encode(self::pair($key_id)['pk']);
     }
 
     /** The signed field set a body reduces to, with the alias resolved as the routes do. */
@@ -1171,6 +1544,18 @@ final class CadenceAttest {
         }
         $out = [];
         foreach (CadenceAttestation::FIELDS[$route] as $name) {
+            // AN OPTIONAL FIELD IS SIGNED WHEN THE BODY CARRIES IT, and its
+            // boolean is rendered the one way the route renders it.
+            if (strncmp($name, CadenceAttestation::OPTIONAL, 1) === 0) {
+                $name = substr($name, 1);
+                if (!array_key_exists($name, $body)) {
+                    continue;
+                }
+                $value = $body[$name];
+                $out[$name] = is_bool($value) ? ($value ? 'true' : 'false')
+                    : (is_string($value) ? $value : '');
+                continue;
+            }
             $value = $body[$name] ?? '';
             // A BODY THE ROUTE WILL REFUSE AS `bad_request` STILL GETS A
             // HEADER. The helper is called before `run`, so it sees bodies
@@ -1209,7 +1594,8 @@ final class CadenceAttest {
         if ($key_id !== null) {
             self::install($key_id, $kid);
         }
-        return 'v1 ' . $kid . ' ' . self::sign(CadenceAttestation::material($route, $fields));
+        return 'v1 ' . $kid . ' ' . self::sign(CadenceAttestation::material($route, $fields),
+                                               self::pair($key_id)['sk']);
     }
 
     /**
@@ -1273,6 +1659,6 @@ final class CadenceAttest {
                 return;
             }
         }
-        CadenceKey::add_verify_key($key_id, $kid, self::public_key_base64());
+        CadenceKey::add_verify_key($key_id, $kid, self::public_key_base64($key_id));
     }
 }

@@ -118,7 +118,21 @@ final class CadenceAttestation {
         // it and adding one appends a block. Either way the material differs. A
         // count would be a second spelling of a fact the framing already carries.
         '/translation-group' => ['trid', 'create_group', 'piece_id', self::MEMBERS],
+        // THE ADOPT ROUTES SIGN WHICH SITE AND WHEN, last. Without `site` one
+        // signed body serves every site the tenant's public key is pasted on;
+        // without `issued_at` it serves again after a release.
+        '/adopt/preview'     => ['piece_id', 'link', 'site', 'issued_at'],
+        '/adopt'             => ['piece_id', 'post_id', 'language', 'site', 'issued_at'],
     ];
+
+    /**
+     * ROUTES THE UNSIGNED-PUBLISH EXEMPTION DOES NOT REACH. They read and
+     * stamp posts this plugin did not write, and their refusals are finer
+     * than one "out of scope": every one of them must cost a signing key,
+     * not a connector key alone. A key carrying the exemption and sending no
+     * header is refused here under its own branch.
+     */
+    public const NO_EXEMPTION = ['/adopt', '/adopt/preview', '/adopt/release', '/adopt/release/preview'];
 
     /**
      * THE SIGNED FIELD ORDER FOR ONE BODY, with `@members` expanded.
@@ -477,6 +491,11 @@ final class CadenceAttestation {
         // the only one that is not evidence of anything. A header that is there
         // falls through to every check below it even on an exempt key.
         if ($presented === null || trim($presented) === '') {
+            if ($exempt && in_array($route, self::NO_EXEMPTION, true)) {
+                return self::refuse('exempt_refused',
+                    'this route takes no exemption: this key carries the unsigned-publish exemption, '
+                    . 'and a request here must be signed all the same; nothing was read or written');
+            }
             if ($exempt) {
                 return ['ok' => true, 'attestation' => 'exempt'];
             }

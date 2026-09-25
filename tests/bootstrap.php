@@ -230,6 +230,35 @@ final class WpStub {
      */
     public static array $transients = [];
 
+    /**
+     * EVERY READ OF THE SITE, counted per function, so a refusal that must
+     * come before the site is asked anything can be measured as zero reads of
+     * every kind rather than zero calls to `get_post` alone. `get_option` is
+     * counted per option name, because the key store is itself an option and
+     * the attestation has to read it to have a key to verify with.
+     */
+    public static array $reads = [];
+
+    /** Meta keys whose `add_post_meta` answers false, as a failed write would. */
+    public static array $meta_add_fails = [];
+
+    /** Every `add_post_meta` call that stored something, in order, as [id, key, raw value]. */
+    public static array $meta_added = [];
+
+    /** Public path => post id, the permalinks `url_to_postid` resolves. */
+    public static array $permalinks = [];
+
+    /**
+     * Run once, inside the next `INSERT IGNORE` into the options table, before
+     * that insert looks for a row: the moment a second request would have to
+     * land in to race the first.
+     */
+    public static $on_claim = null;
+
+    public static function read(string $what): void {
+        self::$reads[$what] = (self::$reads[$what] ?? 0) + 1;
+    }
+
     public static function reset(): void {
         self::$posts = [];
         self::$writes = [];
@@ -264,6 +293,11 @@ final class WpStub {
         self::$users = [7 => 'A Real Person'];
         self::$referer_valid = true;
         self::$transients = [];
+        self::$reads = [];
+        self::$meta_add_fails = [];
+        self::$meta_added = [];
+        self::$permalinks = [];
+        self::$on_claim = null;
     }
 
     public static function add_post(int $id, string $post_type = 'page',
@@ -305,6 +339,9 @@ final class WpdbStub {
     /** The posts table's name, as WordPress exposes it. */
     public string $posts = 'wp_posts';
 
+    /** The options table's name. */
+    public string $options = 'wp_options';
+
     /** @var list<string> every statement, in the order it was issued */
     public array $log = [];
 
@@ -313,7 +350,8 @@ final class WpdbStub {
 
     public function prepare(string $sql, ...$args): string {
         foreach ($args as $arg) {
-            $sql = preg_replace('/%d/', (string) (int) $arg, $sql, 1);
+            $sql = preg_replace_callback('/%[ds]/', static fn (array $m): string => $m[0] === '%d'
+                ? (string) (int) $arg : "'" . addslashes((string) $arg) . "'", $sql, 1);
         }
         return $sql;
     }
@@ -323,6 +361,21 @@ final class WpdbStub {
         $this->log[] = $sql;
         if ($this->fails_on !== null && stripos($sql, $this->fails_on) === 0) {
             return false;
+        }
+        // THE OPTIONS TABLE'S `INSERT IGNORE`, modelled on what MySQL does
+        // with the unique `option_name`: one row inserted and 1 answered, or
+        // the row already there and 0 answered. Never an update.
+        if (preg_match("/\\AINSERT IGNORE INTO `wp_options` .*VALUES \\('([^']*)', '([^']*)'/s", $sql, $m) === 1) {
+            if (WpStub::$on_claim !== null) {
+                $hook = WpStub::$on_claim;
+                WpStub::$on_claim = null;
+                $hook($m[1]);
+            }
+            if (array_key_exists($m[1], WpStub::$options)) {
+                return 0;
+            }
+            WpStub::$options[$m[1]] = $m[2];
+            return 1;
         }
         return true;
     }
@@ -372,6 +425,7 @@ function get_post_status(int $id) {
  * naming a post that is not here is talking about a different site.
  */
 function get_post($post_id = null): ?WP_Post {
+    WpStub::read('get_post');
     if (WpStub::$post_read_fails) {
         return null;
     }
@@ -434,6 +488,7 @@ function is_post_type_viewable(string $type): bool {
 
 /** Single-value meta, including WordPress's own answer for meta that is not there. */
 function get_post_meta(int $post_id, string $key = '', bool $single = false) {
+    WpStub::read('get_post_meta');
     $value = WpStub::$meta[$post_id][$key] ?? null;
     if ($single) {
         // `''`, not null and not false. A plugin reading this as "no value" by
@@ -543,6 +598,9 @@ function apply_filters(string $hook, $value, ...$args) {
     // an answer about WPML, and a test that leans on it has crossed the line
     // just as surely as one that reads a trid back.
     WpmlBoundary::reached($hook);
+    if (str_starts_with($hook, 'wpml_')) {
+        WpStub::read('wpml');
+    }
     // EXACTLY WHAT WORDPRESS DOES WITH NO LISTENER: return the default,
     // unchanged and without complaint. Not an error, not null -- the value the
     // caller itself supplied, which is why an absent WPML is invisible to any
@@ -683,11 +741,13 @@ function current_user_can(string $cap, ...$args): bool {
  */
 function has_filter(string $hook, $callback = false) {
     WpmlBoundary::reached($hook);
+    WpStub::read('wpml');
     return $hook === 'wpml_element_language_details' ? WpStub::$wpml_reads : false;
 }
 
 function has_action(string $hook, $callback = false) {
     WpmlBoundary::reached($hook);
+    WpStub::read('wpml');
     return $hook === 'wpml_set_element_language_details' ? WpStub::$wpml_writes : false;
 }
 
@@ -813,6 +873,72 @@ function wp_update_post(array $postarr, bool $wp_error = false) {
     return $id;
 }
 
+/**
+ * `add_post_meta` AS WORDPRESS BEHAVES: with `$unique` it refuses a key the
+ * post already carries, and it UNSLASHES what it is given (`add_metadata`
+ * calls `wp_unslash`), which is why a caller passes its value through
+ * `wp_slash` first. Modelled with `stripslashes` here rather than by changing
+ * the `wp_unslash` stub, which the settings screen's tests read as identity.
+ */
+function add_post_meta(int $post_id, string $key, $value, bool $unique = false) {
+    if (in_array($key, WpStub::$meta_add_fails, true)) {
+        return false;
+    }
+    if ($unique && array_key_exists($key, WpStub::$meta[$post_id] ?? [])) {
+        return false;
+    }
+    WpStub::$meta_added[] = [$post_id, $key, $value];
+    WpStub::$meta[$post_id][$key] = is_string($value) ? stripslashes($value) : $value;
+    return 1;
+}
+
+function delete_post_meta(int $post_id, string $key, $value = ''): bool {
+    $had = array_key_exists($key, WpStub::$meta[$post_id] ?? []);
+    unset(WpStub::$meta[$post_id][$key]);
+    return $had;
+}
+
+function wp_json_encode($data, int $options = 0, int $depth = 512) {
+    return json_encode($data, $options, $depth);
+}
+
+function wp_slash($value) {
+    return is_string($value) ? addslashes($value) : $value;
+}
+
+function home_url(string $path = ''): string {
+    return 'https://example.test/' . ltrim($path, '/');
+}
+
+function wp_parse_url(string $url, int $component = -1) {
+    return parse_url($url, $component);
+}
+
+/**
+ * `url_to_postid` AS CORE WRITES IT, in the parts this plugin relies on: a
+ * host other than the site's answers 0; `?p=`, `?page_id=` and
+ * `?attachment_id=` answer their id whether or not a post has it; a
+ * permalink answers the post it is the path of, and anything else 0.
+ */
+function url_to_postid(string $url): int {
+    WpStub::read('url_to_postid');
+    $host = parse_url($url, PHP_URL_HOST);
+    if (is_string($host) && $host !== parse_url(home_url(), PHP_URL_HOST)) {
+        return 0;
+    }
+    if (preg_match('#[?&](p|page_id|attachment_id)=(\d+)#', $url, $m) === 1 && (int) $m[2] > 0) {
+        return (int) $m[2];
+    }
+    $path = (string) parse_url($url, PHP_URL_PATH);
+    return WpStub::$permalinks[$path] ?? 0;
+}
+
+function delete_option(string $name): bool {
+    $had = array_key_exists($name, WpStub::$options);
+    unset(WpStub::$options[$name]);
+    return $had;
+}
+
 function update_post_meta(int $post_id, string $key, $value): bool {
     WpStub::$meta[$post_id][$key] = $value;
     return true;
@@ -838,6 +964,7 @@ function get_post_stati(): array {
 
 /** Only the meta_key/meta_value/fields=ids shape the plugin asks for. */
 function get_posts(array $args = []): array {
+    WpStub::read('get_posts');
     $key = $args['meta_key'] ?? null;
     $value = $args['meta_value'] ?? null;
     $want_status = $args['post_status'] ?? 'publish';
@@ -912,6 +1039,7 @@ function delete_transient(string $key): bool {
 }
 
 function get_option(string $name, $default = false) {
+    WpStub::read('get_option:' . $name);
     return array_key_exists($name, WpStub::$options) ? WpStub::$options[$name] : $default;
 }
 
@@ -980,7 +1108,7 @@ function add_query_arg(array $args, string $url): string {
 }
 
 function admin_url(string $path = ''): string {
-    return 'http://cadence-connector.test/wp-admin/' . $path;
+    return 'https://example.test/wp-admin/' . $path;
 }
 
 function wp_nonce_field($action = -1, $name = '_wpnonce', $referer = true, $echo = true): string {
@@ -1120,6 +1248,7 @@ require_once __DIR__ . '/../includes/class-cadence-revision.php';
 require_once __DIR__ . '/../includes/class-cadence-content-request.php';
 require_once __DIR__ . '/../includes/class-cadence-admin.php';
 require_once __DIR__ . '/../includes/class-cadence-replace-request.php';
+require_once __DIR__ . '/../includes/class-cadence-adopt-request.php';
 
 /**
  * THE SIGNING SIDE, IN THE TEST SUITE ONLY.

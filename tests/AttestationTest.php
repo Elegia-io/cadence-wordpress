@@ -722,14 +722,14 @@ final class AttestationTest extends TestCase {
     }
 
     /** THE BRANCH VOCABULARY IS CLOSED, and the contract's list is that list. */
-    public function test_the_branch_vocabulary_is_exactly_five(): void {
+    public function test_the_branch_vocabulary_is_exactly_six(): void {
         $source = file_get_contents(__DIR__ . '/../includes/class-cadence-attestation.php');
-        foreach (['absent', 'malformed', 'unknown_kid', 'no_public_key', 'mismatch'] as $branch) {
+        foreach (['absent', 'exempt_refused', 'malformed', 'unknown_kid', 'no_public_key', 'mismatch'] as $branch) {
             $this->assertSame(1, substr_count($source, "self::refuse('" . $branch . "'"),
                 $branch . ' is refused from a number of places that is not one');
         }
-        $this->assertSame(5, substr_count($source, 'self::refuse('),
-            'a sixth branch was added, or one was removed');
+        $this->assertSame(6, substr_count($source, 'self::refuse('),
+            'a seventh branch was added, or one was removed');
     }
 
     /** A HEADER THAT VERIFIES IS `verified`, AND CARRIES THE KID THAT VERIFIED IT. */

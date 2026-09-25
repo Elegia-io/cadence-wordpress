@@ -1,0 +1,464 @@
+<?php
+/**
+ * Bring a post this plugin did not create into one key's scope, so the
+ * linking route can make it the source of a translation group.
+ *
+ * ADOPTION WRITES THREE META ROWS AND NOTHING ELSE. The post's title, text,
+ * status and translation group are untouched: `_cadence_external_id` and
+ * `_cadence_key` are the two rows `/content` writes on a post it creates, so
+ * `CadenceKey::reaches` admits the adopted post to the linking route with no
+ * change there, and `_cadence_adopted` is the record that says the post was
+ * brought into scope rather than made, by which key and when.
+ *
+ * EVERY REFUSAL BELOW COMES AFTER THE SIGNATURE, and there is no unsigned
+ * exemption on these routes. They answer finer than "out of scope" about
+ * posts this plugin never wrote, so each answer must cost a signing key and
+ * not a connector key alone.
+ *
+ * THE ORDER IS THE CONTRACT. One code per branch, in a fixed order, and
+ * nothing is written before both claims are held. A type is checked before a
+ * status so a key scoped to `post` learns nothing about a page's status.
+ *
+ * @package cadence-connector
+ * @license GPL-2.0-or-later
+ */
+
+declare(strict_types=1);
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+final class CadenceAdoptRequest {
+
+    /** The audit record: which key adopted the post, when, and what it was before. */
+    public const ADOPTED_META = '_cadence_adopted';
+
+    /** Every code `run` and `preview` can refuse with, in the order they are checked. */
+    public const REFUSAL_CODES = [
+        'bad_adoption',
+        CadenceAttestation::CODE,
+        'adopt_wrong_site',
+        'adopt_expired',
+        'adopt_link_unresolved',
+        'wpml_unavailable',
+        'adopt_types_unscoped',
+        'post_missing',
+        'adopt_post_type_out_of_scope',
+        'adopt_post_unavailable',
+        'adopt_site_page',
+        'post_already_identified',
+        'adopt_repeat',
+        'adopt_piece_taken',
+        'group_unknown',
+        'already_grouped',
+        'language_disagreement',
+        'adopt_busy',
+        'adopt_failed',
+    ];
+
+    /**
+     * THE STATUSES A POST MAY BE ADOPTED IN, an allow-list. Not in it: `trash`,
+     * `auto-draft`, `inherit` (revisions, autosaves, attachments), `request-*`
+     * and any status a plugin registers.
+     */
+    public const STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];
+
+    /** The options naming the site's own pages, which nothing here reaches. */
+    public const SITE_PAGES = ['page_on_front', 'page_for_posts', 'wp_page_for_privacy_policy'];
+
+    /** How far `issued_at` may be from this site's clock, either way, in seconds. */
+    public const WINDOW = 300;
+
+    /** How long a claim holds before another adopt may take it over, in seconds. */
+    public const CLAIM_TTL = 60;
+
+    private const LANGUAGE = '/\A[a-z]{2,3}(?:-[a-z0-9]{2,8})*\z/';
+
+    private const ISSUED_AT = '/\A(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d{1,6})?(?:Z|\+00:00)\z/';
+
+    /**
+     * Adopt the post: rows 1 to 18.
+     *
+     * @param array       $body        `piece_id`, `post_id`, `language`, `site`, `issued_at`.
+     * @param array|null  $post_types  The types the key names; null for a key issued blank.
+     * @param string|null $key_id      The presenting key's public id.
+     * @param string|null $attestation The signature header, or null when absent.
+     */
+    public static function run(array $body, ?array $post_types, ?string $key_id, ?string $attestation): array {
+        $shape = self::shape($body, ['post_id', 'language']);
+        if ($shape !== null) {
+            return self::refuse('bad_adoption', $shape);
+        }
+        $fields = ['piece_id' => $body['piece_id'], 'post_id' => $body['post_id'],
+                   'language' => $body['language'], 'site' => $body['site'],
+                   'issued_at' => $body['issued_at']];
+        $gate = self::gate('/adopt', $fields, $key_id, $attestation);
+        if (isset($gate['code'])) {
+            return $gate;
+        }
+
+        $post_id  = $body['post_id'];
+        $piece_id = $body['piece_id'];
+        $checked  = self::check($post_id, $piece_id, $post_types, $key_id, false);
+        if (isset($checked['code'])) {
+            return $checked;
+        }
+        // ROW 16: the site serves the post in the language the caller names.
+        if ($checked['language'] !== $body['language']) {
+            return self::refuse('language_disagreement', sprintf(
+                'post %d is in %s on this site, but the request calls it %s; nothing was written',
+                $post_id, $checked['language'], $body['language']));
+        }
+
+        // ROW 17: two claims, then the rows that another adopt could have
+        // changed are asked again under them. A second adopt that ran to
+        // completion between the checks above and the claims holds no claim
+        // any more, so only this re-check sees it.
+        $claims = [self::claim_name_post($post_id), self::claim_name_piece($piece_id)];
+        $held = [];
+        foreach ($claims as $name) {
+            if (!self::claim($name)) {
+                self::release($held);
+                return self::refuse('adopt_busy', sprintf(
+                    'another adoption holds post %d or this piece right now; nothing was written', $post_id));
+            }
+            $held[] = $name;
+        }
+        if (self::identified($post_id) || self::piece_elsewhere($piece_id, $post_id)) {
+            self::release($held);
+            return self::refuse('adopt_busy', sprintf(
+                'another adoption reached post %d or this piece while this one was being checked; '
+                . 'nothing was written', $post_id));
+        }
+
+        // ROW 18: three unique rows, all or nothing. `add_post_meta` unslashes
+        // what it is given, so each value is slashed first.
+        $record = wp_json_encode([
+            'at'           => gmdate('Y-m-d\TH:i:s\Z'),
+            'key'          => $key_id,
+            'kid'          => $gate['kid'],
+            'prior_status' => $checked['post']->post_status,
+            'prior_trid'   => $checked['trid'],
+        ]);
+        $rows = [CadenceContentRequest::META => $piece_id, CadenceContentRequest::KEY_META => $key_id,
+                 self::ADOPTED_META => $record];
+        $written = [];
+        foreach ($rows as $meta => $value) {
+            if (!is_string($value) || add_post_meta($post_id, $meta, wp_slash($value), true) === false) {
+                break;
+            }
+            $written[] = $meta;
+        }
+        $landed = count($written) === count($rows);
+        foreach ($rows as $meta => $value) {
+            $landed = $landed && get_post_meta($post_id, $meta, true) === $value;
+        }
+        if (!$landed) {
+            foreach ($written as $meta) {
+                delete_post_meta($post_id, $meta);
+            }
+            self::release($held);
+            return self::refuse('adopt_failed', sprintf(
+                'the adoption record for post %d could not be written; nothing was left on the post',
+                $post_id));
+        }
+        self::release($held);
+
+        return ['ok' => true, 'attestation' => 'verified', 'attestation_kid' => $gate['kid'],
+                'report' => self::reply(true, $piece_id, $checked, true)];
+    }
+
+    /**
+     * Resolve the link and run rows 1 to 16 on the post it names. Writes
+     * nothing.
+     *
+     * @param array $body `piece_id`, `link`, `site`, `issued_at`.
+     */
+    public static function preview(array $body, ?array $post_types, ?string $key_id, ?string $attestation): array {
+        $shape = self::shape($body, ['link']);
+        if ($shape !== null) {
+            return self::refuse('bad_adoption', $shape);
+        }
+        $fields = ['piece_id' => $body['piece_id'], 'link' => $body['link'],
+                   'site' => $body['site'], 'issued_at' => $body['issued_at']];
+        $gate = self::gate('/adopt/preview', $fields, $key_id, $attestation);
+        if (isset($gate['code'])) {
+            return $gate;
+        }
+        // AFTER THE SIGNATURE: resolving a link reads the site.
+        $post_id = self::resolve_link($body['link']);
+        if ($post_id < 1) {
+            return self::refuse('adopt_link_unresolved',
+                'the link is not an edit link or a permalink of a post on this site; nothing was read');
+        }
+        $checked = self::check($post_id, $body['piece_id'], $post_types, $key_id, true);
+        if (isset($checked['code'])) {
+            return $checked;
+        }
+        return ['ok' => true, 'attestation' => 'verified', 'attestation_kid' => $gate['kid'],
+                'report' => self::reply(false, $body['piece_id'], $checked, false)];
+    }
+
+    /**
+     * THE POST A LINK NAMES, or 0. The wp-admin edit link (`post.php?post=N`)
+     * is read here and answers 0 on any host but the admin's own; everything
+     * else goes to core's `url_to_postid`, which answers 0 for another host
+     * and for a path that is no post's. One URL, one answer or none: never a
+     * search.
+     */
+    public static function resolve_link(string $link): int {
+        $parts = wp_parse_url($link);
+        $admin = wp_parse_url(admin_url());
+        if (!is_array($parts) || !is_array($admin)) {
+            return 0;
+        }
+        if (($parts['path'] ?? '') === ($admin['path'] ?? '') . 'post.php') {
+            if (strtolower((string) ($parts['host'] ?? '')) !== strtolower((string) ($admin['host'] ?? ''))) {
+                return 0;
+            }
+            parse_str((string) ($parts['query'] ?? ''), $query);
+            $id = $query['post'] ?? null;
+            return is_string($id) && ctype_digit($id) ? (int) $id : 0;
+        }
+        return (int) url_to_postid($link);
+    }
+
+    /** Row 1: the body's own shape. Reads nothing. */
+    private static function shape(array $body, array $own): ?string {
+        foreach (['piece_id', 'site', 'issued_at'] as $name) {
+            if (!is_string($body[$name] ?? null) || trim($body[$name]) === '') {
+                return $name . ' is not a non-blank string';
+            }
+        }
+        if (in_array('post_id', $own, true) && (!is_int($body['post_id'] ?? null) || $body['post_id'] < 1)) {
+            return 'post_id is not a positive JSON integer';
+        }
+        if (in_array('language', $own, true)
+                && (!is_string($body['language'] ?? null) || preg_match(self::LANGUAGE, $body['language']) !== 1)) {
+            return 'language is not a WPML language code';
+        }
+        if (in_array('link', $own, true) && (!is_string($body['link'] ?? null) || trim($body['link']) === '')) {
+            return 'link is not a non-blank string';
+        }
+        if (self::issued_at($body['issued_at']) === null) {
+            return 'issued_at is not a UTC ISO-8601 time';
+        }
+        return null;
+    }
+
+    private static function issued_at(string $value): ?int {
+        if (preg_match(self::ISSUED_AT, $value, $m) !== 1) {
+            return null;
+        }
+        $at = DateTimeImmutable::createFromFormat('!Y-m-d\TH:i:s', $m[1], new DateTimeZone('UTC'));
+        return $at !== false && $at->format('Y-m-d\TH:i:s') === $m[1] ? $at->getTimestamp() : null;
+    }
+
+    /** Rows 2 to 4: the signature, then which site and when. */
+    private static function gate(string $route, array $fields, ?string $key_id, ?string $attestation): array {
+        $attested = CadenceAttestation::verify($attestation, $route, $fields, $key_id);
+        if ($attested['ok'] !== true) {
+            return ['ok' => false, 'code' => $attested['code'], 'reason' => $attested['reason'],
+                    'attestation_branch' => $attested['branch']];
+        }
+        // THE BOUNDARY ON THESE ROUTES: only a verified signature passes. The
+        // `NO_EXEMPTION` set in `CadenceAttestation::verify` is what refuses
+        // first and names the branch; this refuses whatever that set says.
+        if (($attested['attestation'] ?? null) !== 'verified' || !isset($attested['kid'])) {
+            return ['ok' => false, 'code' => CadenceAttestation::CODE, 'attestation_branch' => 'exempt_refused',
+                    'reason' => 'this route takes no exemption; nothing was read or written'];
+        }
+        $host = strtolower((string) wp_parse_url(home_url(), PHP_URL_HOST));
+        if ($fields['site'] !== $host) {
+            return self::refuse('adopt_wrong_site',
+                'the request was signed for another site; nothing was read or written');
+        }
+        $at = self::issued_at($fields['issued_at']);
+        if ($at === null || abs(time() - $at) > self::WINDOW) {
+            return self::refuse('adopt_expired', sprintf(
+                'issued_at is more than %d seconds from this site\'s clock; nothing was read or written',
+                self::WINDOW));
+        }
+        return ['kid' => $attested['kid']];
+    }
+
+    /**
+     * Rows 5 to 15 on one post. On success, what the replies carry.
+     *
+     * @return array refusal, or {post: WP_Post, type: string, trid: int|null, language: string}
+     */
+    private static function check(int $post_id, string $piece_id, ?array $post_types, ?string $key_id,
+                                  bool $preview): array {
+        // ROW 5.
+        if (!has_filter('wpml_element_language_details') || !has_action('wpml_set_element_language_details')) {
+            return self::refuse('wpml_unavailable',
+                'nothing on this site implements the WPML translation-group hooks, so nothing can be adopted');
+        }
+        // ROW 6: a key issued blank publishes anywhere and adopts nothing.
+        if ($post_types === null || $post_types === []) {
+            return self::refuse('adopt_types_unscoped',
+                'this key names no post types, and adopting needs a key that names the types it may reach');
+        }
+        // ROW 7.
+        $post = get_post($post_id);
+        if (!$post instanceof WP_Post) {
+            return self::refuse('post_missing', sprintf('there is no readable post %d on this site', $post_id));
+        }
+        // ROW 8: a type the key names AND one that is viewable. The null scope
+        // asks `is_content_type` for viewability whatever the key names, which
+        // is stricter than the other routes and is what adopt requires.
+        $type = $post->post_type;
+        if (!in_array($type, $post_types, true) || !CadenceKey::is_content_type($type, null)) {
+            return self::refuse('adopt_post_type_out_of_scope', sprintf(
+                'post %d is of a type this key may not adopt; nothing was written', $post_id));
+        }
+        // ROW 9: an allow-list, and never a password-protected post.
+        if (!in_array($post->post_status, self::STATUSES, true) || $post->post_password !== '') {
+            return self::refuse('adopt_post_unavailable', sprintf(
+                'post %d is in a state that cannot be adopted; nothing was written', $post_id));
+        }
+        // ROW 10: the site's own pages, compared as ints.
+        foreach (self::SITE_PAGES as $option) {
+            if ((int) get_option($option) === $post_id) {
+                return self::refuse('adopt_site_page', sprintf(
+                    'post %d is one of this site\'s own pages; nothing was written', $post_id));
+            }
+        }
+        $element_type = 'post_' . $type;
+        // ROWS 11 AND 12: any of the three rows, except the exact repeat.
+        if (self::identified($post_id)) {
+            if (!self::is_repeat($post_id, $piece_id, $key_id)) {
+                return self::refuse('post_already_identified', sprintf(
+                    'post %d already carries a piece identity; nothing was written', $post_id));
+            }
+            $language = CadenceLinkRequest::current_language($post_id, $element_type);
+            return ['ok' => false, 'code' => 'adopt_repeat',
+                    'reason' => sprintf('post %d is already adopted under this piece by this key', $post_id),
+                    'report' => self::reply(false, $piece_id, ['post' => $post, 'language' => $language],
+                                            !$preview)];
+        }
+        // ROW 13.
+        if (self::piece_elsewhere($piece_id, $post_id)) {
+            return self::refuse('adopt_piece_taken',
+                'this piece is already on another post on this site; nothing was written');
+        }
+        // ROW 14.
+        $trid = CadenceLinkRequest::current_trid($post_id, $element_type);
+        $language = CadenceLinkRequest::current_language($post_id, $element_type);
+        if ($trid === false || $language === null) {
+            return self::refuse('group_unknown', sprintf(
+                'WPML reports no language for post %d; nothing was written', $post_id));
+        }
+        // ROW 15: alone in its group, counting drafts.
+        if ($trid !== null) {
+            $outside = CadenceLinkRequest::members_outside_plan($trid, $element_type, [['post_id' => $post_id]]);
+            if ($outside === false) {
+                return self::refuse('group_unknown', sprintf(
+                    'WPML would not say which posts share post %d\'s translation group; nothing was written',
+                    $post_id));
+            }
+            if ($outside !== []) {
+                return self::refuse('already_grouped', sprintf(
+                    'post %d already has translations; nothing was written', $post_id));
+            }
+        }
+        return ['post' => $post, 'trid' => $trid, 'language' => $language];
+    }
+
+    /** Whether the post carries any of the three rows. */
+    private static function identified(int $post_id): bool {
+        foreach ([CadenceContentRequest::META, CadenceContentRequest::KEY_META, self::ADOPTED_META] as $meta) {
+            $value = get_post_meta($post_id, $meta, true);
+            if ($value !== '' && $value !== null && $value !== false && $value !== []) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Same piece, this key's stamp, and an adoption record naming this key. */
+    private static function is_repeat(int $post_id, string $piece_id, ?string $key_id): bool {
+        if (!is_string($key_id) || get_post_meta($post_id, CadenceContentRequest::META, true) !== $piece_id
+                || get_post_meta($post_id, CadenceContentRequest::KEY_META, true) !== $key_id) {
+            return false;
+        }
+        $record = get_post_meta($post_id, self::ADOPTED_META, true);
+        $record = is_string($record) ? json_decode($record, true) : null;
+        return is_array($record) && ($record['key'] ?? null) === $key_id;
+    }
+
+    /**
+     * Whether the piece is on any other post, in ANY status and ANY registered
+     * type: `'any'` leaves out `trash`, `auto-draft` and types excluded from
+     * search, and would place one piece on two posts.
+     */
+    private static function piece_elsewhere(string $piece_id, int $post_id): bool {
+        $found = get_posts([
+            'post_type'        => array_values(get_post_types()),
+            'post_status'      => array_values(array_unique(array_merge(
+                array_keys(get_post_stati()), ['trash', 'auto-draft', 'inherit']))),
+            'meta_key'         => CadenceContentRequest::META,
+            'meta_value'       => $piece_id,
+            'fields'           => 'ids',
+            'posts_per_page'   => -1,
+            'no_found_rows'    => true,
+            'suppress_filters' => true,
+        ]);
+        foreach ($found as $id) {
+            if ((int) $id !== $post_id) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function claim_name_post(int $post_id): string {
+        return 'cadence_adopt_post_' . $post_id;
+    }
+
+    private static function claim_name_piece(string $piece_id): string {
+        return 'cadence_adopt_piece_' . substr(hash('sha256', $piece_id), 0, 32);
+    }
+
+    /**
+     * ONE CLAIM, `INSERT IGNORE` into the options table: the shape
+     * `WP_Upgrader::create_lock` uses. `add_option` inserts with `ON DUPLICATE
+     * KEY UPDATE`, so two callers would both succeed. A claim older than
+     * `CLAIM_TTL` is from a request that died holding it, and is taken over.
+     */
+    private static function claim(string $name, bool $retry = true): bool {
+        global $wpdb;
+        $got = $wpdb->query($wpdb->prepare(
+            "INSERT IGNORE INTO `{$wpdb->options}` (`option_name`, `option_value`, `autoload`) VALUES (%s, %s, 'no')",
+            $name, (string) time()));
+        if ($got) {
+            return true;
+        }
+        $since = get_option($name);
+        if (!$retry || $since === false || (int) $since > time() - self::CLAIM_TTL) {
+            return false;
+        }
+        delete_option($name);
+        return self::claim($name, false);
+    }
+
+    private static function release(array $names): void {
+        foreach ($names as $name) {
+            delete_option($name);
+        }
+    }
+
+    private static function reply(bool $adopted, string $piece_id, array $checked, bool $content): array {
+        $post = $checked['post'];
+        return ['adopted' => $adopted, 'piece_id' => $piece_id, 'post_id' => $post->ID,
+                'language' => $checked['language'], 'post_type' => $post->post_type,
+                'title' => $post->post_title]
+            + ($content ? ['content' => $post->post_content] : [])
+            + ['status' => $post->post_status];
+    }
+
+    private static function refuse(string $code, string $reason): array {
+        return ['ok' => false, 'code' => $code, 'reason' => $reason];
+    }
+}

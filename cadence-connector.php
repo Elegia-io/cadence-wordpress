@@ -28,6 +28,7 @@ require_once __DIR__ . '/includes/class-cadence-link-request.php';
 require_once __DIR__ . '/includes/class-cadence-revision.php';
 require_once __DIR__ . '/includes/class-cadence-content-request.php';
 require_once __DIR__ . '/includes/class-cadence-replace-request.php';
+require_once __DIR__ . '/includes/class-cadence-adopt-request.php';
 require_once __DIR__ . '/includes/class-cadence-rest-route.php';
 require_once __DIR__ . '/includes/class-cadence-admin.php';
 
@@ -160,4 +161,30 @@ add_action('rest_api_init', static function (): void {
             return CadenceKey::authorises($request->get_header(CadenceKey::HEADER), 'content.replace');
         },
     ]);
+
+    // ADOPTING A POST THIS PLUGIN DID NOT CREATE, and its preview. Their own
+    // capability and nothing else: a key that may publish, replace and link
+    // must not thereby reach a post it did not make.
+    $adopt = static fn (string $method): array => [
+        'methods'  => 'POST',
+        'callback' => static function ($request) use ($method) {
+            $result = CadenceAdoptRequest::$method(
+                (array) $request->get_json_params(),
+                // THE TYPES THIS KEY NAMES. A key issued blank (null) adopts
+                // nothing, which `CadenceAdoptRequest` refuses on its own.
+                CadenceKey::publish_types_for($request->get_header(CadenceKey::HEADER)),
+                // The key's public id: what the adopted post is stamped with,
+                // so the linking route admits it for this key and no other.
+                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER)),
+                $request->get_header(CadenceAttestation::HEADER)
+            );
+            $answer = CadenceRestRoute::respond($result);
+            return new WP_REST_Response($answer['body'], $answer['status']);
+        },
+        'permission_callback' => static function ($request): bool {
+            return CadenceKey::authorises($request->get_header(CadenceKey::HEADER), 'content.adopt');
+        },
+    ];
+    register_rest_route('cadence/v1', '/adopt/preview', $adopt('preview'));
+    register_rest_route('cadence/v1', '/adopt', $adopt('run'));
 });

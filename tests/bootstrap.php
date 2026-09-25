@@ -178,6 +178,18 @@ final class WpStub {
     public static array $post_types = ['post', 'page'];
 
     /**
+     * TYPES REGISTERED BUT NOT PUBLIC-FACING, mirroring core's own
+     * `is_post_type_viewable()` for the two built-ins this suite needs:
+     * `revision` and `nav_menu_item`. Deliberately does NOT include
+     * `attachment` -- core really does answer true for it, and
+     * `CadenceKey::is_content_type` excludes it on its own grounds, which is
+     * the fact a test against this stub has to prove rather than assume.
+     *
+     * @var list<string>
+     */
+    public static array $non_viewable_types = ['revision', 'nav_menu_item'];
+
+    /**
      * IDS WHOSE CACHE HAS BEEN INVALIDATED, standing in for
      * `clean_post_cache()`. `get_post` answers from `$posts` -- the possibly
      * stale cache -- for every id not in here; once an id is cleared, it
@@ -232,6 +244,7 @@ final class WpStub {
         self::$row_override = [];
         self::$rows_gone = [];
         self::$cache_cleared = [];
+        self::$non_viewable_types = ['revision', 'nav_menu_item'];
         self::$update_throws = null;
         self::$next_post_id = 100;
         $GLOBALS['wpdb'] = new WpdbStub();
@@ -377,6 +390,16 @@ function get_post($post_id = null): ?WP_Post {
  */
 function clean_post_cache(int $post_id): void {
     WpStub::$cache_cleared[$post_id] = true;
+}
+
+/**
+ * Mirrors core's `is_post_type_viewable()`: true for a registered type that
+ * is public-facing. Modelled here as "registered, and not one of the
+ * built-ins WordPress itself never gives a front end" -- see
+ * `WpStub::$non_viewable_types`.
+ */
+function is_post_type_viewable(string $type): bool {
+    return post_type_exists($type) && !in_array($type, WpStub::$non_viewable_types, true);
 }
 
 /** Single-value meta, including WordPress's own answer for meta that is not there. */

@@ -908,6 +908,60 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertStringNotContainsString('page', $r['reason']);
     }
 
+    /**
+     * A NULL TYPE SCOPE IS "ANY REGISTERED TYPE", AND A REVISION IS ONE. A key
+     * issued before the type-scope field existed names no types at all, which
+     * the check above reads as reaching everything -- including a revision
+     * that happens to carry this piece's stamp (a plugin copying meta onto
+     * revisions can leave one carrying `_cadence_external_id` and
+     * `_cadence_key`), and `nav_menu_item`, which is likewise registered but
+     * not a piece of content. Neither is a post `/content` could ever have
+     * placed this identifier on through the normal path, so a replace
+     * reaching one is not a rewrite of the piece.
+     */
+    public function test_a_revision_or_a_nav_menu_item_is_refused_even_when_the_key_names_no_type(): void {
+        foreach ([21 => 'revision', 22 => 'nav_menu_item'] as $id => $type) {
+            WpStub::$posts[$id] = ['post_type' => $type, 'post_status' => 'publish',
+                                   'post_title' => 'Not a piece', 'post_content' => '<p>Not a piece.</p>'];
+            WpStub::$meta[$id][CadenceContentRequest::META] = 'piece-1';
+            WpStub::$meta[$id][CadenceContentRequest::KEY_META] = 'key-a';
+
+            $r = $this->replace([
+                'piece_id' => 'piece-1', 'post_id' => $id, 'revision' => 'whatever',
+                'title' => 'Taken', 'content' => '<p>Taken.</p>',
+            ], null, 'key-a');
+
+            $this->assertFalse($r['ok'], "a $type was rewritten by a key naming no type");
+            $this->assertSame('existing_post_type_out_of_scope', $r['code']);
+        }
+        $this->assertSame([], WpStub::$updated, 'nothing was written to either row');
+        $this->assertSame('Not a piece', WpStub::$posts[21]['post_title']);
+        $this->assertSame('Not a piece', WpStub::$posts[22]['post_title']);
+    }
+
+    /**
+     * ATTACHMENT IS DIFFERENT FROM THE OTHER TWO: `is_post_type_viewable`
+     * answers true for it, because an attachment has its own public page.
+     * Refused anyway, on Cadence's own grounds -- this connector never
+     * creates one, so a piece landing on one is not a piece it published.
+     */
+    public function test_an_attachment_is_refused_even_though_wordpress_calls_it_viewable(): void {
+        WpStub::$post_types[] = 'attachment';
+        WpStub::$posts[23] = ['post_type' => 'attachment', 'post_status' => 'publish',
+                              'post_title' => 'Not a piece', 'post_content' => ''];
+        WpStub::$meta[23][CadenceContentRequest::META] = 'piece-1';
+        WpStub::$meta[23][CadenceContentRequest::KEY_META] = 'key-a';
+
+        $r = $this->replace([
+            'piece_id' => 'piece-1', 'post_id' => 23, 'revision' => 'whatever',
+            'title' => 'Taken', 'content' => '<p>Taken.</p>',
+        ], null, 'key-a');
+
+        $this->assertFalse($r['ok'], 'an attachment was rewritten');
+        $this->assertSame('existing_post_type_out_of_scope', $r['code']);
+        $this->assertSame([], WpStub::$updated);
+    }
+
     /** THE ACCEPT-PROOFS EITHER SIDE OF IT: the named type, and no type named. */
     #[Group('wpml')]
     public function test_a_piece_in_a_type_the_key_names_is_rewritten(): void {

@@ -190,6 +190,33 @@ final class CadenceKey {
     }
 
     /**
+     * IS THIS A TYPE CADENCE MAY REPLACE OR LINK A POST OF?
+     *
+     * `null` on the type-scope field of a key means ANY REGISTERED TYPE --
+     * the compatibility value a key issued before the field existed carries
+     * -- and `revision` is a registered type, as is `nav_menu_item`. Without
+     * this, a key naming no types reaches a revision that happens to carry
+     * this piece's stamp (a plugin that copies meta onto revisions, as ACF
+     * does with its own fields, can leave one carrying
+     * `_cadence_external_id`), and a replace or a link over it is not an act
+     * on the piece -- it is a write to a row `/content` never returned and no
+     * reader will ever see.
+     *
+     * `revision` is excluded explicitly rather than left to
+     * `is_post_type_viewable`, which core also answers false for it, because
+     * the exclusion must hold even if that ever changed. `attachment` is
+     * excluded on this plugin's own grounds and NOT core's:
+     * `is_post_type_viewable('attachment')` is true, because an attachment
+     * has its own public page, but Cadence never creates one and a piece
+     * landing on one is not a piece this connector could have published.
+     * Every other publicly viewable type -- `post`, `page`, and a plugin's
+     * own custom type registered `public` or `publicly_queryable` -- passes.
+     */
+    public static function is_content_type(string $type): bool {
+        return $type !== 'revision' && $type !== 'attachment' && is_post_type_viewable($type);
+    }
+
+    /**
      * THE PUBLIC ID A PRESENTED KEY AUTHENTICATES AS, or null.
      *
      * The id and never the secret: this is what gets written into a post's meta

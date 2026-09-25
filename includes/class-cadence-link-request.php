@@ -354,6 +354,19 @@ final class CadenceLinkRequest {
             // Nothing leaks by letting it through: reaching the type check at
             // all means the entitlement check already said yes.
             $type = get_post_type($p['post_id']);
+            // AND THE POST IS A CONTENT TYPE AT ALL, before the key's own
+            // scope is even asked -- the identical guard on
+            // `/content/replace`, for the identical reason: a null (wide)
+            // scope must not be read as reaching a revision or an
+            // attachment, which this plugin never creates. `$type === false`
+            // is an absent post, not a type question, and falls through
+            // unchanged to `validate_against_site` below, which names the
+            // true reason -- the post does not exist.
+            if ($type !== false && !CadenceKey::is_content_type($type)) {
+                return ['ok' => false, 'code' => 'link_post_type_out_of_scope', 'reason' => sprintf(
+                    'post %d is of a type this key does not reach; nothing was linked',
+                    $p['post_id'])];
+            }
             if ($post_types !== null && $type !== false
                     && !in_array($type, $post_types, true)) {
                 // The id the caller sent and the key's OWN scope, which is the

@@ -1671,8 +1671,15 @@ final class LinkRequestTest extends TestCase {
      */
     #[Group('wpml')]
     public function test_the_type_refusal_names_the_keys_scope_and_not_the_posts_type(): void {
-        WpStub::add_post(1, 'attachment', 'en', null);
-        WpStub::add_post(2, 'attachment', 'de', null);
+        // A registered, viewable type outside the key's scope -- NOT
+        // `attachment`, which `CadenceKey::is_content_type` now refuses on
+        // its own grounds before this scope check is even asked; that
+        // refusal is pinned separately (see
+        // `test_a_revision_a_nav_menu_item_or_an_attachment_is_refused_even_when_the_key_names_no_type`),
+        // and using it here would test that branch instead of this one.
+        WpStub::$post_types[] = 'product';
+        WpStub::add_post(1, 'product', 'en', null);
+        WpStub::add_post(2, 'product', 'de', null);
         $this->ours(1, 2);
 
         $r = $this->link(
@@ -1685,6 +1692,38 @@ final class LinkRequestTest extends TestCase {
         $this->assertStringContainsString('post, landing_page', $r['reason']);
         $this->assertStringContainsString('1', $r['reason']);
         // NOT the type the post is actually in.
-        $this->assertStringNotContainsString('attachment', $r['reason']);
+        $this->assertStringNotContainsString('product', $r['reason']);
+    }
+
+    /**
+     * A NULL TYPE SCOPE IS "ANY REGISTERED TYPE", AND A REVISION IS ONE. A key
+     * issued before the type-scope field existed names no types at all, which
+     * `$post_types !== null` above reads as reaching everything -- including
+     * a revision or a `nav_menu_item` this connector marked as its own (a
+     * plugin copying meta onto revisions can leave one carrying the
+     * `translation.link` scope stamp), and linking either into a translation
+     * group is not an act on a piece of content.
+     */
+    #[Group('wpml')]
+    public function test_a_revision_a_nav_menu_item_or_an_attachment_is_refused_even_when_the_key_names_no_type(): void {
+        foreach ([11 => 'revision', 12 => 'nav_menu_item', 13 => 'attachment'] as $id => $type) {
+            WpStub::reset();
+            WpStub::$post_types[] = 'attachment';
+            WpStub::add_post(1, 'page', 'en', 5);
+            WpStub::add_post($id, $type, 'de', 5);
+            $this->ours(1, $id);
+
+            // SAME `element_type` AS THE SOURCE (`post_page`): a mismatched
+            // one would be refused by the plan's own same-type rule first,
+            // which is a different refusal from the one under test here.
+            $r = $this->link($this->plan(['translations' => [
+                ['post_id' => $id, 'language_code' => 'de',
+                 'element_type' => 'post_page', 'source_language_code' => 'en'],
+            ]]), null);
+
+            $this->assertFalse($r['ok'], "a $type was linked by a key naming no type");
+            $this->assertSame('link_post_type_out_of_scope', $r['code']);
+            $this->assertSame([], WpStub::$writes, "a $type was written to despite the refusal");
+        }
     }
 }

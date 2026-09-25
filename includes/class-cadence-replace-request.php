@@ -209,6 +209,20 @@ final class CadenceReplaceRequest {
                     : 'not a piece this connector published')];
         }
 
+        // AND THE POST IS A CONTENT TYPE AT ALL -- ASKED BEFORE THE KEY'S OWN
+        // SCOPE, AND EVEN WHEN THE KEY NAMES NONE. `$post_types === null`
+        // means any registered type, and a revision -- or an attachment,
+        // which this plugin never creates -- is a registered type; without
+        // this, a key issued before the scope field existed reaches a
+        // revision that happens to carry this piece's stamp. SAME CODE as
+        // the scope check below: an operator's fix for either is the same
+        // sentence away, name a real post type.
+        if (!CadenceKey::is_content_type(get_post_type($fields['post_id']))) {
+            return ['ok' => false, 'code' => 'existing_post_type_out_of_scope', 'reason' => sprintf(
+                'the piece %s is on a post of a type this key does not publish into; '
+                . 'nothing was written', $fields['piece_id'])];
+        }
+
         // AND THE PIECE IS IN A TYPE THIS KEY STILL REACHES.
         //
         // WHAT IT PROTECTS, which is the only reason it is here: the

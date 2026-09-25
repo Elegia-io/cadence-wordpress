@@ -547,6 +547,57 @@ final class ContentRequestTest extends TestCase {
     }
 
     /**
+     * AND AN AUTO-DRAFT DOES TOO. The other status WordPress's own `'any'`
+     * leaves out, so a lookup that just swapped `'any'` for a status list
+     * missing this one would still resurrect a piece parked here.
+     */
+    #[Group('wpml')]
+    public function test_an_auto_draft_answers_for_its_identifier(): void {
+        $first = $this->publish($this->body(['status' => 'publish']));
+        WpStub::$posts[$first['post_id']]['post_status'] = 'auto-draft';
+
+        $again = $this->publish($this->body(['status' => 'publish']));
+        $this->assertTrue($again['ok'], $again['reason'] ?? '');
+        $this->assertFalse($again['created']);
+        $this->assertSame($first['post_id'], $again['post_id']);
+    }
+
+    /**
+     * A REVISION CARRYING THE IDENTIFIER IS NEVER THE ANSWER. WordPress
+     * registers `revision` as a post type too, and a plugin that copies post
+     * meta onto revisions -- ACF does this with its own fields, and core does
+     * it for meta registered `revisions_enabled` -- can leave a revision
+     * stamped with this same identifier and the same creating-key stamp. The
+     * lookup has to skip it and answer with the post it belongs to, not a
+     * revision no later call can act on.
+     *
+     * THE REVISION IS THE FIRST CANDIDATE IN THE STUB'S OWN ORDER, so this
+     * proves the post type is filtered rather than the parent simply being
+     * asked first.
+     */
+    #[Group('wpml')]
+    public function test_a_revision_carrying_the_identifier_is_never_returned(): void {
+        WpStub::$post_types[] = 'revision';
+        $keyId = CadenceAttest::KEY_ID;
+
+        WpStub::add_post(1, 'revision', null, null, true, 'inherit');
+        WpStub::$posts[1]['post_status'] = 'inherit';
+        WpStub::$meta[1][CadenceContentRequest::META] = 'piece-with-a-revision';
+        WpStub::$meta[1][CadenceContentRequest::KEY_META] = $keyId;
+
+        WpStub::add_post(2, 'post', null, null, true, 'publish');
+        WpStub::$posts[2]['post_status'] = 'publish';
+        WpStub::$meta[2][CadenceContentRequest::META] = 'piece-with-a-revision';
+        WpStub::$meta[2][CadenceContentRequest::KEY_META] = $keyId;
+
+        $again = $this->publish($this->body(['piece_id' => 'piece-with-a-revision']));
+        $this->assertTrue($again['ok'], $again['reason'] ?? '');
+        $this->assertFalse($again['created']);
+        $this->assertSame(2, $again['post_id'],
+            'the lookup answered with the revision, not the post it belongs to');
+    }
+
+    /**
      * THE IDENTIFIER IS WRITTEN BY THE INSERT ITSELF, not after it. A separate
      * `update_post_meta` leaves a window in which the post exists and carries
      * no identifier, and a retry landing inside that window creates the

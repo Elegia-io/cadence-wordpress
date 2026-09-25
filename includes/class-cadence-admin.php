@@ -203,7 +203,7 @@ final class CadenceAdmin {
                 // byline below.
                 . '<td>' . (isset($record['post_types'])
                     ? esc_html(implode(', ', (array) $record['post_types']))
-                    : 'any type — re-issue to scope') . '</td>'
+                    : 'any type (re-issue to scope)') . '</td>'
                 // A KEY ISSUED BEFORE KEYS CARRIED A BYLINE says so here.
                 // Posts it creates have no author, as they always have; this
                 // is the only place that fact is visible, and re-issuing the
@@ -213,7 +213,7 @@ final class CadenceAdmin {
                     // there is to show, and blank would read as no byline.
                     ? esc_html(get_the_author_meta('display_name', (int) $record['author'])
                                ?: '#' . (int) $record['author'])
-                    : 'none — re-issue to set one') . '</td>'
+                    : 'none (re-issue to set one)') . '</td>'
                 . '<td>' . wp_kses(self::attestation_cell($id),
                     ['code' => [], 'br' => [], 'em' => []]) . '</td>'
                 . '<td>' . ($record['revoked_at'] === null ? 'active' : 'revoked') . '</td><td>';
@@ -264,7 +264,7 @@ final class CadenceAdmin {
         if ($keys === []) {
             // NOT BLANK, because blank reads as "fine". A key with no public
             // key refuses every signed publish it is ever presented for.
-            return '<em>none — every signed publish is refused</em>';
+            return '<em>none: every signed publish is refused</em>';
         }
         $out = [];
         foreach ($keys as $record) {
@@ -288,7 +288,7 @@ final class CadenceAdmin {
         }
         echo '<h2>Attestation keys</h2>';
         echo '<p>The public half of the key the pipeline signs with. Paste it here by hand: '
-            . 'there is no upload route and no API that can write it, deliberately — whoever can '
+            . 'there is no upload route and no API that can write it, deliberately: whoever can '
             . 'set this key can sign anything as this tenant. A key may hold '
             . esc_html((string) CadenceKey::MAX_VERIFY_KEYS)
             . ' at once, so a rotation has an overlap window; remove the retired one to make room '

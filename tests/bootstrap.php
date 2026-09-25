@@ -724,21 +724,60 @@ function update_post_meta(int $post_id, string $key, $value): bool {
     return true;
 }
 
+/**
+ * The post types this site has registered, name => name -- WordPress's own
+ * shape for `get_post_types()` called with no arguments.
+ */
+function get_post_types(): array {
+    return array_combine(WpStub::$post_types, WpStub::$post_types);
+}
+
+/**
+ * Every status name this stub knows, standing in for `get_post_stati()`:
+ * WordPress's built-ins, `trash` and `auto-draft` included -- the two
+ * `'any'` leaves out.
+ */
+function get_post_stati(): array {
+    $names = ['publish', 'future', 'draft', 'pending', 'private', 'trash', 'auto-draft', 'inherit'];
+    return array_combine($names, $names);
+}
+
 /** Only the meta_key/meta_value/fields=ids shape the plugin asks for. */
 function get_posts(array $args = []): array {
     $key = $args['meta_key'] ?? null;
     $value = $args['meta_value'] ?? null;
     $want_status = $args['post_status'] ?? 'publish';
+    $want_type = $args['post_type'] ?? null;
+    // `'any'` is WORDPRESS'S OWN EXCLUSION, not "every status": a status
+    // registered `exclude_from_search` is left out of it, and `trash` and
+    // `auto-draft` are the built-ins that are. A caller that means every
+    // status, trash included, has to name the explicit list -- `'any'` will
+    // not get it there, here or on a real site.
+    $any_excludes = ['trash', 'auto-draft'];
     $found = [];
     foreach (WpStub::$meta as $id => $meta) {
         // Exact, never a prefix: `piece-1` must not answer for `piece-10`.
         if (!array_key_exists($key, $meta) || $meta[$key] !== $value) {
             continue;
         }
-        // WordPress's default is publish-only; honoured here so that asking
-        // for the default rather than `any` is a difference a test can see.
+        $type = WpStub::$posts[$id]['post_type'] ?? 'post';
+        if (is_array($want_type)) {
+            if (!in_array($type, $want_type, true)) {
+                continue;
+            }
+        } elseif ($want_type !== null && $want_type !== 'any' && $type !== $want_type) {
+            continue;
+        }
         $status = WpStub::$posts[$id]['post_status'] ?? 'draft';
-        if ($want_status !== 'any' && $status !== $want_status) {
+        if ($want_status === 'any') {
+            if (in_array($status, $any_excludes, true)) {
+                continue;
+            }
+        } elseif (is_array($want_status)) {
+            if (!in_array($status, $want_status, true)) {
+                continue;
+            }
+        } elseif ($status !== $want_status) {
             continue;
         }
         $found[] = $id;

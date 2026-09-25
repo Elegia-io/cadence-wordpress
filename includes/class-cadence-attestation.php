@@ -487,12 +487,20 @@ final class CadenceAttestation {
      * not the scheme's default, and its path with no trailing slash, with no
      * scheme. `example.test` or `example.test/blog`. The path is part of it
      * so two installs sharing one host cannot accept each other's body.
+     *
+     * THE `home` OPTION, NEVER `home_url()`: WPML's directory mode filters
+     * that to the current language's URL (`example.test/de`), which is not
+     * the endpoint Cadence signs. An IPv6 host keeps its brackets
+     * (`[::1]:8443`). A non-ASCII host is lowercased with mbstring where the
+     * site has it; without it only ASCII letters are, so an uppercase
+     * non-ASCII letter refuses as another site and never matches one.
      */
     public static function site(): string {
-        $parts = wp_parse_url(home_url());
+        $parts = wp_parse_url((string) get_option('home'));
         $parts = is_array($parts) ? $parts : [];
         $scheme = strtolower((string) ($parts['scheme'] ?? ''));
-        $site = strtolower((string) ($parts['host'] ?? ''));
+        $host = (string) ($parts['host'] ?? '');
+        $site = function_exists('mb_strtolower') ? mb_strtolower($host, 'UTF-8') : strtolower($host);
         $port = $parts['port'] ?? null;
         if ($port !== null && $port !== (['https' => 443, 'http' => 80][$scheme] ?? null)) {
             $site .= ':' . $port;

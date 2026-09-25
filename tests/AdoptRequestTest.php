@@ -181,6 +181,24 @@ final class AdoptRequestTest extends TestCase {
         $this->assertTrue(self::adopt(self::body(['site' => 'example.test/blog']))['ok']);
     }
 
+    /**
+     * WPML'S DIRECTORY MODE filters `home_url()` to the current language's
+     * URL. The site Cadence signs is the site address, so the adopt lands.
+     */
+    #[Group('wpml')]
+    public function test_row_3_a_language_filter_on_home_url_is_not_the_site(): void {
+        WpStub::$home_url_filter = static fn (string $url): string => rtrim($url, '/') . '/en/';
+        $this->assertSame('https://example.test/en/', home_url());
+        $r = self::adopt(self::body());
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+    }
+
+    /** The twin: a site address that itself carries that path is another site. */
+    public function test_row_3_twin_a_path_in_the_home_option_is_refused(): void {
+        WpStub::$options['home'] = 'https://example.test/en';
+        $this->assertSame('adopt_wrong_site', self::adopt(self::body())['code']);
+    }
+
     public function test_row_4_a_body_outside_the_window_is_expired(): void {
         $this->assertSame('adopt_expired', self::adopt(self::body(['issued_at' => self::now(-301)]))['code']);
         $this->assertSame('adopt_expired', self::adopt(self::body(['issued_at' => self::now(301)]))['code']);
@@ -476,6 +494,46 @@ final class AdoptRequestTest extends TestCase {
         $this->assertSame([], WpStub::$meta_added);
         $this->assertSame([], array_filter(array_keys(WpStub::$options),
             static fn ($k) => str_starts_with($k, 'cadence_adopt_')), 'a claim was left behind');
+    }
+
+    /** A COMMIT THE DATABASE REFUSES is a rollback, and nothing is left. */
+    #[Group('wpml')]
+    public function test_a_commit_that_fails_rolls_back_and_writes_nothing(): void {
+        $GLOBALS['wpdb']->fails_on = 'COMMIT';
+        $r = self::adopt(self::body());
+        $this->assertSame('adopt_failed', $r['code'] ?? null, $r['reason'] ?? '');
+        $this->assertSame(['START TRANSACTION', 'COMMIT', 'ROLLBACK'],
+            $GLOBALS['wpdb']->statements('START TRANSACTION', 'COMMIT', 'ROLLBACK'));
+        $this->assertSame([], WpStub::$meta[41] ?? [], 'a part-written adoption was left behind');
+        $this->assertSame([], array_filter(array_keys(WpStub::$options),
+            static fn ($k) => str_starts_with($k, 'cadence_adopt_')), 'a claim was left behind');
+    }
+
+    /** A PIECE LOOKUP THAT FAILS UNDER THE CLAIMS counts as found: busy, nothing written. */
+    #[Group('wpml')]
+    public function test_a_failed_piece_lookup_under_the_claims_is_busy(): void {
+        WpStub::$on_claim = static function (): void {
+            $GLOBALS['wpdb']->get_col_fails = true;
+        };
+        $r = self::adopt(self::body());
+        $this->assertSame('adopt_busy', $r['code'] ?? null, $r['reason'] ?? '');
+        $this->assertSame([], WpStub::$meta_added);
+        $this->assertSame([], array_filter(array_keys(WpStub::$options),
+            static fn ($k) => str_starts_with($k, 'cadence_adopt_')), 'a claim was left behind');
+    }
+
+    /**
+     * A STALE CLAIM THE OPTIONS CACHE CALLS ABSENT. A persistent object cache
+     * can hold the name in `notoptions`; the table still has the dead
+     * request's claim, and only a read of the table takes it over.
+     */
+    #[DataProvider('held')]
+    #[Group('wpml')]
+    public function test_a_stale_claim_hidden_by_notoptions_is_taken_over(string $option): void {
+        WpStub::$options[$option] = (string) (time() - 61);
+        WpStub::$notoptions = [$option];
+        $r = self::adopt(self::body());
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
     }
 
     #[Group('wpml')]
@@ -982,8 +1040,10 @@ final class AdoptRequestTest extends TestCase {
     #[DataProvider('changed_under_the_claim')]
     #[Group('wpml')]
     public function test_the_post_is_read_again_under_the_claim(array $change, string $want): void {
+        // THE ROW CHANGES AND THIS REQUEST'S CACHED COPY DOES NOT: only a
+        // read after the post cache is cleared sees the change.
         WpStub::$on_claim = static function () use ($change): void {
-            WpStub::$posts[41] = array_merge(WpStub::$posts[41], $change);
+            WpStub::$row_override[41] = $change;
         };
         $r = self::adopt(self::body());
         if ($want === 'ok') {

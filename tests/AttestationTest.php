@@ -1331,4 +1331,35 @@ final class AttestationTest extends TestCase {
                            'overwrite_adopted', 'site', 'issued_at'],
             CadenceAttestation::signed_field_order('/content/replace', $eight['fields']));
     }
+
+    /**
+     * THE SAME LIST, IN THE SAME ORDER, AS THE SPINE'S `SITE_PARITY`. Each
+     * side pins the other's output: a row changed on one side only is a site
+     * that refuses every adopt, release and rewrite confirmation as signed
+     * for another site.
+     */
+    public static function site_parity(): array {
+        $rows = [
+            ['https://[::1]/blog', '[::1]/blog'],
+            ['https://[::1]:8443/blog', '[::1]:8443/blog'],
+            ['https://[2001:DB8::1]:8443/', '[2001:db8::1]:8443'],
+            ["https://\u{00C9}XAMPLE.TEST/", "\u{00E9}xample.test"],
+            ['https://example.test:443/', 'example.test'],
+            ['http://example.test:80/', 'example.test'],
+            ['https://example.test:80/', 'example.test:80'],
+            ['http://example.test:443/', 'example.test:443'],
+            ['https://Example.TEST/Blog/', 'example.test/Blog'],
+            ['https://example.test/index.php', 'example.test/index.php'],
+            ['https://example.test/blog/', 'example.test/blog'],
+            ['https://example.test', 'example.test'],
+        ];
+        return array_combine(array_column($rows, 0), $rows);
+    }
+
+    #[DataProvider('site_parity')]
+    public function test_site_matches_the_spines_normalisation(string $home, string $site): void {
+        WpStub::reset();
+        WpStub::$options['home'] = $home;
+        $this->assertSame($site, CadenceAttestation::site());
+    }
 }

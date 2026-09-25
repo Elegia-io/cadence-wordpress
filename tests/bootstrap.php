@@ -309,6 +309,25 @@ final class WpStub {
      */
     public static array $on_option_read = [];
 
+    /**
+     * A FILTER ON `home_url`, as WPML's directory mode adds one: `home_url()`
+     * then answers the current language's URL (`https://x/de`) while the
+     * `home` option still holds the site address.
+     *
+     * @var callable|null
+     */
+    public static $home_url_filter = null;
+
+    /**
+     * NAMES `get_option` ANSWERS AS ABSENT whatever the table holds: the
+     * `notoptions` cache a persistent object cache keeps, poisoned by a read
+     * made before another request wrote the row. Only a query on the options
+     * table itself sees past it.
+     *
+     * @var list<string>
+     */
+    public static array $notoptions = [];
+
     public static function read(string $what): void {
         self::$reads[$what] = (self::$reads[$what] ?? 0) + 1;
     }
@@ -364,6 +383,8 @@ final class WpStub {
         self::$query_cache_on = false;
         self::$query_cache = [];
         self::$on_option_read = [];
+        self::$home_url_filter = null;
+        self::$notoptions = [];
     }
 
     public static function add_post(int $id, string $post_type = 'page',
@@ -429,6 +450,9 @@ final class WpdbStub {
     /** A statement prefix `query` answers false to, as a failing one does. */
     public ?string $fails_on = null;
 
+    /** When true, `get_col` fails as a real one does: an empty array and `last_error` set. */
+    public bool $get_col_fails = false;
+
     public function prepare(string $sql, ...$args): string {
         foreach ($args as $arg) {
             $sql = preg_replace_callback('/%[ds]/', static fn (array $m): string => $m[0] === '%d'
@@ -479,6 +503,10 @@ final class WpdbStub {
     public function get_col(string $sql): array {
         $this->log[] = $sql;
         WpStub::read('wpdb:get_col');
+        if ($this->get_col_fails) {
+            $this->last_error = 'Deadlock found when trying to get lock';
+            return [];
+        }
         if (preg_match("/\\ASELECT `post_id` FROM `wp_postmeta` WHERE `meta_key` = '((?:[^'\\\\]|\\\\.)*)' AND `meta_value` = '((?:[^'\\\\]|\\\\.)*)'\\z/s",
                        $sql, $m) !== 1) {
             return [];
@@ -494,6 +522,27 @@ final class WpdbStub {
             }
         }
         return $ids;
+    }
+
+    /**
+     * One value. Only one option's value by exact name, read from the table
+     * and never through `get_option`'s caches; null when the row is absent.
+     */
+    public function get_var(string $sql): ?string {
+        $this->log[] = $sql;
+        if (preg_match("/\\ASELECT `option_value` FROM `wp_options` WHERE `option_name` = '([^']*)'\\z/s",
+                       $sql, $m) !== 1) {
+            return null;
+        }
+        $name = stripslashes($m[1]);
+        WpStub::read('wpdb:option:' . $name);
+        $value = array_key_exists($name, WpStub::$options) ? (string) WpStub::$options[$name] : null;
+        if (isset(WpStub::$on_option_read[$name])) {
+            $hook = WpStub::$on_option_read[$name];
+            unset(WpStub::$on_option_read[$name]);
+            $hook();
+        }
+        return $value;
     }
 
     /** The row, or null -- for a row that is not there and for a failed read alike. */
@@ -1055,7 +1104,8 @@ function wp_slash($value) {
 }
 
 function home_url(string $path = ''): string {
-    return rtrim(WpStub::$home, '/') . '/' . ltrim($path, '/');
+    $url = rtrim(WpStub::$home, '/') . '/' . ltrim($path, '/');
+    return WpStub::$home_url_filter !== null ? (WpStub::$home_url_filter)($url, $path) : $url;
 }
 
 function wp_parse_url(string $url, int $component = -1) {
@@ -1198,7 +1248,12 @@ function delete_transient(string $key): bool {
 
 function get_option(string $name, $default = false) {
     WpStub::read('get_option:' . $name);
-    $value = array_key_exists($name, WpStub::$options) ? WpStub::$options[$name] : $default;
+    // The site address, stored with no trailing slash, unless a test set its own.
+    if ($name === 'home' && !array_key_exists('home', WpStub::$options)) {
+        return rtrim(WpStub::$home, '/');
+    }
+    $value = !in_array($name, WpStub::$notoptions, true) && array_key_exists($name, WpStub::$options)
+        ? WpStub::$options[$name] : $default;
     if (isset(WpStub::$on_option_read[$name])) {
         $hook = WpStub::$on_option_read[$name];
         unset(WpStub::$on_option_read[$name]);

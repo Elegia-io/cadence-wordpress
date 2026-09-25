@@ -600,6 +600,18 @@ and no scheme: `example.test`, or `example.test/blog` for a site at
 so does a rewrite confirmation (below). A body that names another site is
 refused, including another install on the same host under a different path.
 
+The home URL here is the **Site Address** in *Settings > General*, not a
+language's URL: with WPML adding the language as a directory
+(`example.test/de`), the site is still `example.test`. An IPv6 address keeps
+its brackets (`[2001:db8::1]:8443`).
+
+**Configure Cadence with the Site Address exactly as WordPress spells it.**
+A domain with non-ASCII letters has two spellings, the Unicode one
+(`bücher.example`) and the punycode one (`xn--bcher-kva.example`), and they
+do not match each other. If the Site Address uses one, the endpoint Cadence is
+given must use the same one, or every adopt, release and rewrite confirmation
+is refused as signed for another site.
+
 The link accepted is either this site's own wp-admin edit link
 (`post.php?post=<id>`, on this site's own host) or the post's public
 permalink; anything else, including an edit link for another site, resolves

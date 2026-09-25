@@ -682,8 +682,12 @@ final class CadenceAdoptRequest {
         if ($got) {
             return true;
         }
-        $since = get_option($name);
-        if (!$retry || $since === false || (int) $since > time() - self::CLAIM_TTL) {
+        // THE TABLE, NOT `get_option`: a persistent object cache can hold this
+        // name in `notoptions` from a read made before the claim was written,
+        // and a crashed request's claim would then never be taken over.
+        $since = $wpdb->get_var($wpdb->prepare(
+            "SELECT `option_value` FROM `{$wpdb->options}` WHERE `option_name` = %s", $name));
+        if (!$retry || $since === null || (int) $since > time() - self::CLAIM_TTL) {
             return false;
         }
         // COMPARE-AND-DELETE: only the stale claim this request read goes. A

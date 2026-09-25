@@ -747,6 +747,7 @@ function get_posts(array $args = []): array {
     $key = $args['meta_key'] ?? null;
     $value = $args['meta_value'] ?? null;
     $want_status = $args['post_status'] ?? 'publish';
+    $want_type = $args['post_type'] ?? null;
     // `'any'` is WORDPRESS'S OWN EXCLUSION, not "every status": a status
     // registered `exclude_from_search` is left out of it, and `trash` and
     // `auto-draft` are the built-ins that are. A caller that means every
@@ -757,6 +758,14 @@ function get_posts(array $args = []): array {
     foreach (WpStub::$meta as $id => $meta) {
         // Exact, never a prefix: `piece-1` must not answer for `piece-10`.
         if (!array_key_exists($key, $meta) || $meta[$key] !== $value) {
+            continue;
+        }
+        $type = WpStub::$posts[$id]['post_type'] ?? 'post';
+        if (is_array($want_type)) {
+            if (!in_array($type, $want_type, true)) {
+                continue;
+            }
+        } elseif ($want_type !== null && $want_type !== 'any' && $type !== $want_type) {
             continue;
         }
         $status = WpStub::$posts[$id]['post_status'] ?? 'draft';

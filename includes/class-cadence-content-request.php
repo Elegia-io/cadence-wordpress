@@ -510,7 +510,14 @@ final class CadenceContentRequest {
             // the private custom type a client's own plugin might put this
             // piece in -- so it would leave the one place most worth finding
             // unsearched.
-            'post_type'      => array_values(get_post_types()),
+            //
+            // EXCEPT `revision`, WHICH THIS SITE ALSO REGISTERS. A plugin
+            // that copies post meta onto revisions -- ACF does this with its
+            // own fields, and core does for meta registered
+            // `revisions_enabled` -- can leave a revision carrying this same
+            // identifier, and this lookup answering with a revision id would
+            // hand a later replace something that is not a post.
+            'post_type'      => array_values(array_diff(get_post_types(), ['revision'])),
             // EVERY STATUS THIS SITE REGISTERS, named explicitly, for the
             // same reason: `'any'` excludes `trash` and `auto-draft`. A piece
             // whose post was moved to the trash still HAS this identifier,

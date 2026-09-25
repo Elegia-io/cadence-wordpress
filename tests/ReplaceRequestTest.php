@@ -1191,6 +1191,7 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertArrayNotHasKey(CadenceReplaceRequest::SPENT_META, WpStub::$meta[$post_id] ?? []);
     }
 
+    #[Group('wpml')]
     public function test_an_adopted_post_is_not_rewritten_without_the_confirmation(): void {
         $p = $this->adopted();
         $r = $this->replace($this->body($p));
@@ -1199,6 +1200,7 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     /** THE TWIN: the same body with the three fields under the signature is written. */
+    #[Group('wpml')]
     public function test_an_adopted_post_is_rewritten_over_a_signed_confirmation(): void {
         $p = $this->adopted();
         $body = $this->body($p, self::confirmation());
@@ -1216,6 +1218,7 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     /** A post this connector created needs no confirmation, and none of the five is asked. */
+    #[Group('wpml')]
     public function test_a_created_post_is_rewritten_with_no_confirmation_and_none_is_asked(): void {
         $p = $this->publish();
         $this->assertTrue($this->replace($this->body($p))['ok']);
@@ -1229,6 +1232,7 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     /** The three fields outside their signature: a five-field signature over an eight-field body. */
+    #[Group('wpml')]
     public function test_the_confirmation_outside_its_signature_is_a_mismatch_and_reads_nothing(): void {
         $p = $this->adopted();
         $five = $this->body($p);
@@ -1242,6 +1246,7 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertSame([], WpStub::$updated);
     }
 
+    #[Group('wpml')]
     public function test_false_under_the_signature_refuses_like_absence(): void {
         $p = $this->adopted();
         $r = $this->replace($this->body($p, self::confirmation(['overwrite_adopted' => false])));
@@ -1265,6 +1270,7 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     /** Every shape error is `bad_replacement`, before the attestation and before any read. */
+    #[Group('wpml')]
     #[\PHPUnit\Framework\Attributes\DataProvider('malformed_confirmations')]
     public function test_a_confirmation_not_its_shape_is_bad_replacement_and_reads_nothing(array $over): void {
         $p = $this->adopted();
@@ -1280,6 +1286,7 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     /** The exempt key with no header: the confirmation would be unsigned. */
+    #[Group('wpml')]
     public function test_an_exempt_confirmation_is_refused_and_its_signed_twin_passes(): void {
         $p = $this->adopted();
         CadenceAttest::exempt_key();
@@ -1293,6 +1300,7 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertSame('The rewrite', WpStub::$posts[$p['post_id']]['post_title']);
     }
 
+    #[Group('wpml')]
     public function test_a_confirmation_for_another_site_is_refused_and_its_own_host_passes(): void {
         $p = $this->adopted();
         $r = $this->replace($this->body($p, self::confirmation(['site' => 'staging.example.test'])));
@@ -1301,6 +1309,7 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertTrue($this->replace($this->body($p, self::confirmation(['site' => 'example.test'])))['ok']);
     }
 
+    #[Group('wpml')]
     public function test_a_confirmation_301_seconds_from_the_clock_is_refused_and_now_passes(): void {
         $p = $this->adopted();
         foreach ([-301, 301] as $offset) {
@@ -1311,6 +1320,7 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertTrue($this->replace($this->body($p, self::confirmation()))['ok']);
     }
 
+    #[Group('wpml')]
     public function test_the_same_verified_confirmation_twice_is_spent(): void {
         $p = $this->adopted();
         $body = $this->body($p, self::confirmation());
@@ -1330,6 +1340,7 @@ final class ReplaceRequestTest extends TestCase {
      * post back on the revision a captured confirmed body names. Replayed
      * inside the window, that body is refused on the spent record alone.
      */
+    #[Group('wpml')]
     public function test_a_captured_confirmation_replayed_after_a_restore_is_spent(): void {
         $p = $this->adopted();
         $body = $this->body($p, self::confirmation());
@@ -1356,6 +1367,7 @@ final class ReplaceRequestTest extends TestCase {
      * unchanged text: the site holds no record of a send it never saw, and
      * this is the retry `/content/replace` documents.
      */
+    #[Group('wpml')]
     public function test_a_confirmed_body_whose_first_send_was_lost_lands_inside_the_window(): void {
         $p = $this->adopted();
         $body = $this->body($p, self::confirmation(['issued_at' => gmdate('Y-m-d\TH:i:s\Z', time() - 290)]));
@@ -1383,6 +1395,7 @@ final class ReplaceRequestTest extends TestCase {
      * back on the revision X names, and X replayed inside its window is
      * refused on its own record, not only on the last one.
      */
+    #[Group('wpml')]
     public function test_an_older_confirmation_stays_spent_after_a_newer_one_lands(): void {
         $p = $this->adopted();
         $x = $this->body($p, self::confirmation(['issued_at' => gmdate('Y-m-d\TH:i:s\Z', time() - 20)]));
@@ -1414,6 +1427,8 @@ final class ReplaceRequestTest extends TestCase {
      * `confirmation_spent`, including when the rewrite leaves the text as it
      * was and the revision would still agree.
      */
+    #[Group('wpml')]
+    #[Group('wpml')]
     #[\PHPUnit\Framework\Attributes\DataProvider('unchanged_or_changed')]
     public function test_two_concurrent_copies_of_one_confirmation_write_once(string $title): void {
         $p = $this->adopted();

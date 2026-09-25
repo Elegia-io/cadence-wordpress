@@ -988,6 +988,7 @@ final class ContentRequestTest extends TestCase {
      * here, no confirmed rewrite could be composed. The boundary over that
      * rewrite is the confirmation `/content/replace` asks for, not this.
      */
+    #[Group('wpml')]
     public function test_the_repeat_carries_the_revision_on_an_adopted_post_and_on_a_created_one(): void {
         foreach (['created' => false, 'adopted' => true] as $label => $adopt) {
             WpStub::reset();

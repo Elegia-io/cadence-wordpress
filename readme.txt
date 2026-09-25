@@ -4,7 +4,7 @@ Tags: rest-api, wpml, multilingual, publishing, translation
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 0.7.0
+Stable tag: 0.8.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -46,7 +46,7 @@ https://github.com/Elegia-io/cadence-wordpress
 
 1. Install through **Plugins → Add New**, or upload the plugin directory to
    `wp-content/plugins/`.
-2. Activate it. The three endpoints go live under `/wp-json/cadence/v1/`.
+2. Activate it. The seven endpoints go live under `/wp-json/cadence/v1/`.
 3. Go to **Settings → Cadence Connector** and issue a connector key: give it a
    label naming the tenant, tick the capabilities it needs, choose the byline
    its posts carry and the post types it may publish into.
@@ -67,6 +67,25 @@ Only the translation-linking endpoint does. Publishing and replacing work on a
 monolingual site with no WPML installed.
 
 == Changelog ==
+
+= 0.8.0 =
+* New capability, `content.adopt`, and four endpoints to use it: preview then
+  adopt a post this connector did not create, by pasting its wp-admin edit
+  link or its public permalink, so it can become the source of a translation
+  group; preview then release one, undoing an adoption. A "Release from
+  Cadence" row action does the same from the posts list in wp-admin.
+* Rewriting an adopted post's title or text through the replace endpoint now
+  needs a signed, time-limited, one-time confirmation from the caller.
+* Trashed pieces are now found by the duplicate-piece lookup, so a piece
+  already trashed on the site is not published a second time.
+* A status or password change made by hand while a rewrite is in flight is no
+  longer reverted by that rewrite.
+* Revisions, attachments and other posts that are not ordinary content are
+  now refused by the endpoints that publish, replace and link, instead of
+  being acted on.
+* A translation group now holds one post type only; linking a plan that mixes
+  types is refused.
+* The settings screen no longer uses dashes.
 
 = 0.7.0 =
 * The translation-linking route now requires an Ed25519 attestation over the

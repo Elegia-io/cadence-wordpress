@@ -124,7 +124,8 @@ final class RestRouteTest extends TestCase {
             CadenceLinkRequest::REFUSAL_CODES,
             CadenceContentRequest::REFUSAL_CODES,
             CadenceReplaceRequest::REFUSAL_CODES,
-            CadenceAdoptRequest::REFUSAL_CODES
+            CadenceAdoptRequest::REFUSAL_CODES,
+            CadenceAdoptRequest::RELEASE_REFUSAL_CODES
         );
         $this->assertNotEmpty($published);
         foreach ($published as $code) {

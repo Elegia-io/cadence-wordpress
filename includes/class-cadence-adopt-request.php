@@ -58,6 +58,27 @@ final class CadenceAdoptRequest {
     ];
 
     /**
+     * Every code `release` can refuse with, in the order they are checked.
+     * `release_preview` adds `adopt_link_unresolved` after the window.
+     */
+    public const RELEASE_REFUSAL_CODES = [
+        'bad_release',
+        CadenceAttestation::CODE,
+        'adopt_wrong_site',
+        'adopt_expired',
+        'wpml_unavailable',
+        'post_missing',
+        'not_adopted',
+        'post_already_identified',
+        'group_unknown',
+        'already_grouped',
+        'adopt_failed',
+    ];
+
+    /** The three rows adoption writes, in the order a release removes them. */
+    private const ROWS = [CadenceContentRequest::META, CadenceContentRequest::KEY_META, self::ADOPTED_META];
+
+    /**
      * THE STATUSES A POST MAY BE ADOPTED IN, an allow-list. Not in it: `trash`,
      * `auto-draft`, `inherit` (revisions, autosaves, attachments), `request-*`
      * and any status a plugin registers.
@@ -119,14 +140,14 @@ final class CadenceAdoptRequest {
         $held = [];
         foreach ($claims as $name) {
             if (!self::claim($name)) {
-                self::release($held);
+                self::release_claims($held);
                 return self::refuse('adopt_busy', sprintf(
                     'another adoption holds post %d or this piece right now; nothing was written', $post_id));
             }
             $held[] = $name;
         }
         if (self::identified($post_id) || self::piece_elsewhere($piece_id, $post_id)) {
-            self::release($held);
+            self::release_claims($held);
             return self::refuse('adopt_busy', sprintf(
                 'another adoption reached post %d or this piece while this one was being checked; '
                 . 'nothing was written', $post_id));
@@ -158,12 +179,12 @@ final class CadenceAdoptRequest {
             foreach ($written as $meta) {
                 delete_post_meta($post_id, $meta);
             }
-            self::release($held);
+            self::release_claims($held);
             return self::refuse('adopt_failed', sprintf(
                 'the adoption record for post %d could not be written; nothing was left on the post',
                 $post_id));
         }
-        self::release($held);
+        self::release_claims($held);
 
         return ['ok' => true, 'attestation' => 'verified', 'attestation_kid' => $gate['kid'],
                 'report' => self::reply(true, $piece_id, $checked, true)];
@@ -201,6 +222,166 @@ final class CadenceAdoptRequest {
     }
 
     /**
+     * LET AN ADOPTED POST GO: remove the three rows, in the order
+     * `_cadence_external_id`, `_cadence_key`, `_cadence_adopted`, and nothing
+     * else. The record goes last, so a failure part-way leaves it and a retry
+     * is still a release. WPML relations are untouched.
+     *
+     * @param array $body `piece_id`, `post_id`, `site`, `issued_at`.
+     */
+    public static function release(array $body, ?string $key_id, ?string $attestation): array {
+        $shape = self::shape($body, ['post_id']);
+        if ($shape !== null) {
+            return self::refuse('bad_release', $shape);
+        }
+        $fields = ['piece_id' => $body['piece_id'], 'post_id' => $body['post_id'],
+                   'site' => $body['site'], 'issued_at' => $body['issued_at']];
+        $gate = self::gate('/adopt/release', $fields, $key_id, $attestation);
+        if (isset($gate['code'])) {
+            return $gate;
+        }
+        $checked = self::check_release($body['post_id'], $body['piece_id'], $key_id);
+        if (isset($checked['code'])) {
+            return $checked;
+        }
+        return self::remove_rows($body['post_id'], $body['piece_id'], $gate['kid']);
+    }
+
+    /**
+     * Resolve the link and run the release rows on the post it names, all but
+     * the identifier (the preview names none). Writes nothing.
+     *
+     * @param array $body `link`, `site`, `issued_at`.
+     */
+    public static function release_preview(array $body, ?string $key_id, ?string $attestation): array {
+        $shape = self::shape($body, ['link'], false);
+        if ($shape !== null) {
+            return self::refuse('bad_release', $shape);
+        }
+        $fields = ['link' => $body['link'], 'site' => $body['site'], 'issued_at' => $body['issued_at']];
+        $gate = self::gate('/adopt/release/preview', $fields, $key_id, $attestation);
+        if (isset($gate['code'])) {
+            return $gate;
+        }
+        $post_id = self::resolve_link($body['link']);
+        if ($post_id < 1) {
+            return self::refuse('adopt_link_unresolved',
+                'the link is not an edit link or a permalink of a post on this site; nothing was read');
+        }
+        $checked = self::check_release($post_id, null, $key_id);
+        if (isset($checked['code'])) {
+            return $checked;
+        }
+        $post = $checked['post'];
+        return ['ok' => true, 'attestation' => 'verified', 'attestation_kid' => $gate['kid'],
+                'report' => ['post_id' => $post->ID, 'post_type' => $post->post_type,
+                             'title' => $post->post_title, 'status' => $post->post_status,
+                             'language' => $checked['language']]];
+    }
+
+    /**
+     * THE ADMINISTRATOR'S RELEASE, from the post row in wp-admin: the same
+     * rows with no key and no signature, because the administrator is the
+     * authority that issued the key. So there is no key or identifier check,
+     * and a post whose adopting key was revoked can still be let go. The
+     * caller checks `manage_options` and the nonce; this checks the post.
+     */
+    public static function release_by_admin(int $post_id): array {
+        $checked = self::check_release($post_id, null, null);
+        if (isset($checked['code'])) {
+            return $checked;
+        }
+        $piece = get_post_meta($post_id, CadenceContentRequest::META, true);
+        return self::remove_rows($post_id, is_string($piece) ? $piece : '', null);
+    }
+
+    /**
+     * Release rows 5 to 10 on one post. `$key_id` null is the administrator,
+     * who is not asked for a key; `$piece_id` null is a preview, which names
+     * no identifier.
+     *
+     * @return array refusal, or {post: WP_Post, language: string}
+     */
+    private static function check_release(int $post_id, ?string $piece_id, ?string $key_id): array {
+        // ROW 5: without WPML the group check cannot run, and a release that
+        // cannot check refuses.
+        if (!has_filter('wpml_element_language_details') || !has_action('wpml_set_element_language_details')) {
+            return self::refuse('wpml_unavailable',
+                'nothing on this site implements the WPML translation-group hooks, so nothing can be released');
+        }
+        // ROW 6.
+        $post = get_post($post_id);
+        if (!$post instanceof WP_Post) {
+            return self::refuse('post_missing', sprintf('there is no readable post %d on this site', $post_id));
+        }
+        // ROW 7: only an adopted post. A post this plugin created carries no
+        // record and is never un-stamped here.
+        $raw = get_post_meta($post_id, self::ADOPTED_META, true);
+        if (!is_string($raw) || $raw === '') {
+            return self::refuse('not_adopted', sprintf(
+                'post %d was not adopted, so there is nothing to release; nothing was changed', $post_id));
+        }
+        // ROW 8: this key's adoption, of this piece. A row already removed by
+        // a release that failed part-way is not a mismatch, so a retry passes;
+        // the record, removed last, still names the key.
+        if ($key_id !== null) {
+            $record = json_decode($raw, true);
+            $stamp = get_post_meta($post_id, CadenceContentRequest::KEY_META, true);
+            $piece = get_post_meta($post_id, CadenceContentRequest::META, true);
+            if (!is_array($record) || ($record['key'] ?? null) !== $key_id
+                    || ($stamp !== '' && $stamp !== $key_id)
+                    || ($piece_id !== null && $piece !== '' && $piece !== $piece_id)) {
+                return self::refuse('post_already_identified', sprintf(
+                    'post %d already carries a piece identity; nothing was changed', $post_id));
+            }
+        }
+        // ROW 9.
+        $element_type = 'post_' . $post->post_type;
+        $trid = CadenceLinkRequest::current_trid($post_id, $element_type);
+        $language = CadenceLinkRequest::current_language($post_id, $element_type);
+        if ($trid === false || $language === null) {
+            return self::refuse('group_unknown', sprintf(
+                'WPML reports no language for post %d; nothing was changed', $post_id));
+        }
+        // ROW 10: alone in its group, counting drafts. Otherwise the group's
+        // source would leave scope while the group persists.
+        if ($trid !== null) {
+            $outside = CadenceLinkRequest::members_outside_plan($trid, $element_type, [['post_id' => $post_id]]);
+            if ($outside === false) {
+                return self::refuse('group_unknown', sprintf(
+                    'WPML would not say which posts share post %d\'s translation group; nothing was changed',
+                    $post_id));
+            }
+            if ($outside !== []) {
+                return self::refuse('already_grouped', sprintf(
+                    'post %d has translations; remove it from its translation group first, then release it; '
+                    . 'nothing was changed', $post_id));
+            }
+        }
+        return ['post' => $post, 'language' => $language];
+    }
+
+    /** Row 11: remove the rows that are there, in order, and re-read that none is left. */
+    private static function remove_rows(int $post_id, string $piece_id, ?string $kid): array {
+        foreach (self::ROWS as $meta) {
+            if (get_post_meta($post_id, $meta, true) === '') {
+                continue;
+            }
+            if (!delete_post_meta($post_id, $meta)) {
+                break;
+            }
+        }
+        foreach (self::ROWS as $meta) {
+            if (get_post_meta($post_id, $meta, true) !== '') {
+                return self::refuse('adopt_failed', sprintf(
+                    'the adoption record for post %d could not be removed in full; release it again', $post_id));
+            }
+        }
+        $done = ['ok' => true, 'report' => ['released' => true, 'piece_id' => $piece_id, 'post_id' => $post_id]];
+        return $kid === null ? $done : $done + ['attestation' => 'verified', 'attestation_kid' => $kid];
+    }
+
+    /**
      * THE POST A LINK NAMES, or 0. The wp-admin edit link (`post.php?post=N`)
      * is read here and answers 0 on any host but the admin's own; everything
      * else goes to core's `url_to_postid`, which answers 0 for another host
@@ -224,9 +405,9 @@ final class CadenceAdoptRequest {
         return (int) url_to_postid($link);
     }
 
-    /** Row 1: the body's own shape. Reads nothing. */
-    private static function shape(array $body, array $own): ?string {
-        foreach (['piece_id', 'site', 'issued_at'] as $name) {
+    /** Row 1: the body's own shape. Reads nothing. The release preview names no piece. */
+    private static function shape(array $body, array $own, bool $piece = true): ?string {
+        foreach ($piece ? ['piece_id', 'site', 'issued_at'] : ['site', 'issued_at'] as $name) {
             if (!is_string($body[$name] ?? null) || trim($body[$name]) === '') {
                 return $name . ' is not a non-blank string';
             }
@@ -443,7 +624,7 @@ final class CadenceAdoptRequest {
         return self::claim($name, false);
     }
 
-    private static function release(array $names): void {
+    private static function release_claims(array $names): void {
         foreach ($names as $name) {
             delete_option($name);
         }

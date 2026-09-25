@@ -187,4 +187,25 @@ add_action('rest_api_init', static function (): void {
     ];
     register_rest_route('cadence/v1', '/adopt/preview', $adopt('preview'));
     register_rest_route('cadence/v1', '/adopt', $adopt('run'));
+
+    // LETTING AN ADOPTED POST GO, and its preview. The same capability, and
+    // no post types: a release reaches only a post this key adopted, which
+    // the release rows check on the post itself.
+    $release = static fn (string $method): array => [
+        'methods'  => 'POST',
+        'callback' => static function ($request) use ($method) {
+            $result = CadenceAdoptRequest::$method(
+                (array) $request->get_json_params(),
+                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER)),
+                $request->get_header(CadenceAttestation::HEADER)
+            );
+            $answer = CadenceRestRoute::respond($result);
+            return new WP_REST_Response($answer['body'], $answer['status']);
+        },
+        'permission_callback' => static function ($request): bool {
+            return CadenceKey::authorises($request->get_header(CadenceKey::HEADER), 'content.adopt');
+        },
+    ];
+    register_rest_route('cadence/v1', '/adopt/release/preview', $release('release_preview'));
+    register_rest_route('cadence/v1', '/adopt/release', $release('release'));
 });

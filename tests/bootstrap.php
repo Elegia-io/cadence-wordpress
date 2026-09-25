@@ -220,6 +220,12 @@ final class WpStub {
      */
     public static bool $referer_valid = true;
 
+    /** Every action `check_admin_referer` was asked to verify, in order. */
+    public static array $referers_checked = [];
+
+    /** Every action `wp_nonce_url` minted a nonce for, in order. */
+    public static array $nonces_made = [];
+
     /**
      * THE TRANSIENT STORE, which is where a just-issued key waits for the
      * redirect to land instead of travelling in the URL. Kept separate from
@@ -244,6 +250,12 @@ final class WpStub {
 
     /** Every `add_post_meta` call that stored something, in order, as [id, key, raw value]. */
     public static array $meta_added = [];
+
+    /** Meta keys whose `delete_post_meta` answers false and removes nothing, as a failed delete would. */
+    public static array $meta_delete_fails = [];
+
+    /** Every `delete_post_meta` call that removed something, in order, as [id, key]. */
+    public static array $meta_deleted = [];
 
     /** Public path => post id, the permalinks `url_to_postid` resolves. */
     public static array $permalinks = [];
@@ -292,10 +304,14 @@ final class WpStub {
         self::$options = [];
         self::$users = [7 => 'A Real Person'];
         self::$referer_valid = true;
+        self::$referers_checked = [];
+        self::$nonces_made = [];
         self::$transients = [];
         self::$reads = [];
         self::$meta_add_fails = [];
         self::$meta_added = [];
+        self::$meta_delete_fails = [];
+        self::$meta_deleted = [];
         self::$permalinks = [];
         self::$on_claim = null;
     }
@@ -893,8 +909,14 @@ function add_post_meta(int $post_id, string $key, $value, bool $unique = false) 
 }
 
 function delete_post_meta(int $post_id, string $key, $value = ''): bool {
+    if (in_array($key, WpStub::$meta_delete_fails, true)) {
+        return false;
+    }
     $had = array_key_exists($key, WpStub::$meta[$post_id] ?? []);
     unset(WpStub::$meta[$post_id][$key]);
+    if ($had) {
+        WpStub::$meta_deleted[] = [$post_id, $key];
+    }
     return $had;
 }
 
@@ -1085,6 +1107,7 @@ function wp_die($message = '', $title = '', $args = []): void {
  * one thing a test controls about it.
  */
 function check_admin_referer($action = -1, $query_arg = '_wpnonce') {
+    WpStub::$referers_checked[] = $action;
     if (!WpStub::$referer_valid) {
         wp_die('The link you followed has expired.');
     }
@@ -1117,6 +1140,11 @@ function wp_nonce_field($action = -1, $name = '_wpnonce', $referer = true, $echo
         echo $field;
     }
     return $field;
+}
+
+function wp_nonce_url(string $url, $action = -1, string $name = '_wpnonce'): string {
+    WpStub::$nonces_made[] = $action;
+    return add_query_arg([$name => 'stub-nonce'], $url);
 }
 
 function wp_dropdown_users(array $args = []): ?string {
@@ -1162,6 +1190,8 @@ define('ABSPATH', '/wordpress/');
 final class WpHooks {
     /** @var array<string, list<callable>> */
     public static array $actions = [];
+    /** @var array<string, list<callable>> */
+    public static array $filters = [];
     /** @var list<array{string, string, array}> */
     public static array $routes = [];
 
@@ -1174,6 +1204,11 @@ final class WpHooks {
 
 function add_action(string $hook, callable $cb, int $priority = 10, int $args = 1): bool {
     WpHooks::$actions[$hook][] = $cb;
+    return true;
+}
+
+function add_filter(string $hook, callable $cb, int $priority = 10, int $args = 1): bool {
+    WpHooks::$filters[$hook][] = $cb;
     return true;
 }
 

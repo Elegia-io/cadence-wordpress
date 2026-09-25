@@ -36,7 +36,8 @@ final class PluginTest extends TestCase {
         // Named, not indexed: a test reading `$routes[0]` starts asserting
         // about a different endpoint the day one is registered above it, and
         // still passes while doing so.
-        $this->assertSame(['/translation-group', '/content', '/content/replace', '/adopt/preview', '/adopt'],
+        $this->assertSame(['/translation-group', '/content', '/content/replace', '/adopt/preview', '/adopt',
+                           '/adopt/release/preview', '/adopt/release'],
             array_keys($this->routes));
         $this->route = ['cadence/v1', '/translation-group', $this->routes['/translation-group']];
     }
@@ -48,7 +49,7 @@ final class PluginTest extends TestCase {
     public function test_the_route_takes_only_an_adopting_key(): void {
         $others = CadenceKey::issue('tenant-a', ['content.publish', 'content.replace', 'translation.link'], 7);
         $adopter = CadenceKey::issue('tenant-b', ['content.adopt'], 7);
-        foreach (['/adopt', '/adopt/preview'] as $path) {
+        foreach (['/adopt', '/adopt/preview', '/adopt/release', '/adopt/release/preview'] as $path) {
             $permit = $this->routes[$path]['permission_callback'];
             $this->assertSame('POST', $this->routes[$path]['methods']);
             $this->assertFalse($permit(new WP_REST_Request(['post_id' => 41], WP_REST_Request::NO_KEY)), $path);
@@ -60,10 +61,11 @@ final class PluginTest extends TestCase {
 
     /** The route hands the body to the adopt code and answers its status. */
     public function test_the_adopt_route_refuses_a_body_it_cannot_read(): void {
-        foreach (['/adopt', '/adopt/preview'] as $path) {
+        foreach (['/adopt' => 'bad_adoption', '/adopt/preview' => 'bad_adoption',
+                  '/adopt/release' => 'bad_release', '/adopt/release/preview' => 'bad_release'] as $path => $code) {
             $r = ($this->routes[$path]['callback'])(new WP_REST_Request(null));
             $this->assertSame(400, $r->get_status(), $path);
-            $this->assertSame('bad_adoption', $r->get_data()['code'], $path);
+            $this->assertSame($code, $r->get_data()['code'], $path);
         }
     }
 

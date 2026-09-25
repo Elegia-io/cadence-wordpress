@@ -526,17 +526,335 @@ final class AdoptRequestTest extends TestCase {
 
     /**
      * THE PINNED RESIDUAL. A signed `/adopt` body replayed inside its window,
-     * on the same site, after the post was let go (the three rows removed, as a
-     * release removes them), adopts it again. The window is 300 s either side
-     * of the site's clock; past it the same bytes are `adopt_expired`.
+     * on the same site, after a release let the post go, adopts it again. The
+     * window is 300 s either side of the site's clock; past it the same bytes
+     * are `adopt_expired`.
      */
     #[Group('wpml')]
-    public function test_a_replay_inside_the_window_after_a_release_re_adopts(): void {
+    public function test_a_replay_inside_the_window_after_release_re_adopts(): void {
         $body = self::body();
         $header = CadenceAttest::header('/adopt', CadenceAttest::fields('/adopt', $body), self::KEY);
         $this->assertTrue(self::adopt($body, ['post'], self::KEY, $header)['ok']);
-        unset(WpStub::$meta[41]);
+        $this->assertTrue(self::release(self::release_body())['ok'], 'the release did not land');
+        $this->assertSame(300, CadenceAdoptRequest::WINDOW);
         $this->assertTrue(self::adopt($body, ['post'], self::KEY, $header)['ok'],
             'the residual closed: update this test and the design together');
+    }
+
+    // ------------------------------------------------------------------
+    // Release: the eleven rows, their twins, and what is removed.
+    // ------------------------------------------------------------------
+
+    private static function release_body(array $over = []): array {
+        return array_merge(['piece_id' => 'piece-new', 'post_id' => 41,
+                            'site' => 'example.test', 'issued_at' => self::now()], $over);
+    }
+
+    private static function release_preview_body(array $over = []): array {
+        return array_merge(['link' => 'https://example.test/?p=41',
+                            'site' => 'example.test', 'issued_at' => self::now()], $over);
+    }
+
+    private static function release(array $body, ?string $key = self::KEY, $attestation = self::SIGN): array {
+        return CadenceAdoptRequest::release($body, $key, $attestation === self::SIGN
+            ? CadenceAttest::header('/adopt/release', CadenceAttest::fields('/adopt/release', $body), $key)
+            : $attestation);
+    }
+
+    private static function release_preview(array $body, ?string $key = self::KEY,
+                                            $attestation = self::SIGN): array {
+        return CadenceAdoptRequest::release_preview($body, $key, $attestation === self::SIGN
+            ? CadenceAttest::header('/adopt/release/preview',
+                                    CadenceAttest::fields('/adopt/release/preview', $body), $key)
+            : $attestation);
+    }
+
+    private static function adopted(): void {
+        $r = self::adopt(self::body());
+        if (($r['ok'] ?? false) !== true) {
+            throw new RuntimeException('the fixture adoption did not land: ' . ($r['reason'] ?? ''));
+        }
+        WpStub::$reads = [];
+    }
+
+    private static function answer(array $r): string {
+        return ($r['ok'] ?? false) === true ? 'ok' : ($r['code'] ?? '?');
+    }
+
+    public function test_release_has_eleven_codes_in_the_design_order(): void {
+        $this->assertSame(['bad_release', 'attestation_unverified', 'adopt_wrong_site', 'adopt_expired',
+                           'wpml_unavailable', 'post_missing', 'not_adopted', 'post_already_identified',
+                           'group_unknown', 'already_grouped', 'adopt_failed'],
+                          CadenceAdoptRequest::RELEASE_REFUSAL_CODES);
+    }
+
+    public static function malformed_release(): array {
+        return [
+            'post_id as a string' => [['post_id' => '41']],
+            'post_id zero'        => [['post_id' => 0]],
+            'no piece_id'         => [['piece_id' => null]],
+            'blank piece_id'      => [['piece_id' => ' ']],
+            'site not a string'   => [['site' => 7]],
+            'issued_at not UTC'   => [['issued_at' => '2026-09-24 10:00:00']],
+        ];
+    }
+
+    #[DataProvider('malformed_release')]
+    public function test_release_row_1_a_body_not_its_shape_is_bad_release_and_reads_nothing(array $over): void {
+        $body = array_filter(self::release_body($over), static fn ($v) => $v !== null);
+        WpStub::$reads = [];
+        $r = CadenceAdoptRequest::release($body, self::KEY, 'v1 x y');
+        $this->assertSame('bad_release', $r['code'] ?? null);
+        $this->assertSame(400, CadenceRestRoute::respond($r)['status']);
+        $this->assertSame([], self::site_reads());
+    }
+
+    public function test_release_preview_without_a_link_is_bad_release(): void {
+        $body = self::release_preview_body();
+        unset($body['link']);
+        $this->assertSame('bad_release', self::release_preview($body, self::KEY, 'v1 x y')['code']);
+    }
+
+    public function test_release_row_2_an_exempt_key_is_refused_and_reads_nothing(): void {
+        CadenceAttest::exempt_key();
+        WpStub::$reads = [];
+        foreach (['/adopt/release' => self::release(self::release_body(), self::KEY, null),
+                  '/adopt/release/preview' => self::release_preview(self::release_preview_body(), self::KEY, null)]
+                 as $route => $r) {
+            $this->assertSame('attestation_unverified', $r['code'], $route);
+            $this->assertSame('exempt_refused', $r['attestation_branch'], $route);
+        }
+        $this->assertSame([], self::site_reads());
+    }
+
+    public function test_release_row_2_a_tampered_body_reaches_no_site_read(): void {
+        $header = CadenceAttest::header('/adopt/release',
+            CadenceAttest::fields('/adopt/release', self::release_body()), self::KEY);
+        WpStub::$reads = [];
+        $r = self::release(self::release_body(['post_id' => 42]), self::KEY, $header);
+        $this->assertSame('mismatch', $r['attestation_branch']);
+        $this->assertSame([], self::site_reads());
+
+        $header = CadenceAttest::header('/adopt/release/preview',
+            CadenceAttest::fields('/adopt/release/preview', self::release_preview_body()), self::KEY);
+        WpStub::$reads = [];
+        $r = self::release_preview(self::release_preview_body(['link' => 'https://example.test/?p=42']),
+                                   self::KEY, $header);
+        $this->assertSame('mismatch', $r['attestation_branch']);
+        $this->assertSame([], self::site_reads());
+    }
+
+    /**
+     * [what to change after the fixture is adopted, the body's changes, the
+     * answer]. `ok` is a twin: one fact different, released.
+     */
+    public static function release_rows(): array {
+        $none = static function (): void {};
+        $other = 'someoneelse00key';
+        return [
+            'the fixture'                   => [$none, [], 'ok'],
+            'row 3: another site'           => [$none, ['site' => 'other.test'], 'adopt_wrong_site'],
+            'row 3 twin: this site'         => [$none, ['site' => 'example.test'], 'ok'],
+            'row 4: 301 s old'              => [$none, ['issued_at' => self::now(-301)], 'adopt_expired'],
+            'row 4: 301 s ahead'            => [$none, ['issued_at' => self::now(301)], 'adopt_expired'],
+            'row 4 twin: 299 s old'         => [$none, ['issued_at' => self::now(-299)], 'ok'],
+            'row 5: no WPML'                => [static function (): void { WpStub::$wpml_reads = false; },
+                                                [], 'wpml_unavailable'],
+            'row 6: no such post'           => [$none, ['post_id' => 99], 'post_missing'],
+            'row 7: no record'              => [static function (): void {
+                                                    unset(WpStub::$meta[41]['_cadence_adopted']); },
+                                                [], 'not_adopted'],
+            'row 7: no rows at all'         => [static function (): void { unset(WpStub::$meta[41]); },
+                                                [], 'not_adopted'],
+            'row 8: the stamp names another key' => [static function () use ($other): void {
+                                                    WpStub::$meta[41]['_cadence_key'] = $other; },
+                                                [], 'post_already_identified'],
+            'row 8: the record names another key' => [static function () use ($other): void {
+                                                    WpStub::$meta[41]['_cadence_adopted'] =
+                                                        json_encode(['key' => $other]); },
+                                                [], 'post_already_identified'],
+            'row 8: a record naming no key' => [static function (): void {
+                                                    WpStub::$meta[41]['_cadence_adopted'] = '{}'; },
+                                                [], 'post_already_identified'],
+            'row 8: another piece named'    => [$none, ['piece_id' => 'piece-else'], 'post_already_identified'],
+            'row 8 twin: a part-released post' => [static function (): void {
+                                                    unset(WpStub::$meta[41]['_cadence_external_id']); },
+                                                [], 'ok'],
+            'row 9: WPML knows nothing'     => [static fn () => self::post(41, ['wpml_knows' => false]),
+                                                [], 'group_unknown'],
+            'row 9: no language'            => [static fn () => self::post(41, ['trid' => null]),
+                                                [], 'group_unknown'],
+            'row 9: an unreadable group'    => [static function (): void { WpStub::$wpml_group_unreadable = [541]; },
+                                                [], 'group_unknown'],
+            'row 10: a draft member'        => [static fn () => self::post(42, ['trid' => 541, 'language' => 'de']),
+                                                [], 'already_grouped'],
+            'row 10: a published member'    => [static fn () => self::post(42, ['trid' => 541, 'language' => 'de',
+                                                'status' => 'publish']), [], 'already_grouped'],
+            'row 10 twin: another group'    => [static fn () => self::post(42, ['trid' => 542, 'language' => 'de']),
+                                                [], 'ok'],
+            'row 11: the second delete fails' => [static function (): void {
+                                                    WpStub::$meta_delete_fails = ['_cadence_key']; },
+                                                [], 'adopt_failed'],
+        ];
+    }
+
+    #[DataProvider('release_rows')]
+    #[Group('wpml')]
+    public function test_each_release_row_refuses_its_shape_and_its_twin_passes(callable $arrange, array $over,
+                                                                              string $want): void {
+        self::adopted();
+        $arrange();
+        $before = WpStub::$meta[41] ?? [];
+        $r = self::release(self::release_body($over));
+        $this->assertSame($want, self::answer($r), $r['reason'] ?? '');
+        if ($want !== 'ok') {
+            $this->assertNotSame(200, CadenceRestRoute::respond($r)['status']);
+        }
+        if ($want !== 'ok' && $want !== 'adopt_failed') {
+            $this->assertSame($before, WpStub::$meta[41] ?? [], 'a refusal removed something');
+        }
+    }
+
+    /** The preview runs the same rows but the identifier, and writes nothing. */
+    #[DataProvider('release_rows')]
+    #[Group('wpml')]
+    public function test_the_release_preview_runs_the_same_rows(callable $arrange, array $over, string $want): void {
+        if (isset($over['post_id']) || isset($over['piece_id']) || $want === 'adopt_failed') {
+            $this->assertTrue(true);   // the preview names no post_id or piece_id, and deletes nothing
+            return;
+        }
+        self::adopted();
+        $arrange();
+        $before = WpStub::$meta[41] ?? [];
+        $r = self::release_preview(self::release_preview_body($over));
+        $this->assertSame($want, self::answer($r), $r['reason'] ?? '');
+        $this->assertSame($before, WpStub::$meta[41] ?? [], 'the preview removed something');
+    }
+
+    #[Group('wpml')]
+    public function test_the_release_preview_answers_every_name(): void {
+        self::post(41, ['status' => 'private', 'title' => 'T']);
+        self::adopted();
+        $answer = CadenceRestRoute::respond(self::release_preview(self::release_preview_body()));
+        $this->assertSame(200, $answer['status']);
+        foreach (['ok' => true, 'post_id' => 41, 'post_type' => 'post', 'title' => 'T',
+                  'status' => 'private', 'language' => 'en'] as $name => $value) {
+            $this->assertSame($value, $answer['body'][$name] ?? null, $name);
+        }
+        $this->assertArrayNotHasKey('content', $answer['body']);
+    }
+
+    #[Group('wpml')]
+    public function test_the_release_preview_resolves_the_link_or_refuses(): void {
+        self::adopted();
+        $r = self::release_preview(self::release_preview_body(['link' => 'https://other.test/?p=41']));
+        $this->assertSame('adopt_link_unresolved', $r['code']);
+        $r = self::release_preview(self::release_preview_body(
+            ['link' => 'https://example.test/wp-admin/post.php?post=41&action=edit']));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+    }
+
+    /**
+     * THE HAPPY PATH removes exactly the three rows, in order, and nothing
+     * else: the post's other meta stays, and WPML is not written to, so the
+     * language details are what the double recorded before.
+     */
+    #[Group('wpml')]
+    public function test_the_release_removes_exactly_the_three_rows_in_order(): void {
+        self::adopted();
+        WpStub::$meta[41]['_edit_lock'] = '1:7';
+        $posts = WpStub::$posts;
+        $writes = WpStub::$writes;
+        WpStub::$meta_deleted = [];
+        $r = self::release(self::release_body());
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame(['_cadence_external_id', '_cadence_key', '_cadence_adopted'],
+            array_map(static fn (array $d): string => $d[1], WpStub::$meta_deleted));
+        $this->assertSame(['_edit_lock' => '1:7'], WpStub::$meta[41]);
+        $this->assertSame($posts, WpStub::$posts, 'the post or its language details changed');
+        $this->assertSame($writes, WpStub::$writes, 'WPML was written to');
+        $answer = CadenceRestRoute::respond($r);
+        $this->assertSame(200, $answer['status']);
+        foreach (['ok' => true, 'released' => true, 'piece_id' => 'piece-new', 'post_id' => 41]
+                 as $name => $value) {
+            $this->assertSame($value, $answer['body'][$name] ?? null, $name);
+        }
+        $this->assertFalse(CadenceKey::reaches(41, self::KEY), 'a released post is still linkable');
+    }
+
+    /** A DELETE FAILING ON THE SECOND ROW LEAVES THE RECORD, and a retry is still a release. */
+    #[Group('wpml')]
+    public function test_a_part_way_failure_leaves_the_record_and_a_retry_releases(): void {
+        self::adopted();
+        WpStub::$meta_delete_fails = ['_cadence_key'];
+        $r = self::release(self::release_body());
+        $this->assertSame('adopt_failed', $r['code']);
+        $this->assertSame(500, CadenceRestRoute::respond($r)['status']);
+        $this->assertArrayHasKey('_cadence_adopted', WpStub::$meta[41]);
+        $this->assertArrayNotHasKey('_cadence_external_id', WpStub::$meta[41]);
+
+        WpStub::$meta_delete_fails = [];
+        $again = self::release(self::release_body());
+        $this->assertTrue($again['ok'], $again['reason'] ?? '');
+        $this->assertSame([], WpStub::$meta[41]);
+    }
+
+    /** The same when the record itself will not go: the other two rows are gone, and a retry releases. */
+    #[Group('wpml')]
+    public function test_a_failure_on_the_record_leaves_it_and_a_retry_releases(): void {
+        self::adopted();
+        WpStub::$meta_delete_fails = ['_cadence_adopted'];
+        $this->assertSame('adopt_failed', self::release(self::release_body())['code']);
+        $this->assertSame(['_cadence_adopted'], array_keys(WpStub::$meta[41]));
+
+        WpStub::$meta_delete_fails = [];
+        $again = self::release(self::release_body());
+        $this->assertTrue($again['ok'], $again['reason'] ?? '');
+        $this->assertSame([], WpStub::$meta[41]);
+    }
+
+    /** A post this plugin created is never un-stamped, and stays linkable after the refusal. */
+    #[Group('wpml')]
+    public function test_release_refuses_a_post_this_plugin_created_and_it_stays_linkable(): void {
+        WpStub::$meta[41] = ['_cadence_external_id' => 'piece-new', '_cadence_key' => self::KEY];
+        $this->assertTrue(CadenceKey::reaches(41, self::KEY), 'the twin: linkable before');
+        $r = self::release(self::release_body());
+        $this->assertSame('not_adopted', $r['code']);
+        $this->assertSame(409, CadenceRestRoute::respond($r)['status']);
+        $this->assertSame(['_cadence_external_id' => 'piece-new', '_cadence_key' => self::KEY], WpStub::$meta[41]);
+        $this->assertTrue(CadenceKey::reaches(41, self::KEY));
+        $this->assertSame('not_adopted', CadenceAdoptRequest::release_by_admin(41)['code']);
+    }
+
+    /** Release then adopt again: the record is gone, so is the row-12 repeat. */
+    #[Group('wpml')]
+    public function test_release_then_adopt_again_succeeds(): void {
+        self::adopted();
+        $this->assertTrue(self::release(self::release_body())['ok']);
+        $r = self::adopt(self::body(['issued_at' => self::now(-1)]));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertTrue($r['report']['adopted']);
+    }
+
+    /**
+     * THE ADMINISTRATOR'S RELEASE takes no key and no signature, and so runs
+     * no key or identifier check: it releases a post another key adopted,
+     * which no key can over the wire. Every other row still refuses.
+     */
+    #[Group('wpml')]
+    public function test_the_admin_release_runs_the_rows_but_the_key(): void {
+        self::adopted();
+        WpStub::$meta[41]['_cadence_key'] = 'someoneelse00key';
+        $this->assertSame('post_already_identified', self::release(self::release_body())['code']);
+        self::post(42, ['trid' => 541, 'language' => 'de']);
+        $this->assertSame('already_grouped', CadenceAdoptRequest::release_by_admin(41)['code']);
+        unset(WpStub::$posts[42]);
+        $this->assertSame('post_missing', CadenceAdoptRequest::release_by_admin(99)['code']);
+        WpStub::$wpml_reads = false;
+        $this->assertSame('wpml_unavailable', CadenceAdoptRequest::release_by_admin(41)['code']);
+        WpStub::$wpml_reads = true;
+        $r = CadenceAdoptRequest::release_by_admin(41);
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame([], WpStub::$meta[41]);
     }
 }

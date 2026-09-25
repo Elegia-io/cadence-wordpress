@@ -123,6 +123,8 @@ final class CadenceAttestation {
         // without `issued_at` it serves again after a release.
         '/adopt/preview'     => ['piece_id', 'link', 'site', 'issued_at'],
         '/adopt'             => ['piece_id', 'post_id', 'language', 'site', 'issued_at'],
+        '/adopt/release/preview' => ['link', 'site', 'issued_at'],
+        '/adopt/release'     => ['piece_id', 'post_id', 'site', 'issued_at'],
     ];
 
     /**

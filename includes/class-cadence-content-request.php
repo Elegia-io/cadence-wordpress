@@ -504,11 +504,19 @@ final class CadenceContentRequest {
      */
     private static function find_by_external_id(string $piece_id, ?string $key_id): ?int {
         $found = get_posts([
-            'post_type'      => 'any',
-            // Every status, deliberately. A piece whose post was moved to the
-            // trash still HAS this identifier, and answering "not found" would
-            // publish it a second time -- resurrecting content somebody deleted.
-            'post_status'    => 'any',
+            // EVERY POST TYPE THIS SITE REGISTERS, named explicitly rather
+            // than `'any'`. `'any'` is a WP_Query SPECIAL CASE that excludes
+            // whatever type is registered `exclude_from_search` -- exactly
+            // the private custom type a client's own plugin might put this
+            // piece in -- so it would leave the one place most worth finding
+            // unsearched.
+            'post_type'      => array_values(get_post_types()),
+            // EVERY STATUS THIS SITE REGISTERS, named explicitly, for the
+            // same reason: `'any'` excludes `trash` and `auto-draft`. A piece
+            // whose post was moved to the trash still HAS this identifier,
+            // and answering "not found" would publish it a second time --
+            // resurrecting content somebody deleted.
+            'post_status'    => array_keys(get_post_stati()),
             // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- the lookup by this plugin's own piece id; there is no other index to it.
             'meta_key'       => self::META,
             // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_value -- the lookup by this plugin's own piece id; there is no other index to it.

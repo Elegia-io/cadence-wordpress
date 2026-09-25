@@ -547,6 +547,22 @@ final class ContentRequestTest extends TestCase {
     }
 
     /**
+     * AND AN AUTO-DRAFT DOES TOO. The other status WordPress's own `'any'`
+     * leaves out, so a lookup that just swapped `'any'` for a status list
+     * missing this one would still resurrect a piece parked here.
+     */
+    #[Group('wpml')]
+    public function test_an_auto_draft_answers_for_its_identifier(): void {
+        $first = $this->publish($this->body(['status' => 'publish']));
+        WpStub::$posts[$first['post_id']]['post_status'] = 'auto-draft';
+
+        $again = $this->publish($this->body(['status' => 'publish']));
+        $this->assertTrue($again['ok'], $again['reason'] ?? '');
+        $this->assertFalse($again['created']);
+        $this->assertSame($first['post_id'], $again['post_id']);
+    }
+
+    /**
      * THE IDENTIFIER IS WRITTEN BY THE INSERT ITSELF, not after it. A separate
      * `update_post_meta` leaves a window in which the post exists and carries
      * no identifier, and a retry landing inside that window creates the

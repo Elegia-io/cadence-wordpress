@@ -980,4 +980,28 @@ final class ContentRequestTest extends TestCase {
         $this->assertArrayHasKey('revision', $second);
         $this->assertSame($first['revision'], $second['revision']);
     }
+
+    /**
+     * THE REPEAT HANDS BACK THE REVISION ON AN ADOPTED POST AS ON A CREATED
+     * ONE, to a key holding `content.replace`. The revision is what a
+     * client's confirmation to rewrite an adopted post is bound to; withheld
+     * here, no confirmed rewrite could be composed. The boundary over that
+     * rewrite is the confirmation `/content/replace` asks for, not this.
+     */
+    public function test_the_repeat_carries_the_revision_on_an_adopted_post_and_on_a_created_one(): void {
+        foreach (['created' => false, 'adopted' => true] as $label => $adopt) {
+            WpStub::reset();
+            WpStub::$capabilities = ['publish_posts' => [null], 'edit_posts' => [null]];
+            $first = $this->publish($this->body());
+            $this->assertTrue($first['ok'], $label);
+            if ($adopt) {
+                WpStub::$meta[$first['post_id']][CadenceAdoptRequest::ADOPTED_META] = '{"key":"k"}';
+            }
+            $again = $this->publish($this->body());
+            $this->assertTrue($again['ok'], $label);
+            $this->assertFalse($again['created'], $label);
+            $this->assertSame(CadenceRevision::of('A title', '<p>Body.</p>'), $again['revision'] ?? null,
+                $label . ': the repeat withheld the revision');
+        }
+    }
 }

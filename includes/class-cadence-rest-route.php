@@ -257,6 +257,13 @@ final class CadenceRestRoute {
         'adopt_failed'               => 500,
         'post_out_of_scope'          => 403,
         'replace_other_key'          => 403,
+        // An adopted post's rewrite, refused for want of the client's
+        // confirmation: absent, unsigned, for another site, stale, or spent.
+        'post_adopted'               => 403,
+        'confirmation_unsigned'      => 403,
+        'confirmation_wrong_site'    => 403,
+        'confirmation_expired'       => 403,
+        'confirmation_spent'         => 409,
         'post_type_out_of_scope'     => 403,
         'existing_post_type_out_of_scope' => 403,
         'link_post_type_out_of_scope' => 403,

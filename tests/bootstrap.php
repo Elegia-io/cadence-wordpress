@@ -335,6 +335,15 @@ final class WpStub {
      * value is what `/content` would have written -- the caller's identifier
      * for the piece -- and only its non-blankness is read.
      */
+    /**
+     * WORDPRESS REVISIONS, RESTORING AN EARLIER TEXT. Core's restore is an
+     * ordinary `wp_update_post` back to the stored title and content, which
+     * is all a rewrite's revision is a hash of.
+     */
+    public static function restore_revision(int $id, string $title, string $content): void {
+        wp_update_post(['ID' => $id, 'post_title' => $title, 'post_content' => $content]);
+    }
+
     public static function cadence_published(int $id, ?string $piece_id = null): void {
         self::$meta[$id][CadenceContentRequest::META] = $piece_id ?? 'piece-' . $id;
     }
@@ -1335,6 +1344,18 @@ final class CadenceAttest {
         }
         $out = [];
         foreach (CadenceAttestation::FIELDS[$route] as $name) {
+            // AN OPTIONAL FIELD IS SIGNED WHEN THE BODY CARRIES IT, and its
+            // boolean is rendered the one way the route renders it.
+            if (strncmp($name, CadenceAttestation::OPTIONAL, 1) === 0) {
+                $name = substr($name, 1);
+                if (!array_key_exists($name, $body)) {
+                    continue;
+                }
+                $value = $body[$name];
+                $out[$name] = is_bool($value) ? ($value ? 'true' : 'false')
+                    : (is_string($value) ? $value : '');
+                continue;
+            }
             $value = $body[$name] ?? '';
             // A BODY THE ROUTE WILL REFUSE AS `bad_request` STILL GETS A
             // HEADER. The helper is called before `run`, so it sees bodies

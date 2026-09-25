@@ -29,7 +29,7 @@ use PHPUnit\Framework\TestCase;
 
 final class AttestationTest extends TestCase {
 
-    /** The public key the contract's three vectors were signed with. */
+    /** The public key the contract's vectors were signed with. */
     private const VECTOR_PK = '+i1Vuctx8r3KSxWjQoTs8SLzLxqR2n2ve5pmiSr4GOI=';
 
     /** The kid those vectors name. */
@@ -39,7 +39,7 @@ final class AttestationTest extends TestCase {
     private const KEY = 'ca11ab1e0000key2';
 
     /**
-     * THE CONTRACT'S SEVEN VECTORS, verbatim.
+     * THE CONTRACT'S TWELVE VECTORS, verbatim: eight flat ones here, four link ones below.
      *
      * `material` is base64 of the exact bytes hashed -- carried so a failure
      * can be diffed as BYTES. A digest that differs tells you the layout is
@@ -74,6 +74,53 @@ final class AttestationTest extends TestCase {
             'bytes'    => 301,
             'digest'   => 'a4b919391a033f9c28d86d20ede57a56bc04a8529631d0ae5ab605bda18feb8b',
             'header'   => 'v1 45da37c57dd21b36 H_xyN7u_R9yeNfg5T6X6gPDY9u4aHf0mBXO6faB_FHjbwLrCxXFJxtfEMKHo7xFtAUwbgbxeenITyUv_gYg2Ag',
+        ],
+        [
+            'label'    => 'adopt-preview',
+            'route'    => '/adopt/preview',
+            'fields'   => ['piece_id' => 'acme-blog-2026-09-24-adopt', 'link' => 'https://example.test/?p=41', 'site' => 'example.test', 'issued_at' => '2026-09-24T12:00:00Z'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2Fkb3B0L3ByZXZpZXcKcGllY2VfaWQ6MjY6YWNtZS1ibG9nLTIwMjYtMDktMjQtYWRvcHQKbGluazoyNjpodHRwczovL2V4YW1wbGUudGVzdC8/cD00MQpzaXRlOjEyOmV4YW1wbGUudGVzdAppc3N1ZWRfYXQ6MjA6MjAyNi0wOS0yNFQxMjowMDowMFoK',
+            'bytes'    => 162,
+            'digest'   => 'c1223fc10238415554bc20ac29d77f4f6185bf839a15e96f183728d3a2b4421b',
+            'header'   => 'v1 45da37c57dd21b36 FY3jy4t-GUvhdRtzTgIUwi_wNvATch7L0JXSYDWQW1z-4y1wNk8P13LDHG9bXWfifnKirWmUnFjV4u8LN9N4Dg',
+        ],
+        [
+            'label'    => 'adopt',
+            'route'    => '/adopt',
+            'fields'   => ['piece_id' => 'acme-blog-2026-09-24-adopt', 'post_id' => 41, 'language' => 'en-gb', 'site' => 'example.test', 'issued_at' => '2026-09-24T12:00:00Z'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2Fkb3B0CnBpZWNlX2lkOjI2OmFjbWUtYmxvZy0yMDI2LTA5LTI0LWFkb3B0CnBvc3RfaWQ6Mjo0MQpsYW5ndWFnZTo1OmVuLWdiCnNpdGU6MTI6ZXhhbXBsZS50ZXN0Cmlzc3VlZF9hdDoyMDoyMDI2LTA5LTI0VDEyOjAwOjAwWgo=',
+            'bytes'    => 149,
+            'digest'   => '694c2d2df121a951369710a39e0c035d58e0a6b9b0118000c229551123fcba07',
+            'header'   => 'v1 45da37c57dd21b36 7_LNHDSuT07vTDlwXCm0rUXurwkW9rAB-xnEEB3yEOY520dwDZTOx9Y_ip0m0S3R7TFvnJXQNc3bPYbheXjuBA',
+        ],
+        [
+            'label'    => 'adopt-release-preview',
+            'route'    => '/adopt/release/preview',
+            'fields'   => ['link' => 'https://example.test/?p=41', 'site' => 'example.test', 'issued_at' => '2026-09-24T12:00:00Z'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2Fkb3B0L3JlbGVhc2UvcHJldmlldwpsaW5rOjI2Omh0dHBzOi8vZXhhbXBsZS50ZXN0Lz9wPTQxCnNpdGU6MTI6ZXhhbXBsZS50ZXN0Cmlzc3VlZF9hdDoyMDoyMDI2LTA5LTI0VDEyOjAwOjAwWgo=',
+            'bytes'    => 131,
+            'digest'   => 'cc4681e501d5d20131a840f1ceef8b141fabb049f8288a212eb3412a27200190',
+            'header'   => 'v1 45da37c57dd21b36 qTP7trX5QwoeLCZwe3AP7kGR3VNrvjk2XsMHngsiG7aHhNKWjW7qiYQhzYvwNrgQBnTYx-U75T1K7pnGm_VOAQ',
+        ],
+        [
+            'label'    => 'adopt-release',
+            'route'    => '/adopt/release',
+            'fields'   => ['piece_id' => 'acme-blog-2026-09-24-adopt', 'post_id' => 41, 'site' => 'example.test', 'issued_at' => '2026-09-24T12:00:00Z'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2Fkb3B0L3JlbGVhc2UKcGllY2VfaWQ6MjY6YWNtZS1ibG9nLTIwMjYtMDktMjQtYWRvcHQKcG9zdF9pZDoyOjQxCnNpdGU6MTI6ZXhhbXBsZS50ZXN0Cmlzc3VlZF9hdDoyMDoyMDI2LTA5LTI0VDEyOjAwOjAwWgo=',
+            'bytes'    => 140,
+            'digest'   => 'dc2f8d8acae73b43a4379bfa967bdef6ec093e101163e9e930bd6b329f5fc2eb',
+            'header'   => 'v1 45da37c57dd21b36 6hAr0kj0DX0m6S7OE6aw8Iy0Ja9AsRBsULrzW4YYEPXmNAeGlW1m7NcvMUI78hIEOdPJhrNGudOX3DpElD9GDg',
+        ],
+        [
+            'label'    => 'replace-with-rewrite-confirmation',
+            'route'    => '/content/replace',
+            // THE BODY'S OWN BOOLEAN, reduced by the route's own rendering: a
+            // `1` or a `True` would fail the byte diff below.
+            'fields'   => CadenceReplaceRequest::signable(['piece_id' => 'acme-blog-2026-09-12-attestation', 'post_id' => 41, 'revision' => 'sha256:653d0e03211c28bf6d86ba229a45a6f055ee1586e700e99b0bd141423652a024', 'title' => 'Signing what we send (corrected)', 'content' => '<p>The wire carries a digest now, and the rewrite carries one too.</p>', 'overwrite_adopted' => true, 'site' => 'example.test', 'issued_at' => '2026-09-24T12:00:00Z']),
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQvcmVwbGFjZQpwaWVjZV9pZDozMjphY21lLWJsb2ctMjAyNi0wOS0xMi1hdHRlc3RhdGlvbgpwb3N0X2lkOjI6NDEKcmV2aXNpb246NzE6c2hhMjU2OjY1M2QwZTAzMjExYzI4YmY2ZDg2YmEyMjlhNDVhNmYwNTVlZTE1ODZlNzAwZTk5YjBiZDE0MTQyMzY1MmEwMjQKdGl0bGU6MzI6U2lnbmluZyB3aGF0IHdlIHNlbmQgKGNvcnJlY3RlZCkKY29udGVudDo3MDo8cD5UaGUgd2lyZSBjYXJyaWVzIGEgZGlnZXN0IG5vdywgYW5kIHRoZSByZXdyaXRlIGNhcnJpZXMgb25lIHRvby48L3A+Cm92ZXJ3cml0ZV9hZG9wdGVkOjQ6dHJ1ZQpzaXRlOjEyOmV4YW1wbGUudGVzdAppc3N1ZWRfYXQ6MjA6MjAyNi0wOS0yNFQxMjowMDowMFoK',
+            'bytes'    => 381,
+            'digest'   => 'b4ac9c9c1521253c977bc24c49d3b63e3fb6a472e7555c380a3b66def3f8b78b',
+            'header'   => 'v1 45da37c57dd21b36 i3ehOlB3xkZg1gX5TFDHMxax9YuV62881YIvcHbwBQydZcDASkSNEFt83o-eVWQQZsnkuBEbsEOxbPbCjbEpBA',
         ],
         ];
         // THE LINK VECTORS JOIN THEM, reduced to the same flat shape by the ONE
@@ -1198,5 +1245,63 @@ final class AttestationTest extends TestCase {
             'the rewrite reply dropped the attestation state');
         $this->assertSame(CadenceAttest::KID, $r['attestation_kid'] ?? null);
         $this->assertSame('verified', CadenceRestRoute::respond($r)['body']['attestation']);
+    }
+
+    /**
+     * EACH VECTOR VERIFIES AGAINST ITS OWN ROUTE AND AGAINST NO OTHER. The
+     * route line is the first thing in the material, so a signature for one
+     * route must not verify a body presented to another, even where the two
+     * sign the same names.
+     */
+    public function test_every_contract_vector_verifies_only_against_its_own_route(): void {
+        $this->install_vector_key();
+        $vectors = $this->vectors();
+        $routes = array_unique(array_column($vectors, 'route'));
+        $crossed = 0;
+        foreach ($vectors as $v) {
+            foreach ($routes as $route) {
+                if ($route === $v['route']) {
+                    continue;
+                }
+                try {
+                    $r = CadenceAttestation::verify($v['header'], $route, $v['fields'], self::KEY);
+                } catch (InvalidArgumentException $e) {
+                    // The other route signs a name this body does not carry:
+                    // no material, so no verification either.
+                    $crossed++;
+                    continue;
+                }
+                $this->assertFalse($r['ok'], $v['label'] . ' verified against ' . $route);
+                $this->assertSame('mismatch', $r['branch'], $v['label'] . ' against ' . $route);
+                $crossed++;
+            }
+        }
+        $this->assertSame(count($vectors) * (count($routes) - 1), $crossed);
+        $this->assertGreaterThan(0, $crossed);
+    }
+
+    /**
+     * THE FIVE-FIELD AND THE EIGHT-FIELD REWRITE ARE TWO SIGNATURES. Each
+     * verifies against its own body and not the other's: the confirmation
+     * cannot be stripped from a signed body, nor added to one.
+     */
+    public function test_a_five_field_and_an_eight_field_rewrite_do_not_verify_each_other(): void {
+        $this->install_vector_key();
+        $by = array_column($this->vectors(), null, 'label');
+        $five = $by['replace'];
+        $eight = $by['replace-with-rewrite-confirmation'];
+        $this->assertTrue(CadenceAttestation::verify($five['header'], '/content/replace', $five['fields'], self::KEY)['ok']);
+        $this->assertTrue(CadenceAttestation::verify($eight['header'], '/content/replace', $eight['fields'], self::KEY)['ok']);
+        foreach ([[$five['header'], $eight['fields']], [$eight['header'], $five['fields']]] as [$header, $fields]) {
+            $r = CadenceAttestation::verify($header, '/content/replace', $fields, self::KEY);
+            $this->assertFalse($r['ok']);
+            $this->assertSame('mismatch', $r['branch']);
+        }
+        // AND THE FIVE-FIELD BODY'S ORDER NAMES NONE OF THE THREE.
+        $this->assertSame(['piece_id', 'post_id', 'revision', 'title', 'content'],
+            CadenceAttestation::signed_field_order('/content/replace', $five['fields']));
+        $this->assertSame(['piece_id', 'post_id', 'revision', 'title', 'content',
+                           'overwrite_adopted', 'site', 'issued_at'],
+            CadenceAttestation::signed_field_order('/content/replace', $eight['fields']));
     }
 }

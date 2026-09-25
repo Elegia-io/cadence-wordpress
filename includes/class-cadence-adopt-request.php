@@ -428,7 +428,8 @@ final class CadenceAdoptRequest {
         return null;
     }
 
-    private static function issued_at(string $value): ?int {
+    /** A UTC ISO-8601 instant as a timestamp, or null. `/content/replace` reads its confirmation with it. */
+    public static function issued_at(string $value): ?int {
         if (preg_match(self::ISSUED_AT, $value, $m) !== 1) {
             return null;
         }

@@ -98,13 +98,30 @@ final class CadenceAttestation {
      */
     public const MEMBERS = '@members';
 
+    /**
+     * THE PREFIX THAT MARKS A FIELD SIGNED ONLY WHEN THE BODY CARRIES IT.
+     *
+     * Not a character any field name can start with. `signed_field_order`
+     * strips it and keeps the name exactly when the field map holds that key.
+     */
+    public const OPTIONAL = '?';
+
     /** The four fields every member signs, in order, under its own prefix. */
     public const MEMBER_FIELDS = ['post_id', 'language_code', 'element_type',
                                   'source_language_code'];
 
     public const FIELDS = [
         '/content'           => ['piece_id', 'language', 'post_type', 'status', 'title', 'content'],
-        '/content/replace'   => ['piece_id', 'post_id', 'revision', 'title', 'content'],
+        // THE REWRITE CONFIRMATION, LAST AND SIGNED ONLY WHEN PRESENT. An
+        // adopted post is rewritten only over a client's confirmation, and the
+        // three names below carry it. Optional the way `@members` is expanded:
+        // present in the body means present in the material, so an
+        // intermediary can neither add one nor strip one without a `mismatch`,
+        // and a five-field body from a caller that never adopts verifies
+        // exactly as it did before the three existed.
+        '/content/replace'   => ['piece_id', 'post_id', 'revision', 'title', 'content',
+                                 self::OPTIONAL . 'overwrite_adopted', self::OPTIONAL . 'site',
+                                 self::OPTIONAL . 'issued_at'],
         // `/translation-group` signs `source_language_code` on every member
         // BECAUSE IT REACHES A WRITE: it goes straight into WPML's
         // `wpml_set_element_language_details`, so an intermediary that added or
@@ -156,6 +173,13 @@ final class CadenceAttestation {
         }
         $order = [];
         foreach (self::FIELDS[$route] as $name) {
+            if (strncmp($name, self::OPTIONAL, 1) === 0) {
+                $name = substr($name, 1);
+                if (array_key_exists($name, $fields)) {
+                    $order[] = $name;
+                }
+                continue;
+            }
             if ($name !== self::MEMBERS) {
                 $order[] = $name;
                 continue;

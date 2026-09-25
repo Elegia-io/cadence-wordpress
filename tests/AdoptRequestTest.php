@@ -656,7 +656,10 @@ final class AdoptRequestTest extends TestCase {
             'row 3: another site'           => [$none, ['site' => 'other.test'], 'adopt_wrong_site'],
             'row 3 twin: this site'         => [$none, ['site' => 'example.test'], 'ok'],
             'row 4: 301 s old'              => [$none, ['issued_at' => self::now(-301)], 'adopt_expired'],
-            'row 4: 301 s ahead'            => [$none, ['issued_at' => self::now(301)], 'adopt_expired'],
+            // A provider runs before its tests, so an instant only 1 s past the
+            // window ahead drifts inside it by the time a slow lane gets here.
+            // The exact 301 s edge is asserted in-method, above.
+            'row 4: 360 s ahead'            => [$none, ['issued_at' => self::now(360)], 'adopt_expired'],
             'row 4 twin: 299 s old'         => [$none, ['issued_at' => self::now(-299)], 'ok'],
             'row 5: no WPML'                => [static function (): void { WpStub::$wpml_reads = false; },
                                                 [], 'wpml_unavailable'],

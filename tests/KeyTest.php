@@ -49,6 +49,33 @@ final class KeyTest extends TestCase {
     }
 
     /**
+     * `content.adopt` IS A GRANT LIKE ANY OTHER: named on issue, and it
+     * authorises exactly itself.
+     */
+    public function test_a_key_issued_with_content_adopt_authorises_it_and_nothing_else(): void {
+        $key = $this->issue(['content.adopt']);
+        $this->assertTrue(CadenceKey::authorises($key['secret'], 'content.adopt'));
+        $this->assertFalse(CadenceKey::authorises($key['secret'], 'content.publish'));
+        $this->assertFalse(CadenceKey::authorises($key['secret'], 'content.replace'));
+        $this->assertFalse(CadenceKey::authorises($key['secret'], 'translation.link'));
+    }
+
+    /** THE TWIN: a key issued without it is refused the grant. */
+    public function test_a_key_without_content_adopt_is_refused_the_grant(): void {
+        $key = $this->issue(['content.publish', 'content.replace', 'translation.link']);
+        $this->assertFalse(CadenceKey::authorises($key['secret'], 'content.adopt'));
+    }
+
+    /** ALL FOUR GRANTS ROUND-TRIP on one key, each answering for itself. */
+    public function test_a_key_issued_with_all_four_capabilities_round_trips(): void {
+        $key = $this->issue(['content.publish', 'content.replace', 'translation.link', 'content.adopt']);
+        $this->assertTrue(CadenceKey::authorises($key['secret'], 'content.publish'));
+        $this->assertTrue(CadenceKey::authorises($key['secret'], 'content.replace'));
+        $this->assertTrue(CadenceKey::authorises($key['secret'], 'translation.link'));
+        $this->assertTrue(CadenceKey::authorises($key['secret'], 'content.adopt'));
+    }
+
+    /**
      * THE BYLINE THE KEY NAMES, AND WHAT IT IS NOT.
      *
      * `post_author` is the only thing this id is ever read for. It is not a

@@ -60,8 +60,18 @@ final class CadenceKey {
      * issued with the field left blank -- means ANY registered post type, which
      * is what every key did before this and what keys already live on clients'
      * sites go on doing. See `publish_types_for`.
+     *
+     * `content.adopt` IS ITS OWN GRANT, DISJOINT FROM `content.publish` AND
+     * `content.replace` ON PURPOSE: a key that may deliver a piece and link a
+     * translation must not thereby reach a post it did not make. It is meant
+     * to be ticked on the same key that already holds `translation.link` --
+     * adopting a post stamps it with the adopting key's id, and only that
+     * key's own posts can later be linked -- but that pairing is an operator
+     * choice, not something this class enforces. A key issued before this
+     * grant existed carries no such capability, the same compatibility rule
+     * as every other one here.
      */
-    public const CAPABILITIES = ['content.publish', 'content.replace', 'translation.link'];
+    public const CAPABILITIES = ['content.publish', 'content.replace', 'translation.link', 'content.adopt'];
 
     /** The request header the key is presented in. */
     public const HEADER = 'X-Cadence-Key';

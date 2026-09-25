@@ -75,6 +75,20 @@ final class AdminTest extends TestCase {
     }
 
     /**
+     * THE ISSUING FORM WALKS `CadenceKey::CAPABILITIES` -- one checkbox per
+     * entry, none pinned to a name here, so a capability added to the
+     * constant reaches this screen with no change to this file.
+     */
+    public function test_screen_renders_one_checkbox_per_capability(): void {
+        $this->grantManageOptions();
+        ob_start();
+        CadenceAdmin::screen();
+        $out = ob_get_clean();
+        $this->assertSame(count(CadenceKey::CAPABILITIES), substr_count($out, 'type="checkbox"'),
+            'the number of rendered checkboxes did not match the number of capabilities');
+    }
+
+    /**
      * AN INVALID NONCE REFUSES AN ISSUE BEFORE IT WRITES ANYTHING. Granting
      * `manage_options` is not enough on its own -- the form itself has to be
      * the one that posted.

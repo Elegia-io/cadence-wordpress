@@ -312,6 +312,68 @@ final class ContentRequestTest extends TestCase {
     }
 
     /**
+     * A KEY SCOPED TO A TYPE PUBLISHES INTO IT WHATEVER `is_post_type_viewable`
+     * SAYS. A plugin's own type registered `public => false` -- common on a
+     * headless or page-builder site -- is not publicly viewable, but an
+     * operator who named it on the key's scope has declared it content, and
+     * this route must not then refuse the very type the key was issued for.
+     */
+    #[Group('wpml')]
+    public function test_a_scoped_key_publishes_into_a_registered_type_that_is_not_publicly_viewable(): void {
+        WpStub::$post_types[] = 'private_doc';
+        WpStub::$non_viewable_types[] = 'private_doc';
+
+        $r = $this->publish($this->body(['post_type' => 'private_doc']),
+            ['content.replace'], null, ['private_doc']);
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertTrue($r['created']);
+        $this->assertSame('private_doc', WpStub::$inserted[0]['post_type'] ?? null);
+    }
+
+    /**
+     * THE TWIN: A NULL (WIDE) SCOPE DOES NOT REACH THAT SAME TYPE. Nothing
+     * declared it content on this key's behalf, so the one narrowing left
+     * over "any registered type" -- viewability -- applies, and this key is
+     * refused the type the scoped key above was created for.
+     */
+    public function test_an_unscoped_key_is_refused_a_registered_type_that_is_not_publicly_viewable(): void {
+        WpStub::$post_types[] = 'private_doc';
+        WpStub::$non_viewable_types[] = 'private_doc';
+
+        $r = $this->publish($this->body(['post_type' => 'private_doc']));
+
+        $this->assertFalse($r['ok'], 'an unscoped key created a non-viewable type');
+        $this->assertSame('post_type_out_of_scope', $r['code']);
+        $this->assertSame([], WpStub::$inserted);
+    }
+
+    /**
+     * REVISION AND ATTACHMENT ARE REFUSED EVEN WHEN A KEY NAMES THEM
+     * EXPLICITLY. Naming them on a key's scope is not something this
+     * connector's own admin screen would ever produce, but the refusal does
+     * not depend on that -- neither is a piece of content whatever an
+     * operator typed into the scope field. AND THE SENTENCE IS THE ORDINARY
+     * OUT-OF-SCOPE ONE, not a separate tell.
+     */
+    public function test_a_revision_or_an_attachment_is_refused_even_when_explicitly_scoped(): void {
+        foreach (['revision', 'attachment'] as $type) {
+            WpStub::reset();
+            WpStub::$capabilities = ['publish_posts' => [null], 'edit_posts' => [null]];
+            WpStub::$post_types[] = 'attachment';
+
+            $r = $this->publish($this->body(['post_type' => $type]),
+                ['content.replace'], null, [$type]);
+
+            $this->assertFalse($r['ok'], "a $type was created by a key explicitly scoped to it");
+            $this->assertSame('post_type_out_of_scope', $r['code']);
+            $this->assertStringContainsString("this key publishes into $type", $r['reason'] ?? '',
+                'a scoped key got a different sentence than the ordinary out-of-scope refusal');
+            $this->assertSame([], WpStub::$inserted);
+        }
+    }
+
+    /**
      * THE CREATING KEY'S ID IS STAMPED ON THE POST, in the same call that makes
      * it.
      *

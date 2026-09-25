@@ -175,7 +175,7 @@ final class WpStub {
     public static array $users = [7 => 'A Real Person'];
 
     /** @var list<string> the post types this site has registered */
-    public static array $post_types = ['post', 'page'];
+    public static array $post_types = ['post', 'page', 'revision', 'nav_menu_item'];
 
     /**
      * TYPES REGISTERED BUT NOT PUBLIC-FACING, mirroring core's own
@@ -200,6 +200,15 @@ final class WpStub {
      * @var array<int, bool>
      */
     public static array $cache_cleared = [];
+
+    /**
+     * STANDS IN FOR `wp_suspend_cache_invalidation()` BEING ON, as it is
+     * during a WordPress import and around a bulk operation a client's own
+     * plugin runs. While true, `clean_post_cache()` is the documented no-op
+     * -- WordPress skips the invalidation entirely -- and only a direct
+     * `wp_cache_delete()` still clears the id.
+     */
+    public static bool $cache_invalidation_suspended = false;
 
     /**
      * WHETHER THE NONCE `check_admin_referer` IS ASKED TO VERIFY IS GOOD.
@@ -244,11 +253,12 @@ final class WpStub {
         self::$row_override = [];
         self::$rows_gone = [];
         self::$cache_cleared = [];
+        self::$cache_invalidation_suspended = false;
         self::$non_viewable_types = ['revision', 'nav_menu_item'];
         self::$update_throws = null;
         self::$next_post_id = 100;
         $GLOBALS['wpdb'] = new WpdbStub();
-        self::$post_types = ['post', 'page'];
+        self::$post_types = ['post', 'page', 'revision', 'nav_menu_item'];
         self::$active_languages = ['en' => ['code' => 'en'], 'de' => ['code' => 'de']];
         self::$options = [];
         self::$users = [7 => 'A Real Person'];
@@ -389,7 +399,27 @@ function get_post($post_id = null): ?WP_Post {
  * `WpStub::$cache_cleared`.
  */
 function clean_post_cache(int $post_id): void {
+    // THE DOCUMENTED NO-OP: real WordPress skips the invalidation entirely
+    // while `wp_suspend_cache_invalidation()` is on, which is why a caller
+    // that cares cannot rely on this call alone. See
+    // `WpStub::$cache_invalidation_suspended`.
+    if (WpStub::$cache_invalidation_suspended) {
+        return;
+    }
     WpStub::$cache_cleared[$post_id] = true;
+}
+
+/**
+ * STANDS IN FOR WORDPRESS'S OWN `wp_cache_delete()`: unlike
+ * `clean_post_cache`, it clears the id even while cache invalidation is
+ * suspended -- it is a direct object-cache call, not one routed through the
+ * invalidation machinery that flag turns off.
+ */
+function wp_cache_delete(int $id, string $group = ''): bool {
+    if ($group === 'posts') {
+        WpStub::$cache_cleared[$id] = true;
+    }
+    return true;
 }
 
 /**

@@ -209,20 +209,6 @@ final class CadenceReplaceRequest {
                     : 'not a piece this connector published')];
         }
 
-        // AND THE POST IS A CONTENT TYPE AT ALL -- ASKED BEFORE THE KEY'S OWN
-        // SCOPE, AND EVEN WHEN THE KEY NAMES NONE. `$post_types === null`
-        // means any registered type, and a revision -- or an attachment,
-        // which this plugin never creates -- is a registered type; without
-        // this, a key issued before the scope field existed reaches a
-        // revision that happens to carry this piece's stamp. SAME CODE as
-        // the scope check below: an operator's fix for either is the same
-        // sentence away, name a real post type.
-        if (!CadenceKey::is_content_type(get_post_type($fields['post_id']))) {
-            return ['ok' => false, 'code' => 'existing_post_type_out_of_scope', 'reason' => sprintf(
-                'the piece %s is on a post of a type this key does not publish into; '
-                . 'nothing was written', $fields['piece_id'])];
-        }
-
         // AND THE PIECE IS IN A TYPE THIS KEY STILL REACHES.
         //
         // WHAT IT PROTECTS, which is the only reason it is here: the
@@ -244,6 +230,16 @@ final class CadenceReplaceRequest {
         // sentence differs because the act does; the code is the API and the
         // reason is prose.
         //
+        // AND `CadenceKey::is_content_type` IS ASKED IN THE SAME BRANCH,
+        // WITH THE SAME CODE AND THE SAME SENTENCE -- not a separate check
+        // ahead of this one. A revision or an attachment is refused whatever
+        // the key's scope, and a null (wide) scope also refuses a registered
+        // type that is not publicly viewable (see that method's docblock);
+        // merged here rather than split, the two refusals are indistinguishable
+        // to a caller, which is the point -- a separate, earlier check would
+        // let a caller tell "this type is never content" apart from "this key
+        // was never scoped to it", and neither is the site's to disclose.
+        //
         // AFTER the identity check and after `identifier_mismatch`, so it can
         // only ever fire over a post this key reaches and that IS the piece
         // named. Asked earlier it would answer whether another tenant's post,
@@ -259,14 +255,18 @@ final class CadenceReplaceRequest {
         //
         // `null` names no type and means ANY, so a key issued before the field
         // existed replaces what it always replaced.
-        if ($post_types !== null && !in_array(get_post_type($fields['post_id']), $post_types, true)) {
+        $actual_type = get_post_type($fields['post_id']);
+        if (!CadenceKey::is_content_type($actual_type, $post_types)
+                || ($post_types !== null && !in_array($actual_type, $post_types, true))) {
             // The key's own scope and the identifier the caller sent, neither
             // of which is the site's to disclose -- and NOT the type the post
             // is in, which is.
-            return ['ok' => false, 'code' => 'existing_post_type_out_of_scope', 'reason' => sprintf(
-                'the piece %s is on a post of a type this key does not publish into; '
-                . 'this key publishes into %s, and nothing was written',
-                $fields['piece_id'], implode(', ', $post_types))];
+            return ['ok' => false, 'code' => 'existing_post_type_out_of_scope', 'reason' => $post_types !== null
+                ? sprintf('the piece %s is on a post of a type this key does not publish into; '
+                    . 'this key publishes into %s, and nothing was written',
+                    $fields['piece_id'], implode(', ', $post_types))
+                : sprintf('the piece %s is on a post of a type this key does not publish into; '
+                    . 'nothing was written', $fields['piece_id'])];
         }
 
         // FROM HERE THE ROW IS HELD. Everything above is decided from copies
@@ -311,7 +311,17 @@ final class CadenceReplaceRequest {
             // out by the write meant only to replace text, which is the same
             // failure this file exists to close one field over. Cleared here,
             // `wp_update_post`'s own read sees what the lock just read.
+            //
+            // BOTH CALLS, NOT EITHER ALONE. `clean_post_cache` is itself a
+            // no-op while `wp_suspend_cache_invalidation()` is set -- WordPress
+            // sets it during an import, and a client's own plugin can set it
+            // around any bulk operation -- so the direct `wp_cache_delete`
+            // is what still empties the object-cache group `clean_post_cache`
+            // would otherwise have cleared, over exactly the site condition
+            // this file's own header names as the one case a request-scoped
+            // transaction cannot see coming.
             clean_post_cache($fields['post_id']);
+            wp_cache_delete($fields['post_id'], 'posts');
 
             // AND THE TEXT HAS TO BE THE TEXT THE CALLER SAW. Read from the
             // locked row, not from the request and not from the cached copy: a

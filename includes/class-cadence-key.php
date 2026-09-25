@@ -190,30 +190,48 @@ final class CadenceKey {
     }
 
     /**
-     * IS THIS A TYPE CADENCE MAY REPLACE OR LINK A POST OF?
+     * IS THIS A TYPE CADENCE MAY PUBLISH, REPLACE OR LINK A POST OF?
      *
-     * `null` on the type-scope field of a key means ANY REGISTERED TYPE --
-     * the compatibility value a key issued before the field existed carries
-     * -- and `revision` is a registered type, as is `nav_menu_item`. Without
-     * this, a key naming no types reaches a revision that happens to carry
-     * this piece's stamp (a plugin that copies meta onto revisions, as ACF
-     * does with its own fields, can leave one carrying
-     * `_cadence_external_id`), and a replace or a link over it is not an act
+     * `revision` AND `attachment` ARE REFUSED UNCONDITIONALLY, whatever
+     * `$scope` says. `revision` because a key naming no types reaches a
+     * revision that happens to carry this piece's stamp (a plugin that
+     * copies meta onto revisions, as ACF does with its own fields, can leave
+     * one carrying `_cadence_external_id`), and a write to it is not an act
      * on the piece -- it is a write to a row `/content` never returned and no
-     * reader will ever see.
+     * reader will ever see. `attachment` on this plugin's own grounds and
+     * NOT core's: `is_post_type_viewable('attachment')` is true, because an
+     * attachment has its own public page, but Cadence never creates one and
+     * a piece landing on one is not a piece it could have published.
      *
-     * `revision` is excluded explicitly rather than left to
-     * `is_post_type_viewable`, which core also answers false for it, because
-     * the exclusion must hold even if that ever changed. `attachment` is
-     * excluded on this plugin's own grounds and NOT core's:
-     * `is_post_type_viewable('attachment')` is true, because an attachment
-     * has its own public page, but Cadence never creates one and a piece
-     * landing on one is not a piece this connector could have published.
-     * Every other publicly viewable type -- `post`, `page`, and a plugin's
-     * own custom type registered `public` or `publicly_queryable` -- passes.
+     * EVERY OTHER TYPE IS CHECKED AGAINST `is_post_type_viewable` ONLY WHEN
+     * `$scope` IS NULL. `null` on the type-scope field of a key means ANY
+     * REGISTERED TYPE -- the compatibility value a key issued before the
+     * field existed carries -- and viewability is the one narrowing left
+     * over a set that wide: a plugin's own type registered `public => false`
+     * (headless, or a page-builder's private working type) is content this
+     * plugin might reasonably be pointed at, but a null-scope key was never
+     * told to reach it. A key that NAMES a type, by contrast, has an
+     * operator's explicit say-so behind it -- `product`, `landing_page`,
+     * whatever a client's site calls its own content -- and viewability is
+     * not asked again: a scoped key is checked against its own named list
+     * elsewhere (`post_type_out_of_scope` / `existing_post_type_out_of_scope`
+     * / `link_post_type_out_of_scope`), and `is_post_type_viewable` would
+     * otherwise refuse a type an operator deliberately scoped a key to,
+     * which would make that type uncreatable, unreplaceable and unlinkable
+     * by the very key issued to act on it.
+     *
+     * `is_post_type_viewable` ITSELF CHECKS ONLY `publicly_queryable` FOR A
+     * TYPE THAT IS NOT ONE OF WORDPRESS'S OWN BUILT-INS -- core also asks
+     * `public` for a built-in, but that distinction never reaches a plugin's
+     * own custom type, which is the case this scope exists to cover.
+     *
+     * @param list<string>|null $scope the post types the presenting key
+     *                    names, exactly as passed to `run` on the calling
+     *                    route -- null for a key that names none.
      */
-    public static function is_content_type(string $type): bool {
-        return $type !== 'revision' && $type !== 'attachment' && is_post_type_viewable($type);
+    public static function is_content_type(string $type, ?array $scope): bool {
+        return $type !== 'revision' && $type !== 'attachment'
+            && ($scope !== null || is_post_type_viewable($type));
     }
 
     /**

@@ -1752,4 +1752,92 @@ final class LinkRequestTest extends TestCase {
             $this->assertSame([], WpStub::$writes, "a $type was written to despite the refusal");
         }
     }
+
+    /**
+     * A KEY SCOPED TO A TYPE LINKS IT WHATEVER `is_post_type_viewable` SAYS.
+     * A plugin's own type registered `public => false` is not publicly
+     * viewable, but an operator who named it on the key's scope has declared
+     * it content, and this route must not then refuse the very type the key
+     * was issued for.
+     */
+    #[Group('wpml')]
+    public function test_a_scoped_key_links_a_registered_type_that_is_not_publicly_viewable(): void {
+        WpStub::$post_types[] = 'private_doc';
+        WpStub::$non_viewable_types[] = 'private_doc';
+        WpStub::add_post(1, 'private_doc', 'en', 5);
+        WpStub::add_post(2, 'private_doc', 'de', 5);
+        $this->ours(1, 2);
+
+        $r = $this->link($this->plan([
+            'source' => ['post_id' => 1, 'language_code' => 'en',
+                         'element_type' => 'post_private_doc', 'source_language_code' => null],
+            'translations' => [
+                ['post_id' => 2, 'language_code' => 'de',
+                 'element_type' => 'post_private_doc', 'source_language_code' => 'en'],
+            ],
+        ]), ['private_doc']);
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertCount(2, WpStub::$writes);
+    }
+
+    /** THE TWIN: A NULL (WIDE) SCOPE DOES NOT REACH THAT SAME TYPE. */
+    #[Group('wpml')]
+    public function test_an_unscoped_key_is_refused_a_registered_type_that_is_not_publicly_viewable(): void {
+        WpStub::$post_types[] = 'private_doc';
+        WpStub::$non_viewable_types[] = 'private_doc';
+        WpStub::add_post(1, 'private_doc', 'en', 5);
+        WpStub::add_post(2, 'private_doc', 'de', 5);
+        $this->ours(1, 2);
+
+        $r = $this->link($this->plan([
+            'source' => ['post_id' => 1, 'language_code' => 'en',
+                         'element_type' => 'post_private_doc', 'source_language_code' => null],
+            'translations' => [
+                ['post_id' => 2, 'language_code' => 'de',
+                 'element_type' => 'post_private_doc', 'source_language_code' => 'en'],
+            ],
+        ]), null);
+
+        $this->assertFalse($r['ok'], 'an unscoped key linked a non-viewable type');
+        $this->assertSame('link_post_type_out_of_scope', $r['code']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * REVISION AND ATTACHMENT ARE REFUSED EVEN WHEN A KEY NAMES THEM
+     * EXPLICITLY -- neither is a piece of content whatever an operator typed
+     * into the scope field. AND THE SENTENCE IS THE ORDINARY OUT-OF-SCOPE
+     * ONE, not a separate tell: a caller cannot distinguish "this type is
+     * never content" from "this key was never scoped to it" by the reason.
+     */
+    #[Group('wpml')]
+    public function test_a_revision_or_an_attachment_is_refused_even_when_explicitly_scoped(): void {
+        foreach ([21 => 'revision', 22 => 'attachment'] as $id => $type) {
+            WpStub::reset();
+            WpStub::$post_types[] = 'attachment';
+            // THE SOURCE IS THE SAME TYPE, so the loop's ordinary scope check
+            // (post 1 in `[$type]`) does not refuse first and mask the check
+            // under test: it is `$id`'s type -- revision or attachment, not a
+            // scope mismatch -- that must be why this is refused.
+            WpStub::add_post(1, $type, 'en', 5);
+            WpStub::add_post($id, $type, 'de', 5);
+            $this->ours(1, $id);
+
+            $r = $this->link($this->plan([
+                'source' => ['post_id' => 1, 'language_code' => 'en',
+                             'element_type' => 'post_' . $type, 'source_language_code' => null],
+                'translations' => [
+                    ['post_id' => $id, 'language_code' => 'de',
+                     'element_type' => 'post_' . $type, 'source_language_code' => 'en'],
+                ],
+            ]), [$type]);
+
+            $this->assertFalse($r['ok'], "a $type was linked by a key explicitly scoped to it");
+            $this->assertSame('link_post_type_out_of_scope', $r['code']);
+            $this->assertStringContainsString("this key is scoped to $type", $r['reason'] ?? '',
+                'a scoped key got a different sentence than the ordinary out-of-scope refusal');
+            $this->assertSame([], WpStub::$writes, "a $type was written to despite the refusal");
+        }
+    }
 }

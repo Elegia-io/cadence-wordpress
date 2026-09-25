@@ -354,29 +354,30 @@ final class CadenceLinkRequest {
             // Nothing leaks by letting it through: reaching the type check at
             // all means the entitlement check already said yes.
             $type = get_post_type($p['post_id']);
-            // AND THE POST IS A CONTENT TYPE AT ALL, before the key's own
-            // scope is even asked -- the identical guard on
-            // `/content/replace`, for the identical reason: a null (wide)
-            // scope must not be read as reaching a revision or an
-            // attachment, which this plugin never creates. `$type === false`
-            // is an absent post, not a type question, and falls through
-            // unchanged to `validate_against_site` below, which names the
-            // true reason -- the post does not exist.
-            if ($type !== false && !CadenceKey::is_content_type($type)) {
-                return ['ok' => false, 'code' => 'link_post_type_out_of_scope', 'reason' => sprintf(
-                    'post %d is of a type this key does not reach; nothing was linked',
-                    $p['post_id'])];
-            }
-            if ($post_types !== null && $type !== false
-                    && !in_array($type, $post_types, true)) {
+            // AND THE POST IS A CONTENT TYPE THIS KEY REACHES, IN ONE CHECK
+            // WITH ONE MESSAGE -- the identical guard on `/content/replace`,
+            // for the identical reason. `CadenceKey::is_content_type` refuses
+            // a revision or an attachment whatever the scope, and, only when
+            // the scope is null (wide), a registered type that is not
+            // publicly viewable; the explicit scope-list membership below is
+            // the other half. Merged rather than split into two refusals with
+            // two sentences: a caller could otherwise tell "this type is
+            // never content" apart from "this key was never scoped to it",
+            // and neither is the site's to disclose. `$type === false` is an
+            // absent post, not a type question, and falls through unchanged
+            // to `validate_against_site` below, which names the true reason
+            // -- the post does not exist.
+            if ($type !== false
+                    && (!CadenceKey::is_content_type($type, $post_types)
+                        || ($post_types !== null && !in_array($type, $post_types, true)))) {
                 // The id the caller sent and the key's OWN scope, which is the
                 // caller's to know -- and never the type the post is in, which
-                // is the site's. That is the same line the two refusals above
-                // draw, and the reason this one may name a list at all.
-                return ['ok' => false, 'code' => 'link_post_type_out_of_scope', 'reason' => sprintf(
-                    'post %d is of a type this key does not reach; this key is scoped to '
-                    . '%s, and nothing was linked',
-                    $p['post_id'], implode(', ', $post_types))];
+                // is the site's.
+                return ['ok' => false, 'code' => 'link_post_type_out_of_scope', 'reason' => $post_types !== null
+                    ? sprintf('post %d is of a type this key does not reach; this key is scoped to '
+                        . '%s, and nothing was linked', $p['post_id'], implode(', ', $post_types))
+                    : sprintf('post %d is of a type this key does not reach; nothing was linked',
+                        $p['post_id'])];
             }
         }
 

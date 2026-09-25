@@ -776,6 +776,19 @@ final class CadenceLinkRequest {
             if (isset($ids[$p['post_id']])) {
                 return "post {$p['post_id']} appears twice in this plan";
             }
+            // EVERY MEMBER NAMES THE SAME ELEMENT TYPE. `validate_against_site`
+            // checks each member's `element_type` against its OWN post's real
+            // type, one at a time, so a plan naming `post_post` for the source
+            // and `post_page` for a translation passes that check on both
+            // counts while asking WPML to group a post together with a page --
+            // a mix nothing downstream refuses. Refused here, on the plan
+            // alone, before any write: one translation group holds one kind
+            // of member, never two.
+            if ($p['element_type'] !== $posts[0]['element_type']) {
+                return sprintf(
+                    'the plan mixes element types (%s and %s); one translation group cannot hold both',
+                    $posts[0]['element_type'], $p['element_type']);
+            }
             $by_language[$p['language_code']] = true;
             $ids[$p['post_id']] = true;
         }

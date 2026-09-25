@@ -662,6 +662,32 @@ final class LinkRequestTest extends TestCase {
     }
 
     /**
+     * ONE GROUP, ONE KIND OF MEMBER. `validate_against_site` checks each
+     * member's `element_type` against its OWN post's real type, one member at
+     * a time -- so a plan naming `post_page` for the source and `post_post`
+     * for the translation passes that check on both counts, each against its
+     * own post, while asking WPML to group a page together with a post. Real
+     * groups never mix the two, and refusing it here means the write is never
+     * attempted.
+     */
+    #[Group('wpml')]
+    public function test_a_plan_mixing_element_types_across_members_writes_nothing(): void {
+        WpStub::add_post(1, 'page', 'en', null);
+        WpStub::add_post(2, 'post', 'de', null);
+        $this->ours(1, 2);
+
+        $plan = $this->plan(['translations' => [
+            ['post_id' => 2, 'language_code' => 'de',
+             'element_type' => 'post_post', 'source_language_code' => 'en'],
+        ]]);
+        $r = $this->link($plan, null);
+
+        $this->assertFalse($r['ok'], 'a plan mixing post and page element types was linked');
+        $this->assertSame('bad_plan', $r['code']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
      * AND BEFORE THIS SITE IS ASKED WHETHER IT HAS WPML. That answer is a fact
      * about the client's installation, and an unattested caller does not earn it.
      */

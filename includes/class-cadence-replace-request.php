@@ -84,9 +84,9 @@ final class CadenceReplaceRequest {
     ];
 
     /**
-     * THE SPENT CONFIRMATION. The sha256 of the verified material of the last
-     * confirmed rewrite this post took, written under the row lock in the
-     * same transaction as the text.
+     * THE SPENT CONFIRMATIONS. One row per confirmed rewrite this post took,
+     * each the sha256 of its verified material, written under the row lock in
+     * the same transaction as the text.
      */
     public const SPENT_META = '_cadence_rewrite_spent';
 
@@ -378,6 +378,25 @@ final class CadenceReplaceRequest {
             clean_post_cache($fields['post_id']);
             wp_cache_delete($fields['post_id'], 'posts');
 
+            // THE FIFTH CONJUNCT, IN THE SAME CRITICAL SECTION AS ITS WRITE.
+            // Asked before the lock, two copies of one confirmed body could
+            // both pass it and then both write, the second over the same text
+            // when the rewrite leaves the text as it was. Here the second
+            // waits on the row, and reads the first one's record. EVERY spent
+            // digest is kept, one row each: a post restored twice sits on the
+            // captured revision again, and only the full list still names the
+            // older confirmation. The meta cache is dropped first for the
+            // reason the post cache is dropped above; the read that follows is
+            // the transaction's first consistent read, taken after the lock.
+            if ($spent !== null) {
+                wp_cache_delete($fields['post_id'], 'post_meta');
+                if (in_array($spent, (array) get_post_meta($fields['post_id'], self::SPENT_META, false), true)) {
+                    return self::release($wpdb, ['ok' => false, 'code' => 'confirmation_spent',
+                        'reason' => sprintf('this confirmation already rewrote post %d; a new rewrite '
+                            . 'needs a new confirmation, and nothing was written', $fields['post_id'])]);
+                }
+            }
+
             // AND THE TEXT HAS TO BE THE TEXT THE CALLER SAW. Read from the
             // locked row, not from the request and not from the cached copy: a
             // revision the request carried on both sides would be the caller's
@@ -444,7 +463,7 @@ final class CadenceReplaceRequest {
         // THE CONFIRMATION IS SPENT IN THE SAME TRANSACTION AS THE TEXT, so a
         // rewrite that commits has always recorded it and one that rolls back
         // never has.
-        if ($spent !== null && !update_post_meta($id, self::SPENT_META, $spent)) {
+        if ($spent !== null && add_post_meta($id, self::SPENT_META, $spent) === false) {
             return self::release($wpdb, ['ok' => false, 'code' => 'update_failed',
                 'reason' => 'the confirmation could not be recorded as spent, so the rewrite was not kept']);
         }
@@ -469,8 +488,9 @@ final class CadenceReplaceRequest {
     }
 
     /**
-     * The five conjuncts over an adopted post, in order. A refusal, or the
-     * spent record a successful rewrite writes.
+     * Four of the five conjuncts over an adopted post, in order. A refusal,
+     * or the digest the fifth, `confirmation_spent`, is asked about under
+     * the row lock.
      *
      * @return array{spent: string}|array{ok: false, code: string, reason: string}
      */
@@ -498,14 +518,10 @@ final class CadenceReplaceRequest {
         }
         // THE DIGEST OF THE VERIFIED MATERIAL, so the record names exactly the
         // bytes that were signed and nothing a caller can vary without a new
-        // signature.
-        $spent = hash('sha256', CadenceAttestation::material('/content/replace', self::signable($fields)));
-        if (get_post_meta($fields['post_id'], self::SPENT_META, true) === $spent) {
-            return ['ok' => false, 'code' => 'confirmation_spent', 'reason' => sprintf(
-                'this confirmation already rewrote post %d once; a new rewrite needs a new '
-                . 'confirmation, and nothing was written', $fields['post_id'])];
-        }
-        return ['spent' => $spent];
+        // signature. Whether it is already spent is asked under the row lock,
+        // in `run`, where the record is also written.
+        return ['spent' => hash('sha256',
+            CadenceAttestation::material('/content/replace', self::signable($fields)))];
     }
 
     /**

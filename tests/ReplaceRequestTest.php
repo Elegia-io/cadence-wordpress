@@ -1376,4 +1376,64 @@ final class ReplaceRequestTest extends TestCase {
         }
         $this->assertCount(14, CadenceReplaceRequest::REFUSAL_CODES);
     }
+
+    /**
+     * EVERY SPENT CONFIRMATION IS KEPT. X lands, the client restores, Y
+     * lands over the same revision, the client restores again: the post is
+     * back on the revision X names, and X replayed inside its window is
+     * refused on its own record, not only on the last one.
+     */
+    public function test_an_older_confirmation_stays_spent_after_a_newer_one_lands(): void {
+        $p = $this->adopted();
+        $x = $this->body($p, self::confirmation(['issued_at' => gmdate('Y-m-d\TH:i:s\Z', time() - 20)]));
+        $y = $this->body($p, self::confirmation(['issued_at' => gmdate('Y-m-d\TH:i:s\Z', time() - 10)]));
+        $hx = CadenceAttest::header('/content/replace', CadenceAttest::fields('/content/replace', $x), CadenceAttest::KEY_ID);
+        $this->assertTrue($this->replace($x, null, CadenceAttest::KEY_ID, $hx)['ok']);
+        WpStub::restore_revision($p['post_id'], 'The original', '<p>Original body.</p>');
+        $this->assertTrue($this->replace($y)['ok']);
+        WpStub::restore_revision($p['post_id'], 'The original', '<p>Original body.</p>');
+        $this->assertCount(2, get_post_meta($p['post_id'], CadenceReplaceRequest::SPENT_META, false));
+
+        WpStub::$updated = [];
+        $r = $this->replace($x, null, CadenceAttest::KEY_ID, $hx);
+        $this->assertSame('confirmation_spent', $r['code'] ?? null, $r['reason'] ?? '');
+        // AND THE NEWER ONE TOO, which is not the first row a single read answers.
+        $this->assertSame('confirmation_spent', $this->replace($y)['code'] ?? null);
+        $this->assertSame([], WpStub::$updated);
+        $this->assertSame('The original', WpStub::$posts[$p['post_id']]['post_title']);
+    }
+
+    public static function unchanged_or_changed(): array {
+        return ['a new text' => ['The rewrite'], 'the same text again' => ['The original']];
+    }
+
+    /**
+     * TWO COPIES OF ONE CONFIRMED BODY, CONCURRENTLY. The first takes the row
+     * lock and commits while the second waits on it; the second then reads
+     * the first's record under the lock and is refused. One write, one
+     * `confirmation_spent`, including when the rewrite leaves the text as it
+     * was and the revision would still agree.
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('unchanged_or_changed')]
+    public function test_two_concurrent_copies_of_one_confirmation_write_once(string $title): void {
+        $p = $this->adopted();
+        $over = self::confirmation();
+        if ($title === 'The original') {
+            $over['title'] = 'The original';
+            $over['content'] = '<p>Original body.</p>';
+        }
+        $body = $this->body($p, $over);
+        $header = CadenceAttest::header('/content/replace',
+            CadenceAttest::fields('/content/replace', $body), CadenceAttest::KEY_ID);
+        $first = null;
+        WpStub::$on_lock = function () use (&$first, $body, $header): void {
+            $first = $this->replace($body, null, CadenceAttest::KEY_ID, $header);
+        };
+        $second = $this->replace($body, null, CadenceAttest::KEY_ID, $header);
+
+        $this->assertTrue($first['ok'] ?? false, $first['reason'] ?? 'the first copy never ran');
+        $this->assertSame('confirmation_spent', $second['code'] ?? null, $second['reason'] ?? '');
+        $this->assertCount(1, WpStub::$updated);
+        $this->assertCount(1, get_post_meta($p['post_id'], CadenceReplaceRequest::SPENT_META, false));
+    }
 }

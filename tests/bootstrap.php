@@ -251,6 +251,19 @@ final class WpStub {
     /** Every `add_post_meta` call that stored something, in order, as [id, key, raw value]. */
     public static array $meta_added = [];
 
+    /**
+     * EVERY ROW OF A KEY, for a key written more than once without `$unique`.
+     * `$meta` keeps the first row, which is what a single read answers.
+     */
+    public static array $meta_rows = [];
+
+    /**
+     * Called once, just before a `SELECT ... FOR UPDATE` returns: a second
+     * request that took the row lock first and committed while this one
+     * waited on it.
+     */
+    public static $on_lock = null;
+
     /** Meta keys whose `delete_post_meta` answers false and removes nothing, as a failed delete would. */
     public static array $meta_delete_fails = [];
 
@@ -310,6 +323,8 @@ final class WpStub {
         self::$reads = [];
         self::$meta_add_fails = [];
         self::$meta_added = [];
+        self::$meta_rows = [];
+        self::$on_lock = null;
         self::$meta_delete_fails = [];
         self::$meta_deleted = [];
         self::$permalinks = [];
@@ -412,6 +427,11 @@ final class WpdbStub {
             return null;
         }
         $id = (int) $m[1];
+        if (WpStub::$on_lock !== null && stripos($sql, 'FOR UPDATE') !== false) {
+            $hook = WpStub::$on_lock;
+            WpStub::$on_lock = null;
+            $hook();
+        }
         if (!isset(WpStub::$posts[$id]) || in_array($id, WpStub::$rows_gone, true)) {
             return null;
         }
@@ -519,6 +539,9 @@ function get_post_meta(int $post_id, string $key = '', bool $single = false) {
         // `''`, not null and not false. A plugin reading this as "no value" by
         // truthiness cannot tell it from a meta value that is an empty string.
         return $value ?? '';
+    }
+    if (isset(WpStub::$meta_rows[$post_id][$key])) {
+        return WpStub::$meta_rows[$post_id][$key];
     }
     return $value === null ? [] : [$value];
 }
@@ -913,7 +936,15 @@ function add_post_meta(int $post_id, string $key, $value, bool $unique = false) 
         return false;
     }
     WpStub::$meta_added[] = [$post_id, $key, $value];
-    WpStub::$meta[$post_id][$key] = is_string($value) ? stripslashes($value) : $value;
+    $value = is_string($value) ? stripslashes($value) : $value;
+    // A SECOND ROW UNDER THE SAME KEY, never an overwrite: a single read
+    // still answers the first row, and a list read answers them all.
+    if (!$unique && array_key_exists($key, WpStub::$meta[$post_id] ?? [])) {
+        WpStub::$meta_rows[$post_id][$key] ??= [WpStub::$meta[$post_id][$key]];
+        WpStub::$meta_rows[$post_id][$key][] = $value;
+        return 1;
+    }
+    WpStub::$meta[$post_id][$key] = $value;
     return 1;
 }
 
@@ -922,7 +953,7 @@ function delete_post_meta(int $post_id, string $key, $value = ''): bool {
         return false;
     }
     $had = array_key_exists($key, WpStub::$meta[$post_id] ?? []);
-    unset(WpStub::$meta[$post_id][$key]);
+    unset(WpStub::$meta[$post_id][$key], WpStub::$meta_rows[$post_id][$key]);
     if ($had) {
         WpStub::$meta_deleted[] = [$post_id, $key];
     }
@@ -971,6 +1002,7 @@ function delete_option(string $name): bool {
 }
 
 function update_post_meta(int $post_id, string $key, $value): bool {
+    unset(WpStub::$meta_rows[$post_id][$key]);
     WpStub::$meta[$post_id][$key] = $value;
     return true;
 }

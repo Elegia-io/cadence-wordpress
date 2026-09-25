@@ -288,6 +288,17 @@ final class CadenceReplaceRequest {
                         $fields['post_id'])]);
             }
 
+            // AND THE CACHE IS DROPPED THE MOMENT THE ROW IS LOCKED. The read
+            // at the top of `run` may have filled it, and `wp_update_post`
+            // below fills in any field this request does not name -- status,
+            // password -- from that same cache rather than from the row this
+            // code just locked. Left standing, a status change or a password
+            // set that landed between the two reads is merged straight back
+            // out by the write meant only to replace text, which is the same
+            // failure this file exists to close one field over. Cleared here,
+            // `wp_update_post`'s own read sees what the lock just read.
+            clean_post_cache($fields['post_id']);
+
             // AND THE TEXT HAS TO BE THE TEXT THE CALLER SAW. Read from the
             // locked row, not from the request and not from the cached copy: a
             // revision the request carried on both sides would be the caller's

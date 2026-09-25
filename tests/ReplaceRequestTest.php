@@ -558,6 +558,46 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     /**
+     * THE SAME FAILURE ONE FIELD OVER. Title and content are what a
+     * replacement checks a revision against, so an edit to either is caught
+     * by `revision_mismatch` above. A status change is not part of the
+     * revision at all -- publishing to draft, or back -- and nothing checks
+     * it, so a replacement that matches on text alone is applied. If the
+     * write then merges a cached copy of the post for the fields it did not
+     * name, the status a human just changed underneath it is merged straight
+     * back to what the cache still says, and a published draft becomes
+     * public again under an edit that only asked to fix a sentence.
+     */
+    #[Group('wpml')]
+    public function test_a_status_change_that_landed_after_the_cached_read_is_not_reverted(): void {
+        $published = $this->publish();
+        $id = $published['post_id'];
+        // The cache -- what `get_post` answers -- still says `publish`; the
+        // row a concurrent wp-admin save committed says `draft`.
+        WpStub::$row_override[$id] = ['post_status' => 'draft'];
+
+        $r = $this->replace($this->body($published));
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('draft', WpStub::$posts[$id]['post_status'] ?? null,
+            'a status changed behind the cached read was reverted by the replacement');
+    }
+
+    /** THE TWIN, over a password set rather than a status changed. */
+    #[Group('wpml')]
+    public function test_a_password_set_after_the_cached_read_is_not_reverted(): void {
+        $published = $this->publish();
+        $id = $published['post_id'];
+        WpStub::$row_override[$id] = ['post_password' => 'set-by-hand'];
+
+        $r = $this->replace($this->body($published));
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('set-by-hand', WpStub::$posts[$id]['post_password'] ?? null,
+            'a password set behind the cached read was reverted by the replacement');
+    }
+
+    /**
      * THE ORDER IS THE GUARANTEE. Lock the row, read it, write it, release --
      * with nothing between the read and the write that another writer could
      * get through. A `SELECT` without `FOR UPDATE` reads the same bytes and

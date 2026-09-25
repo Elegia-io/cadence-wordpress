@@ -578,8 +578,8 @@ Requires a key carrying `content.adopt`, its own capability, disjoint from
 deliver a piece and link its translations does not thereby reach a post this
 connector never made.
 
-Adoption brings a post written by hand, or published before this connector
-recorded which key made what, into one key's scope, so `/translation-group`
+Adoption brings a post this connector did not create, such as one written by
+hand, into one key's scope, so `/translation-group`
 can make it the source of a translation group the same way it would a post
 this connector published. **It writes three meta rows and nothing else**:
 the post's title, text, status and translation group are untouched.
@@ -596,9 +596,12 @@ about to be claimed or released before anything happens:
 The link accepted is either this site's own wp-admin edit link
 (`post.php?post=<id>`, on this site's own host) or the post's public
 permalink; anything else, including an edit link for another site, resolves
-to nothing and is refused `adopt_link_unresolved`. A preview writes nothing
-and answers with the same report an adopt or release would, minus the post's
-content. The caller then confirms with the resolved `post_id`:
+to nothing and is refused `adopt_link_unresolved`, and so is a link carrying
+a fragment (`#...`). A preview writes nothing. `/adopt/preview` answers with
+the report `/adopt` would, `adopted: false` and without the post's content:
+`piece_id`, `post_id`, `language`, `post_type`, `title` and `status`.
+`/adopt/release/preview` answers `post_id`, `post_type`, `title`, `status`
+and `language`. The caller then confirms with the resolved `post_id`:
 
 ```json
 {"piece_id": "piece-2026-08-31-en", "post_id": 41, "language": "en",
@@ -608,7 +611,9 @@ content. The caller then confirms with the resolved `post_id`:
 `/adopt` writes three meta rows, all or nothing: `_cadence_external_id` and
 `_cadence_key`, the same two `/content` writes on a post it creates, and
 `_cadence_adopted`, an audit record of which key adopted the post, when, and
-what it was before. Only a post in `publish`, `draft`, `pending`, `future`
+what it was before. They are written in one database transaction, the record
+first and `_cadence_external_id` last, so a failure that cannot be undone in
+full still leaves the record, and the post can be released. Only a post in `publish`, `draft`, `pending`, `future`
 or `private`, carrying no password, of a type the key names, not one of this
 site's own pages (front page, posts page, privacy policy), and not already
 carrying any of the three rows, may be adopted. A post already adopted under
@@ -618,11 +623,13 @@ already carrying an identity refuses `post_already_identified`.
 
 **Undoing an adoption** is `/adopt/release`, which removes the same three
 rows and touches nothing else: no WPML relation is written or destroyed. It
-takes `post_id` (and, optionally, `piece_id`, checked for consistency),
-signed the same way as an adopt. Called through the API it reaches only a
-post the presenting key itself adopted, unless the post's translations are
-still attached to it (`already_grouped`), in which case it has to be removed
-from its translation group first. In wp-admin, a **"Release from Cadence"**
+takes `post_id` and `piece_id`, both required and signed the same way as an
+adopt; `piece_id` must be the piece the post carries. Called through the API
+it reaches only a post the presenting key itself adopted: a post another key
+adopted and a post never adopted are both refused `not_adopted`, so a key
+learns nothing about posts it does not own. It is also refused while the
+post's translations are still attached to it (`already_grouped`), in which
+case it has to be removed from its translation group first. In wp-admin, a **"Release from Cadence"**
 row action appears on the posts list for any post carrying the adoption
 record, visible only to someone holding `manage_options`; it calls the same
 release with no key and no signature, because the administrator is the
@@ -732,11 +739,11 @@ the reason is prose and changes freely.
 | `adopt_post_type_out_of_scope` | 403 | the post is of a type this key may not adopt; nothing was written |
 | `adopt_post_unavailable` | 409 | the post is in a state that cannot be adopted, or carries a password |
 | `adopt_site_page` | 403 | the post is one of this site's own pages (front page, posts page, privacy policy); nothing was written |
-| `post_already_identified` | 409 | the post already carries a piece identity, so it cannot be adopted, or released through the API, again |
+| `post_already_identified` | 409 | the post already carries a piece identity, so it cannot be adopted; or, on release, the post this key adopted carries another key's stamp or another piece |
 | `adopt_repeat` | 409 | the post is already adopted under this piece by this key; nothing was written again |
 | `adopt_piece_taken` | 409 | this piece is already on another post on this site; nothing was written |
 | `adopt_busy` | 409 | another adoption holds this post or piece right now; nothing was written |
-| `not_adopted` | 409 | the post was not adopted, so there is nothing to release |
+| `not_adopted` | 409 | the post was not adopted by the presenting key (from wp-admin: not adopted at all), so there is nothing to release |
 | `adopt_failed` | 500 | the adoption or release record could not be written, or removed, in full |
 
 **What the create path relies on, beyond what WPML documents.** Three

@@ -558,6 +558,67 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     /**
+     * THE SAME FAILURE ONE FIELD OVER. Title and content are what a
+     * replacement checks a revision against, so an edit to either is caught
+     * by `revision_mismatch` above. A status change is not part of the
+     * revision at all -- publishing to draft, or back -- and nothing checks
+     * it, so a replacement that matches on text alone is applied. If the
+     * write then merges a cached copy of the post for the fields it did not
+     * name, the status a human just changed underneath it is merged straight
+     * back to what the cache still says, and a published draft becomes
+     * public again under an edit that only asked to fix a sentence.
+     */
+    #[Group('wpml')]
+    public function test_a_status_change_that_landed_after_the_cached_read_is_not_reverted(): void {
+        $published = $this->publish();
+        $id = $published['post_id'];
+        // The cache -- what `get_post` answers -- still says `publish`; the
+        // row a concurrent wp-admin save committed says `draft`.
+        WpStub::$row_override[$id] = ['post_status' => 'draft'];
+
+        $r = $this->replace($this->body($published));
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('draft', WpStub::$posts[$id]['post_status'] ?? null,
+            'a status changed behind the cached read was reverted by the replacement');
+    }
+
+    /** THE TWIN, over a password set rather than a status changed. */
+    #[Group('wpml')]
+    public function test_a_password_set_after_the_cached_read_is_not_reverted(): void {
+        $published = $this->publish();
+        $id = $published['post_id'];
+        WpStub::$row_override[$id] = ['post_password' => 'set-by-hand'];
+
+        $r = $this->replace($this->body($published));
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('set-by-hand', WpStub::$posts[$id]['post_password'] ?? null,
+            'a password set behind the cached read was reverted by the replacement');
+    }
+
+    /**
+     * `clean_post_cache` IS ITSELF A NO-OP WHILE CACHE INVALIDATION IS
+     * SUSPENDED -- WordPress sets that during an import, and a client's own
+     * plugin can set it around any bulk operation it runs. A status change
+     * that lands behind the cached read during exactly that window must
+     * still survive, which is what the direct `wp_cache_delete` call is for.
+     */
+    #[Group('wpml')]
+    public function test_a_status_change_survives_even_while_cache_invalidation_is_suspended(): void {
+        $published = $this->publish();
+        $id = $published['post_id'];
+        WpStub::$row_override[$id] = ['post_status' => 'draft'];
+        WpStub::$cache_invalidation_suspended = true;
+
+        $r = $this->replace($this->body($published));
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('draft', WpStub::$posts[$id]['post_status'] ?? null,
+            'a status changed behind the cached read was reverted while cache invalidation was suspended');
+    }
+
+    /**
      * THE ORDER IS THE GUARANTEE. Lock the row, read it, write it, release --
      * with nothing between the read and the write that another writer could
      * get through. A `SELECT` without `FOR UPDATE` reads the same bytes and
@@ -868,6 +929,60 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertStringNotContainsString('page', $r['reason']);
     }
 
+    /**
+     * A NULL TYPE SCOPE IS "ANY REGISTERED TYPE", AND A REVISION IS ONE. A key
+     * issued before the type-scope field existed names no types at all, which
+     * the check above reads as reaching everything -- including a revision
+     * that happens to carry this piece's stamp (a plugin copying meta onto
+     * revisions can leave one carrying `_cadence_external_id` and
+     * `_cadence_key`), and `nav_menu_item`, which is likewise registered but
+     * not a piece of content. Neither is a post `/content` could ever have
+     * placed this identifier on through the normal path, so a replace
+     * reaching one is not a rewrite of the piece.
+     */
+    public function test_a_revision_or_a_nav_menu_item_is_refused_even_when_the_key_names_no_type(): void {
+        foreach ([21 => 'revision', 22 => 'nav_menu_item'] as $id => $type) {
+            WpStub::$posts[$id] = ['post_type' => $type, 'post_status' => 'publish',
+                                   'post_title' => 'Not a piece', 'post_content' => '<p>Not a piece.</p>'];
+            WpStub::$meta[$id][CadenceContentRequest::META] = 'piece-1';
+            WpStub::$meta[$id][CadenceContentRequest::KEY_META] = 'key-a';
+
+            $r = $this->replace([
+                'piece_id' => 'piece-1', 'post_id' => $id, 'revision' => 'whatever',
+                'title' => 'Taken', 'content' => '<p>Taken.</p>',
+            ], null, 'key-a');
+
+            $this->assertFalse($r['ok'], "a $type was rewritten by a key naming no type");
+            $this->assertSame('existing_post_type_out_of_scope', $r['code']);
+        }
+        $this->assertSame([], WpStub::$updated, 'nothing was written to either row');
+        $this->assertSame('Not a piece', WpStub::$posts[21]['post_title']);
+        $this->assertSame('Not a piece', WpStub::$posts[22]['post_title']);
+    }
+
+    /**
+     * ATTACHMENT IS DIFFERENT FROM THE OTHER TWO: `is_post_type_viewable`
+     * answers true for it, because an attachment has its own public page.
+     * Refused anyway, on Cadence's own grounds -- this connector never
+     * creates one, so a piece landing on one is not a piece it published.
+     */
+    public function test_an_attachment_is_refused_even_though_wordpress_calls_it_viewable(): void {
+        WpStub::$post_types[] = 'attachment';
+        WpStub::$posts[23] = ['post_type' => 'attachment', 'post_status' => 'publish',
+                              'post_title' => 'Not a piece', 'post_content' => ''];
+        WpStub::$meta[23][CadenceContentRequest::META] = 'piece-1';
+        WpStub::$meta[23][CadenceContentRequest::KEY_META] = 'key-a';
+
+        $r = $this->replace([
+            'piece_id' => 'piece-1', 'post_id' => 23, 'revision' => 'whatever',
+            'title' => 'Taken', 'content' => '<p>Taken.</p>',
+        ], null, 'key-a');
+
+        $this->assertFalse($r['ok'], 'an attachment was rewritten');
+        $this->assertSame('existing_post_type_out_of_scope', $r['code']);
+        $this->assertSame([], WpStub::$updated);
+    }
+
     /** THE ACCEPT-PROOFS EITHER SIDE OF IT: the named type, and no type named. */
     #[Group('wpml')]
     public function test_a_piece_in_a_type_the_key_names_is_rewritten(): void {
@@ -882,6 +997,74 @@ final class ReplaceRequestTest extends TestCase {
         $published = $this->publish([], 'key-a');
         $r = $this->replace($this->body($published), null, 'key-a');
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
+    }
+
+    /**
+     * A KEY SCOPED TO A TYPE REPLACES IT WHATEVER `is_post_type_viewable`
+     * SAYS. A plugin's own type registered `public => false` is not publicly
+     * viewable, but an operator who named it on the key's scope has declared
+     * it content -- the same fact `/content` now agrees with (see
+     * `ContentRequestTest::test_a_scoped_key_publishes_into_a_registered_type_that_is_not_publicly_viewable`),
+     * so a piece created in it must still be replaceable through the same key.
+     */
+    #[Group('wpml')]
+    public function test_a_scoped_key_replaces_a_registered_type_that_is_not_publicly_viewable(): void {
+        WpStub::$post_types[] = 'private_doc';
+        WpStub::$non_viewable_types[] = 'private_doc';
+        $published = $this->publish(['post_type' => 'private_doc'], 'key-a', ['private_doc']);
+
+        $r = $this->replace($this->body($published), ['private_doc'], 'key-a');
+
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('The rewrite', WpStub::$posts[$published['post_id']]['post_title']);
+    }
+
+    /** THE TWIN: A NULL (WIDE) SCOPE DOES NOT REACH THAT SAME TYPE. */
+    #[Group('wpml')]
+    public function test_an_unscoped_key_is_refused_a_registered_type_that_is_not_publicly_viewable(): void {
+        WpStub::$post_types[] = 'private_doc';
+        WpStub::$non_viewable_types[] = 'private_doc';
+        $published = $this->publish(['post_type' => 'private_doc'], 'key-a', ['private_doc']);
+
+        $r = $this->replace($this->body($published), null, 'key-a');
+
+        $this->assertFalse($r['ok'], 'an unscoped key rewrote a non-viewable type');
+        $this->assertSame('existing_post_type_out_of_scope', $r['code']);
+        // AND THE REFUSAL SAYS THE FIX: name it on the key's own scope.
+        $this->assertStringContainsString("key's own post-type scope", $r['reason'] ?? '');
+        // NOT THE TYPE AGAIN -- the sentence is one fixed string whatever
+        // type triggered it, and does not echo `private_doc` back.
+        $this->assertStringNotContainsString('private_doc', $r['reason'] ?? '');
+        $this->assertSame([], WpStub::$updated);
+    }
+
+    /**
+     * REVISION AND ATTACHMENT ARE REFUSED EVEN WHEN A KEY NAMES THEM
+     * EXPLICITLY -- neither is a piece of content whatever an operator typed
+     * into the scope field. AND THE SENTENCE IS THE ORDINARY OUT-OF-SCOPE
+     * ONE, not a separate tell: a caller scoped to `revision` alone cannot
+     * distinguish "this type is never content" from "this key was never
+     * scoped to it" by the reason text.
+     */
+    public function test_a_revision_or_an_attachment_is_refused_even_when_explicitly_scoped(): void {
+        WpStub::$post_types[] = 'attachment';
+        foreach ([31 => 'revision', 32 => 'attachment'] as $id => $type) {
+            WpStub::$posts[$id] = ['post_type' => $type, 'post_status' => 'publish',
+                                   'post_title' => 'Not a piece', 'post_content' => ''];
+            WpStub::$meta[$id][CadenceContentRequest::META] = 'piece-1';
+            WpStub::$meta[$id][CadenceContentRequest::KEY_META] = 'key-a';
+
+            $r = $this->replace([
+                'piece_id' => 'piece-1', 'post_id' => $id, 'revision' => 'whatever',
+                'title' => 'Taken', 'content' => '<p>Taken.</p>',
+            ], [$type], 'key-a');
+
+            $this->assertFalse($r['ok'], "a $type was rewritten by a key explicitly scoped to it");
+            $this->assertStringContainsString("this key publishes into $type", $r['reason'] ?? '',
+                'a scoped key got a different sentence than the ordinary out-of-scope refusal');
+            $this->assertSame('existing_post_type_out_of_scope', $r['code']);
+        }
+        $this->assertSame([], WpStub::$updated);
     }
 
     /**

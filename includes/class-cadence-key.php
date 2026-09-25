@@ -190,6 +190,51 @@ final class CadenceKey {
     }
 
     /**
+     * IS THIS A TYPE CADENCE MAY PUBLISH, REPLACE OR LINK A POST OF?
+     *
+     * `revision` AND `attachment` ARE REFUSED UNCONDITIONALLY, whatever
+     * `$scope` says. `revision` because a key naming no types reaches a
+     * revision that happens to carry this piece's stamp (a plugin that
+     * copies meta onto revisions, as ACF does with its own fields, can leave
+     * one carrying `_cadence_external_id`), and a write to it is not an act
+     * on the piece -- it is a write to a row `/content` never returned and no
+     * reader will ever see. `attachment` on this plugin's own grounds and
+     * NOT core's: `is_post_type_viewable('attachment')` is true, because an
+     * attachment has its own public page, but Cadence never creates one and
+     * a piece landing on one is not a piece it could have published.
+     *
+     * EVERY OTHER TYPE IS CHECKED AGAINST `is_post_type_viewable` ONLY WHEN
+     * `$scope` IS NULL. `null` on the type-scope field of a key means ANY
+     * REGISTERED TYPE -- the compatibility value a key issued before the
+     * field existed carries -- and viewability is the one narrowing left
+     * over a set that wide: a plugin's own type registered `public => false`
+     * (headless, or a page-builder's private working type) is content this
+     * plugin might reasonably be pointed at, but a null-scope key was never
+     * told to reach it. A key that NAMES a type, by contrast, has an
+     * operator's explicit say-so behind it -- `product`, `landing_page`,
+     * whatever a client's site calls its own content -- and viewability is
+     * not asked again: a scoped key is checked against its own named list
+     * elsewhere (`post_type_out_of_scope` / `existing_post_type_out_of_scope`
+     * / `link_post_type_out_of_scope`), and `is_post_type_viewable` would
+     * otherwise refuse a type an operator deliberately scoped a key to,
+     * which would make that type uncreatable, unreplaceable and unlinkable
+     * by the very key issued to act on it.
+     *
+     * `is_post_type_viewable` ITSELF CHECKS ONLY `publicly_queryable` FOR A
+     * TYPE THAT IS NOT ONE OF WORDPRESS'S OWN BUILT-INS -- core also asks
+     * `public` for a built-in, but that distinction never reaches a plugin's
+     * own custom type, which is the case this scope exists to cover.
+     *
+     * @param list<string>|null $scope the post types the presenting key
+     *                    names, exactly as passed to `run` on the calling
+     *                    route -- null for a key that names none.
+     */
+    public static function is_content_type(string $type, ?array $scope): bool {
+        return $type !== 'revision' && $type !== 'attachment'
+            && ($scope !== null || is_post_type_viewable($type));
+    }
+
+    /**
      * THE PUBLIC ID A PRESENTED KEY AUTHENTICATES AS, or null.
      *
      * The id and never the secret: this is what gets written into a post's meta
@@ -312,6 +357,19 @@ final class CadenceKey {
                 if (!post_type_exists($type)) {
                     return sprintf('this site registers no post type %s, so a key scoped to it '
                                    . 'could never publish anything', $type);
+                }
+                // THE SAME FAILURE, ONE STEP EARLIER: `revision` and
+                // `attachment` are refused everywhere Cadence acts on a post
+                // -- see `CadenceKey::is_content_type` -- whatever a key's
+                // scope names, so a key scoped to either would read on the
+                // admin screen as one that works and fail every publish,
+                // replace and link it is ever presented for, exactly like a
+                // typo'd type name. Refused here, at issue time, for the
+                // same reason that one is.
+                if ($type === 'revision' || $type === 'attachment') {
+                    return sprintf('%s is never a piece of content this connector can publish into, '
+                                   . 'replace or link; a key scoped to it could never do any of the three',
+                                   $type);
                 }
                 $scope[] = $type;
             }

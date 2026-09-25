@@ -178,6 +178,33 @@ final class CadenceContentRequest {
                     'reason' => sprintf('this site has no post type %s', $fields['post_type'])];
         }
 
+        // AND IT IS A TYPE THIS PLUGIN MAY EVER PUBLISH INTO -- ASKED ONLY
+        // NOW, AFTER `post_type_exists`, so an unregistered type still
+        // answers `bad_request` above and never this. `CadenceKey::is_content_type`
+        // refuses `revision` and `attachment` whatever the scope, and, only
+        // for a null (wide) scope, a registered type that is not publicly
+        // viewable -- a plugin's own type registered `public => false`, which
+        // a scoped key names deliberately and this must not then refuse.
+        // THE SAME CODE AND, where the key is scoped, the SAME SENTENCE as
+        // the scope check above: replace and link refuse the identical fact
+        // one field later, and creating a piece a later `/content/replace` or
+        // `/translation-group` could never reach is the same failure one
+        // route earlier.
+        if (!CadenceKey::is_content_type($fields['post_type'], $post_types)) {
+            // NEITHER SENTENCE NAMES THE REQUEST'S TYPE A SECOND TIME IN THE
+            // NULL BRANCH -- both are ONE FIXED STRING per key configuration,
+            // so nothing about the refusal varies with which type triggered
+            // it, and the null branch states the fix: a key issued before
+            // the scope field existed reaches any viewable type, and naming
+            // the type explicitly is what makes a non-viewable one reachable
+            // too (`CadenceKey::is_content_type`'s own docblock has the rule).
+            return ['ok' => false, 'code' => 'post_type_out_of_scope', 'reason' => $post_types !== null
+                ? sprintf('this key publishes into %s, and the request names %s; nothing was created',
+                    implode(', ', $post_types), $fields['post_type'])
+                : 'a type that is not registered as public content has to be named in the key\'s '
+                    . 'post-type scope before this connector will publish into it; nothing was created'];
+        }
+
         // BEFORE ANYTHING IS WRITTEN. A declaration that disagrees with the
         // site is not a detail to report alongside a post that already exists:
         // the post is the thing that must not appear.

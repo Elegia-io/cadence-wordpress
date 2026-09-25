@@ -230,6 +230,16 @@ final class CadenceReplaceRequest {
         // sentence differs because the act does; the code is the API and the
         // reason is prose.
         //
+        // AND `CadenceKey::is_content_type` IS ASKED IN THE SAME BRANCH,
+        // WITH THE SAME CODE AND THE SAME SENTENCE -- not a separate check
+        // ahead of this one. A revision or an attachment is refused whatever
+        // the key's scope, and a null (wide) scope also refuses a registered
+        // type that is not publicly viewable (see that method's docblock);
+        // merged here rather than split, the two refusals are indistinguishable
+        // to a caller, which is the point -- a separate, earlier check would
+        // let a caller tell "this type is never content" apart from "this key
+        // was never scoped to it", and neither is the site's to disclose.
+        //
         // AFTER the identity check and after `identifier_mismatch`, so it can
         // only ever fire over a post this key reaches and that IS the piece
         // named. Asked earlier it would answer whether another tenant's post,
@@ -245,14 +255,23 @@ final class CadenceReplaceRequest {
         //
         // `null` names no type and means ANY, so a key issued before the field
         // existed replaces what it always replaced.
-        if ($post_types !== null && !in_array(get_post_type($fields['post_id']), $post_types, true)) {
+        $actual_type = get_post_type($fields['post_id']);
+        if (!CadenceKey::is_content_type($actual_type, $post_types)
+                || ($post_types !== null && !in_array($actual_type, $post_types, true))) {
             // The key's own scope and the identifier the caller sent, neither
             // of which is the site's to disclose -- and NOT the type the post
-            // is in, which is.
-            return ['ok' => false, 'code' => 'existing_post_type_out_of_scope', 'reason' => sprintf(
-                'the piece %s is on a post of a type this key does not publish into; '
-                . 'this key publishes into %s, and nothing was written',
-                $fields['piece_id'], implode(', ', $post_types))];
+            // is in, which is: neither sentence below names it, so each is
+            // ONE FIXED STRING per key configuration and nothing about the
+            // refusal varies with what type the post actually is. The null
+            // branch states the fix: naming the type explicitly on the key's
+            // scope is what admits a type that is not publicly viewable.
+            return ['ok' => false, 'code' => 'existing_post_type_out_of_scope', 'reason' => $post_types !== null
+                ? sprintf('the piece %s is on a post of a type this key does not publish into; '
+                    . 'this key publishes into %s, and nothing was written',
+                    $fields['piece_id'], implode(', ', $post_types))
+                : sprintf('the piece %s is on a post of a type this key does not publish into; '
+                    . 'naming that type on the key\'s own post-type scope would allow it, and '
+                    . 'nothing was written', $fields['piece_id'])];
         }
 
         // FROM HERE THE ROW IS HELD. Everything above is decided from copies
@@ -287,6 +306,36 @@ final class CadenceReplaceRequest {
                         'post %d could not be read for writing, so there is nothing here to replace',
                         $fields['post_id'])]);
             }
+
+            // AND THE CACHE IS DROPPED THE MOMENT THE ROW IS LOCKED. The read
+            // at the top of `run` may have filled it, and `wp_update_post`
+            // below fills in any field this request does not name -- status,
+            // password -- from that same cache rather than from the row this
+            // code just locked. Left standing, a status change or a password
+            // set that landed between the two reads is merged straight back
+            // out by the write meant only to replace text, which is the same
+            // failure this file exists to close one field over. Cleared here,
+            // `wp_update_post`'s own read sees what the lock just read.
+            //
+            // BOTH CALLS, NOT EITHER ALONE. `clean_post_cache` is itself a
+            // no-op while `wp_suspend_cache_invalidation()` is set -- WordPress
+            // sets it during an import, and a client's own plugin can set it
+            // around any bulk operation -- so the direct `wp_cache_delete`
+            // is what still empties the object-cache group `clean_post_cache`
+            // would otherwise have cleared, over exactly the site condition
+            // this file's own header names as the one case a request-scoped
+            // transaction cannot see coming.
+            //
+            // `wp_cache_delete` CLEARS ONLY THE POST ROW -- the `posts` cache
+            // group `clean_post_cache` would also have dropped the post's
+            // meta and term-relationship caches, and this fallback does not.
+            // That is enough here: `status` and `password` are fields of the
+            // row itself, read back through `get_post`, so the one cache this
+            // write's own merge can be fed a stale copy of is the one this
+            // clears. A future field read from meta or terms would need its
+            // own cache dropped the same deliberate way, not assumed covered.
+            clean_post_cache($fields['post_id']);
+            wp_cache_delete($fields['post_id'], 'posts');
 
             // AND THE TEXT HAS TO BE THE TEXT THE CALLER SAW. Read from the
             // locked row, not from the request and not from the cached copy: a

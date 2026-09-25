@@ -175,7 +175,40 @@ final class WpStub {
     public static array $users = [7 => 'A Real Person'];
 
     /** @var list<string> the post types this site has registered */
-    public static array $post_types = ['post', 'page'];
+    public static array $post_types = ['post', 'page', 'revision', 'nav_menu_item'];
+
+    /**
+     * TYPES REGISTERED BUT NOT PUBLIC-FACING, mirroring core's own
+     * `is_post_type_viewable()` for the two built-ins this suite needs:
+     * `revision` and `nav_menu_item`. Deliberately does NOT include
+     * `attachment` -- core really does answer true for it, and
+     * `CadenceKey::is_content_type` excludes it on its own grounds, which is
+     * the fact a test against this stub has to prove rather than assume.
+     *
+     * @var list<string>
+     */
+    public static array $non_viewable_types = ['revision', 'nav_menu_item'];
+
+    /**
+     * IDS WHOSE CACHE HAS BEEN INVALIDATED, standing in for
+     * `clean_post_cache()`. `get_post` answers from `$posts` -- the possibly
+     * stale cache -- for every id not in here; once an id is cleared, it
+     * answers from `$row_override` merged over `$posts` instead, which is
+     * the same overlay the locked `SELECT ... FOR UPDATE` read already uses
+     * to model a row a concurrent edit changed underneath the cache.
+     *
+     * @var array<int, bool>
+     */
+    public static array $cache_cleared = [];
+
+    /**
+     * STANDS IN FOR `wp_suspend_cache_invalidation()` BEING ON, as it is
+     * during a WordPress import and around a bulk operation a client's own
+     * plugin runs. While true, `clean_post_cache()` is the documented no-op
+     * -- WordPress skips the invalidation entirely -- and only a direct
+     * `wp_cache_delete()` still clears the id.
+     */
+    public static bool $cache_invalidation_suspended = false;
 
     /**
      * WHETHER THE NONCE `check_admin_referer` IS ASKED TO VERIFY IS GOOD.
@@ -219,10 +252,13 @@ final class WpStub {
         self::$post_read_fails = false;
         self::$row_override = [];
         self::$rows_gone = [];
+        self::$cache_cleared = [];
+        self::$cache_invalidation_suspended = false;
+        self::$non_viewable_types = ['revision', 'nav_menu_item'];
         self::$update_throws = null;
         self::$next_post_id = 100;
         $GLOBALS['wpdb'] = new WpdbStub();
-        self::$post_types = ['post', 'page'];
+        self::$post_types = ['post', 'page', 'revision', 'nav_menu_item'];
         self::$active_languages = ['en' => ['code' => 'en'], 'de' => ['code' => 'de']];
         self::$options = [];
         self::$users = [7 => 'A Real Person'];
@@ -344,8 +380,56 @@ function get_post($post_id = null): ?WP_Post {
         return null;
     }
     $p = WpStub::$posts[$id];
+    // ONLY ONCE THE CACHE HAS BEEN INVALIDATED does this read the same
+    // overlay the locked row read already uses -- see `clean_post_cache`.
+    // Before that, `get_post` answers from `$posts` alone, exactly as it
+    // always has, which is what keeps every other test in this file honest.
+    if (!empty(WpStub::$cache_cleared[$id])) {
+        $p = array_merge($p, WpStub::$row_override[$id] ?? []);
+    }
     return new WP_Post($id, $p['post_title'] ?? '', $p['post_content'] ?? '',
-                       $p['post_status'] ?? 'draft', $p['post_type'] ?? 'post');
+                       $p['post_status'] ?? 'draft', $p['post_type'] ?? 'post',
+                       $p['post_password'] ?? '');
+}
+
+/**
+ * STANDS IN FOR WORDPRESS'S OWN `clean_post_cache()`: invalidates this
+ * process's cached copy of one post, so the next `get_post` for it answers
+ * from the row rather than from what was read before. See
+ * `WpStub::$cache_cleared`.
+ */
+function clean_post_cache(int $post_id): void {
+    // THE DOCUMENTED NO-OP: real WordPress skips the invalidation entirely
+    // while `wp_suspend_cache_invalidation()` is on, which is why a caller
+    // that cares cannot rely on this call alone. See
+    // `WpStub::$cache_invalidation_suspended`.
+    if (WpStub::$cache_invalidation_suspended) {
+        return;
+    }
+    WpStub::$cache_cleared[$post_id] = true;
+}
+
+/**
+ * STANDS IN FOR WORDPRESS'S OWN `wp_cache_delete()`: unlike
+ * `clean_post_cache`, it clears the id even while cache invalidation is
+ * suspended -- it is a direct object-cache call, not one routed through the
+ * invalidation machinery that flag turns off.
+ */
+function wp_cache_delete(int $id, string $group = ''): bool {
+    if ($group === 'posts') {
+        WpStub::$cache_cleared[$id] = true;
+    }
+    return true;
+}
+
+/**
+ * Mirrors core's `is_post_type_viewable()`: true for a registered type that
+ * is public-facing. Modelled here as "registered, and not one of the
+ * built-ins WordPress itself never gives a front end" -- see
+ * `WpStub::$non_viewable_types`.
+ */
+function is_post_type_viewable(string $type): bool {
+    return post_type_exists($type) && !in_array($type, WpStub::$non_viewable_types, true);
 }
 
 /** Single-value meta, including WordPress's own answer for meta that is not there. */
@@ -619,7 +703,8 @@ final class WP_Post {
         public string $post_title = '',
         public string $post_content = '',
         public string $post_status = 'draft',
-        public string $post_type = 'post'
+        public string $post_type = 'post',
+        public string $post_password = ''
     ) {}
 }
 
@@ -708,12 +793,21 @@ function wp_update_post(array $postarr, bool $wp_error = false) {
     // whole question here is whether the write happens inside the lock.
     $GLOBALS['wpdb']->log[] = 'UPDATE (wp_update_post)';
     $id = $postarr['ID'] ?? 0;
-    // The site now holds what was written, so the next read of this post sees
-    // it -- without which nothing here could tell a check made against the
-    // post from one made against the request that changed it.
-    foreach (['post_title', 'post_content', 'post_status'] as $field) {
-        if (isset($postarr[$field], WpStub::$posts[$id])) {
+    // REAL `wp_update_post()` FILLS IN ANY FIELD THE CALLER DID NOT GIVE FROM
+    // ITS OWN CACHED READ OF THE POST (`get_post($ID, ARRAY_A)`), then writes
+    // the whole merged row. Modelled here because that merge is the exact
+    // mechanism `clean_post_cache` exists to close: a stale `get_post` hands
+    // back a field the caller never touched, and it lands back in the row
+    // over whatever a concurrent edit put there.
+    $cached = isset(WpStub::$posts[$id]) ? get_post($id) : null;
+    foreach (['post_title', 'post_content', 'post_status', 'post_password'] as $field) {
+        if (!isset(WpStub::$posts[$id])) {
+            break;
+        }
+        if (array_key_exists($field, $postarr)) {
             WpStub::$posts[$id][$field] = $postarr[$field];
+        } elseif ($cached !== null) {
+            WpStub::$posts[$id][$field] = $cached->$field;
         }
     }
     return $id;

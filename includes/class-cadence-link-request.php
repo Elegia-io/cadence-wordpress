@@ -354,16 +354,36 @@ final class CadenceLinkRequest {
             // Nothing leaks by letting it through: reaching the type check at
             // all means the entitlement check already said yes.
             $type = get_post_type($p['post_id']);
-            if ($post_types !== null && $type !== false
-                    && !in_array($type, $post_types, true)) {
+            // AND THE POST IS A CONTENT TYPE THIS KEY REACHES, IN ONE CHECK
+            // WITH ONE MESSAGE -- the identical guard on `/content/replace`,
+            // for the identical reason. `CadenceKey::is_content_type` refuses
+            // a revision or an attachment whatever the scope, and, only when
+            // the scope is null (wide), a registered type that is not
+            // publicly viewable; the explicit scope-list membership below is
+            // the other half. Merged rather than split into two refusals with
+            // two sentences: a caller could otherwise tell "this type is
+            // never content" apart from "this key was never scoped to it",
+            // and neither is the site's to disclose. `$type === false` is an
+            // absent post, not a type question, and falls through unchanged
+            // to `validate_against_site` below, which names the true reason
+            // -- the post does not exist.
+            if ($type !== false
+                    && (!CadenceKey::is_content_type($type, $post_types)
+                        || ($post_types !== null && !in_array($type, $post_types, true)))) {
                 // The id the caller sent and the key's OWN scope, which is the
                 // caller's to know -- and never the type the post is in, which
-                // is the site's. That is the same line the two refusals above
-                // draw, and the reason this one may name a list at all.
-                return ['ok' => false, 'code' => 'link_post_type_out_of_scope', 'reason' => sprintf(
-                    'post %d is of a type this key does not reach; this key is scoped to '
-                    . '%s, and nothing was linked',
-                    $p['post_id'], implode(', ', $post_types))];
+                // is the site's: neither sentence below names it, so each is
+                // ONE FIXED STRING per key configuration and nothing about the
+                // refusal varies with what type the post actually is. The
+                // null branch states the fix: naming the type explicitly on
+                // the key's scope is what admits a type that is not publicly
+                // viewable.
+                return ['ok' => false, 'code' => 'link_post_type_out_of_scope', 'reason' => $post_types !== null
+                    ? sprintf('post %d is of a type this key does not reach; this key is scoped to '
+                        . '%s, and nothing was linked', $p['post_id'], implode(', ', $post_types))
+                    : sprintf('post %d is of a type this key does not reach; naming that type on the '
+                        . 'key\'s own post-type scope would allow it, and nothing was linked',
+                        $p['post_id'])];
             }
         }
 
@@ -762,6 +782,19 @@ final class CadenceLinkRequest {
             }
             if (isset($ids[$p['post_id']])) {
                 return "post {$p['post_id']} appears twice in this plan";
+            }
+            // EVERY MEMBER NAMES THE SAME ELEMENT TYPE. `validate_against_site`
+            // checks each member's `element_type` against its OWN post's real
+            // type, one at a time, so a plan naming `post_post` for the source
+            // and `post_page` for a translation passes that check on both
+            // counts while asking WPML to group a post together with a page --
+            // a mix nothing downstream refuses. Refused here, on the plan
+            // alone, before any write: one translation group holds one kind
+            // of member, never two.
+            if ($p['element_type'] !== $posts[0]['element_type']) {
+                return sprintf(
+                    'the plan mixes element types (%s and %s); one translation group cannot hold both',
+                    $posts[0]['element_type'], $p['element_type']);
             }
             $by_language[$p['language_code']] = true;
             $ids[$p['post_id']] = true;

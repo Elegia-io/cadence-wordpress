@@ -90,6 +90,7 @@ monolingual site with no WPML installed.
 * The settings screen no longer uses dashes.
 * An attestation public key already attached to one connector key is refused
   on another, so each connector key needs its own signing key.
+* Fixed: the settings screen could fail to load for a key whose id was all digits.
 
 = 0.7.0 =
 * The translation-linking route now requires an Ed25519 attestation over the

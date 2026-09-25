@@ -1333,7 +1333,7 @@ final class AttestationTest extends TestCase {
     }
 
     /**
-     * THE SAME LIST, IN THE SAME ORDER, AS THE SPINE'S `SITE_PARITY`. Each
+     * THE SAME LIST, IN THE SAME ORDER, AS THE SIGNER'S LIST'S `SITE_PARITY`. Each
      * side pins the other's output: a row changed on one side only is a site
      * that refuses every adopt, release and rewrite confirmation as signed
      * for another site.
@@ -1357,7 +1357,7 @@ final class AttestationTest extends TestCase {
     }
 
     #[DataProvider('site_parity')]
-    public function test_site_matches_the_spines_normalisation(string $home, string $site): void {
+    public function test_site_matches_the_signers_normalisation(string $home, string $site): void {
         WpStub::reset();
         WpStub::$options['home'] = $home;
         $this->assertSame($site, CadenceAttestation::site());

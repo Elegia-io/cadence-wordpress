@@ -90,6 +90,43 @@ final class AdminTest extends TestCase {
     }
 
     /**
+     * AN ALL-DIGIT KEY ID DOES NOT FATAL THE SCREEN. `bin2hex(random_bytes(8))`
+     * lands on 16 decimal digits about once in 1900 keys, and PHP casts a
+     * decimal-integer string array key to an int on the way out of
+     * `CadenceKey::all()` -- exactly like this seeded option row -- which
+     * used to reach `CadenceKey::unsigned_ok(string $id)` as an int and throw
+     * a TypeError.
+     */
+    public function test_screen_renders_an_all_digit_key_id_without_a_typeerror(): void {
+        $this->grantManageOptions();
+        WpStub::$options[CadenceKey::OPTION] = [
+            '1234567890123456' => [
+                'label' => 'tenant-a', 'hash' => 'x', 'caps' => ['content.publish'],
+                'author' => 7, 'created' => time(), 'revoked_at' => null,
+            ],
+        ];
+        ob_start();
+        CadenceAdmin::screen();
+        $out = ob_get_clean();
+        $this->assertStringContainsString('1234567890123456', $out);
+    }
+
+    /** THE TWIN: a hex id with letters is not an int array key and behaved this way already. */
+    public function test_screen_renders_a_hex_letter_key_id(): void {
+        $this->grantManageOptions();
+        WpStub::$options[CadenceKey::OPTION] = [
+            'ab34567890123456' => [
+                'label' => 'tenant-a', 'hash' => 'x', 'caps' => ['content.publish'],
+                'author' => 7, 'created' => time(), 'revoked_at' => null,
+            ],
+        ];
+        ob_start();
+        CadenceAdmin::screen();
+        $out = ob_get_clean();
+        $this->assertStringContainsString('ab34567890123456', $out);
+    }
+
+    /**
      * AN INVALID NONCE REFUSES AN ISSUE BEFORE IT WRITES ANYTHING. Granting
      * `manage_options` is not enough on its own -- the form itself has to be
      * the one that posted.

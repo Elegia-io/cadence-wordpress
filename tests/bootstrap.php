@@ -453,6 +453,9 @@ final class WpdbStub {
     /** When true, `get_col` fails as a real one does: an empty array and `last_error` set. */
     public bool $get_col_fails = false;
 
+    /** When true, `get_var` fails as a real one does: null and `last_error` set. */
+    public bool $get_var_fails = false;
+
     public function prepare(string $sql, ...$args): string {
         foreach ($args as $arg) {
             $sql = preg_replace_callback('/%[ds]/', static fn (array $m): string => $m[0] === '%d'
@@ -530,6 +533,10 @@ final class WpdbStub {
      */
     public function get_var(string $sql): ?string {
         $this->log[] = $sql;
+        if ($this->get_var_fails) {
+            $this->last_error = 'Deadlock found when trying to get lock';
+            return null;
+        }
         if (preg_match("/\\ASELECT `option_value` FROM `wp_options` WHERE `option_name` = '([^']*)'\\z/s",
                        $sql, $m) !== 1) {
             return null;

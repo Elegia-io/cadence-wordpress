@@ -612,6 +612,9 @@ do not match each other. If the Site Address uses one, the endpoint Cadence is
 given must use the same one, or every adopt, release and rewrite confirmation
 is refused as signed for another site.
 
+On a server without the PHP mbstring extension, a Site Address whose host has
+uppercase non-ASCII letters is not matched; write the host in lowercase.
+
 The link accepted is either this site's own wp-admin edit link
 (`post.php?post=<id>`, on this site's own host) or the post's public
 permalink; anything else, including an edit link for another site, resolves

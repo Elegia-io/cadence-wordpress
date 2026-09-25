@@ -261,6 +261,10 @@ final class CadenceAdmin {
         // dismissed. Nothing at all is printed when no key carries it, so the
         // warning stays a warning rather than furniture.
         foreach (CadenceKey::all() as $warn_id => $warn_record) {
+            // PHP casts an all-digit id to an int array key on the way out of
+            // `CadenceKey::all()`; cast it back before it reaches a function
+            // typed `string $id`, or a key like `1234567890123456` fatals here.
+            $warn_id = (string) $warn_id;
             $flag = CadenceKey::unsigned_ok($warn_id);
             if ($flag === null) {
                 continue;
@@ -279,6 +283,8 @@ final class CadenceAdmin {
         }
         echo '<table class="widefat"><thead><tr><th>Label</th><th>Id</th><th>Grants</th><th>Publishes in</th><th>Byline</th><th>Attestation</th><th>State</th><th></th></tr></thead><tbody>';
         foreach (CadenceKey::all() as $id => $record) {
+            // Same all-digit-id cast as above.
+            $id = (string) $id;
             echo '<tr><td>' . esc_html((string) $record['label']) . '</td>'
                 . '<td><code>' . esc_html($id) . '</code></td>'
                 . '<td>' . esc_html(implode(', ', $record['caps'])) . '</td>'
@@ -380,6 +386,8 @@ final class CadenceAdmin {
             . ' at once, so a rotation has an overlap window; remove the retired one to make room '
             . 'for the next.</p>';
         foreach ($keys as $id => $record) {
+            // Same all-digit-id cast as above.
+            $id = (string) $id;
             echo '<h3>' . esc_html((string) $record['label'])
                 . ' <code>' . esc_html($id) . '</code></h3>';
             foreach (CadenceKey::verify_keys($id) as $stored) {

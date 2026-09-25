@@ -610,6 +610,26 @@ final class AdoptRequestTest extends TestCase {
     }
 
     /**
+     * THE SELECT THAT READS A HELD CLAIM'S AGE FAILING is not a stale claim
+     * to take over: it is a read that could not answer, and counts as held.
+     * Even a claim old enough to take over is left alone, and nothing is
+     * deleted or written.
+     */
+    #[DataProvider('held')]
+    #[Group('wpml')]
+    public function test_a_failed_claim_read_is_busy(string $option): void {
+        WpStub::$options[$option] = (string) (time() - 61);
+        $GLOBALS['wpdb']->get_var_fails = true;
+        $r = self::adopt(self::body());
+        $this->assertSame('adopt_busy', $r['code'] ?? null, $r['reason'] ?? '');
+        $this->assertSame([], WpStub::$meta_added);
+        $this->assertArrayHasKey($option, WpStub::$options, 'a held claim vanished though its read failed');
+        $this->assertSame([], array_values(array_filter(array_keys(WpStub::$options),
+            static fn ($k) => $k !== $option && str_starts_with($k, 'cadence_adopt_'))),
+            'a claim was left behind');
+    }
+
+    /**
      * A SECOND ADOPT THAT RUNS TO COMPLETION BETWEEN THIS ONE'S CHECKS AND ITS
      * CLAIM: of the same post under another piece, and of another post under
      * the same piece. Neither holds a claim any more when this one takes its

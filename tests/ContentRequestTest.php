@@ -345,6 +345,11 @@ final class ContentRequestTest extends TestCase {
 
         $this->assertFalse($r['ok'], 'an unscoped key created a non-viewable type');
         $this->assertSame('post_type_out_of_scope', $r['code']);
+        // AND THE REFUSAL SAYS THE FIX: name it on the key's own scope.
+        $this->assertStringContainsString("key's post-type scope", $r['reason'] ?? '');
+        // NOT THE TYPE AGAIN -- the sentence is one fixed string whatever
+        // type triggered it, and does not echo `private_doc` back.
+        $this->assertStringNotContainsString('private_doc', $r['reason'] ?? '');
         $this->assertSame([], WpStub::$inserted);
     }
 

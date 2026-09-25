@@ -1030,6 +1030,11 @@ final class ReplaceRequestTest extends TestCase {
 
         $this->assertFalse($r['ok'], 'an unscoped key rewrote a non-viewable type');
         $this->assertSame('existing_post_type_out_of_scope', $r['code']);
+        // AND THE REFUSAL SAYS THE FIX: name it on the key's own scope.
+        $this->assertStringContainsString("key's own post-type scope", $r['reason'] ?? '');
+        // NOT THE TYPE AGAIN -- the sentence is one fixed string whatever
+        // type triggered it, and does not echo `private_doc` back.
+        $this->assertStringNotContainsString('private_doc', $r['reason'] ?? '');
         $this->assertSame([], WpStub::$updated);
     }
 

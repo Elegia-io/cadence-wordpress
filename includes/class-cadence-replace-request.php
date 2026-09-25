@@ -260,12 +260,17 @@ final class CadenceReplaceRequest {
                 || ($post_types !== null && !in_array($actual_type, $post_types, true))) {
             // The key's own scope and the identifier the caller sent, neither
             // of which is the site's to disclose -- and NOT the type the post
-            // is in, which is.
+            // is in, which is: neither sentence below names it, so each is
+            // ONE FIXED STRING per key configuration and nothing about the
+            // refusal varies with what type the post actually is. The null
+            // branch states the fix: naming the type explicitly on the key's
+            // scope is what admits a type that is not publicly viewable.
             return ['ok' => false, 'code' => 'existing_post_type_out_of_scope', 'reason' => $post_types !== null
                 ? sprintf('the piece %s is on a post of a type this key does not publish into; '
                     . 'this key publishes into %s, and nothing was written',
                     $fields['piece_id'], implode(', ', $post_types))
                 : sprintf('the piece %s is on a post of a type this key does not publish into; '
+                    . 'naming that type on the key\'s own post-type scope would allow it, and '
                     . 'nothing was written', $fields['piece_id'])];
         }
 
@@ -320,6 +325,15 @@ final class CadenceReplaceRequest {
             // would otherwise have cleared, over exactly the site condition
             // this file's own header names as the one case a request-scoped
             // transaction cannot see coming.
+            //
+            // `wp_cache_delete` CLEARS ONLY THE POST ROW -- the `posts` cache
+            // group `clean_post_cache` would also have dropped the post's
+            // meta and term-relationship caches, and this fallback does not.
+            // That is enough here: `status` and `password` are fields of the
+            // row itself, read back through `get_post`, so the one cache this
+            // write's own merge can be fed a stale copy of is the one this
+            // clears. A future field read from meta or terms would need its
+            // own cache dropped the same deliberate way, not assumed covered.
             clean_post_cache($fields['post_id']);
             wp_cache_delete($fields['post_id'], 'posts');
 

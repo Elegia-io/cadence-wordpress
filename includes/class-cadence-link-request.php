@@ -372,11 +372,17 @@ final class CadenceLinkRequest {
                         || ($post_types !== null && !in_array($type, $post_types, true)))) {
                 // The id the caller sent and the key's OWN scope, which is the
                 // caller's to know -- and never the type the post is in, which
-                // is the site's.
+                // is the site's: neither sentence below names it, so each is
+                // ONE FIXED STRING per key configuration and nothing about the
+                // refusal varies with what type the post actually is. The
+                // null branch states the fix: naming the type explicitly on
+                // the key's scope is what admits a type that is not publicly
+                // viewable.
                 return ['ok' => false, 'code' => 'link_post_type_out_of_scope', 'reason' => $post_types !== null
                     ? sprintf('post %d is of a type this key does not reach; this key is scoped to '
                         . '%s, and nothing was linked', $p['post_id'], implode(', ', $post_types))
-                    : sprintf('post %d is of a type this key does not reach; nothing was linked',
+                    : sprintf('post %d is of a type this key does not reach; naming that type on the '
+                        . 'key\'s own post-type scope would allow it, and nothing was linked',
                         $p['post_id'])];
             }
         }

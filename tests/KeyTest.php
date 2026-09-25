@@ -385,6 +385,25 @@ final class KeyTest extends TestCase {
     }
 
     /**
+     * `revision` AND `attachment` ARE REFUSED THE SAME WAY, AT THE SAME
+     * MOMENT, for the same reason a typo is: `CadenceKey::is_content_type`
+     * refuses both everywhere Cadence acts on a post, whatever a key's scope
+     * names, so a key scoped to either would read on the admin screen as one
+     * that works and fail every publish, replace and link it is ever
+     * presented for. Both are registered post types on a real site -- unlike
+     * a typo -- so `post_type_exists` alone would not have caught them.
+     */
+    public function test_a_key_scoped_to_revision_or_attachment_is_refused(): void {
+        WpStub::$post_types[] = 'attachment';
+        foreach (['revision', 'attachment'] as $type) {
+            $result = CadenceKey::issue('tenant-a', ['content.publish'], 7, [$type]);
+            $this->assertIsString($result, "a key scoped to $type was issued");
+            $this->assertStringContainsString($type, $result);
+        }
+        $this->assertSame([], CadenceKey::all(), 'a key scoped to revision or attachment was stored anyway');
+    }
+
+    /**
      * AN EMPTY LIST IS REFUSED, and is not read as "any".
      *
      * The two are a keystroke apart on the screen and opposite in effect: a key

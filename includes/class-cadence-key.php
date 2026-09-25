@@ -358,6 +358,19 @@ final class CadenceKey {
                     return sprintf('this site registers no post type %s, so a key scoped to it '
                                    . 'could never publish anything', $type);
                 }
+                // THE SAME FAILURE, ONE STEP EARLIER: `revision` and
+                // `attachment` are refused everywhere Cadence acts on a post
+                // -- see `CadenceKey::is_content_type` -- whatever a key's
+                // scope names, so a key scoped to either would read on the
+                // admin screen as one that works and fail every publish,
+                // replace and link it is ever presented for, exactly like a
+                // typo'd type name. Refused here, at issue time, for the
+                // same reason that one is.
+                if ($type === 'revision' || $type === 'attachment') {
+                    return sprintf('%s is never a piece of content this connector can publish into, '
+                                   . 'replace or link; a key scoped to it could never do any of the three',
+                                   $type);
+                }
                 $scope[] = $type;
             }
             $post_types = array_values(array_unique($scope));

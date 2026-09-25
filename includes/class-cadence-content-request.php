@@ -191,11 +191,18 @@ final class CadenceContentRequest {
         // `/translation-group` could never reach is the same failure one
         // route earlier.
         if (!CadenceKey::is_content_type($fields['post_type'], $post_types)) {
+            // NEITHER SENTENCE NAMES THE REQUEST'S TYPE A SECOND TIME IN THE
+            // NULL BRANCH -- both are ONE FIXED STRING per key configuration,
+            // so nothing about the refusal varies with which type triggered
+            // it, and the null branch states the fix: a key issued before
+            // the scope field existed reaches any viewable type, and naming
+            // the type explicitly is what makes a non-viewable one reachable
+            // too (`CadenceKey::is_content_type`'s own docblock has the rule).
             return ['ok' => false, 'code' => 'post_type_out_of_scope', 'reason' => $post_types !== null
                 ? sprintf('this key publishes into %s, and the request names %s; nothing was created',
                     implode(', ', $post_types), $fields['post_type'])
-                : sprintf('%s is not a type this connector can publish into; nothing was created',
-                    $fields['post_type'])];
+                : 'a type that is not registered as public content has to be named in the key\'s '
+                    . 'post-type scope before this connector will publish into it; nothing was created'];
         }
 
         // BEFORE ANYTHING IS WRITTEN. A declaration that disagrees with the

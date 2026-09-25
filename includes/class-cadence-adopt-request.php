@@ -146,24 +146,68 @@ final class CadenceAdoptRequest {
             }
             $held[] = $name;
         }
+        // THE RE-CHECK READS PAST THIS REQUEST'S OWN CACHES. A copy of the
+        // post or its meta read before the claims cannot show what another
+        // request wrote since, and the piece lookup is a query on the meta
+        // table itself for the same reason.
+        wp_cache_delete($post_id, 'posts');
+        wp_cache_delete($post_id, 'post_meta');
         if (self::identified($post_id) || self::piece_elsewhere($piece_id, $post_id)) {
             self::release_claims($held);
             return self::refuse('adopt_busy', sprintf(
                 'another adoption reached post %d or this piece while this one was being checked; '
                 . 'nothing was written', $post_id));
         }
+        // Rows 7 to 9 again, on a fresh read: the post's type, status or
+        // password may have changed since they were checked.
+        $fresh = get_post($post_id);
+        if (!$fresh instanceof WP_Post) {
+            self::release_claims($held);
+            return self::refuse('post_missing', sprintf('there is no readable post %d on this site', $post_id));
+        }
+        $changed = self::admissible($fresh, $post_types);
+        if ($changed !== null) {
+            self::release_claims($held);
+            return $changed;
+        }
+        $checked['post'] = $fresh;
 
-        // ROW 18: three unique rows, all or nothing. `add_post_meta` unslashes
-        // what it is given, so each value is slashed first.
+        $written = self::write_rows($post_id, $piece_id, $key_id, $gate['kid'], $checked);
+        self::release_claims($held);
+        if ($written !== null) {
+            return $written;
+        }
+
+        return ['ok' => true, 'attestation' => 'verified', 'attestation_kid' => $gate['kid'],
+                'report' => self::reply(true, $piece_id, $checked, true)];
+    }
+
+    /**
+     * ROW 18: three unique rows, all or nothing, in one transaction. The
+     * record goes first and `_cadence_external_id` last, so a state the
+     * rollback cannot undo still carries the record, and a release, which
+     * only reaches a post with the record, can clear it. A lone
+     * `_cadence_external_id` would read as a post this plugin created.
+     * `add_post_meta` unslashes what it is given, so each value is slashed.
+     *
+     * @return array|null the refusal, or null when all three landed
+     */
+    private static function write_rows(int $post_id, string $piece_id, ?string $key_id, string $kid,
+                                       array $checked): ?array {
+        global $wpdb;
+        if ($wpdb->query('START TRANSACTION') === false) {
+            return self::refuse('adopt_failed', sprintf(
+                'this site would not open a transaction for post %d; nothing was written', $post_id));
+        }
         $record = wp_json_encode([
             'at'           => gmdate('Y-m-d\TH:i:s\Z'),
             'key'          => $key_id,
-            'kid'          => $gate['kid'],
+            'kid'          => $kid,
             'prior_status' => $checked['post']->post_status,
             'prior_trid'   => $checked['trid'],
         ]);
-        $rows = [CadenceContentRequest::META => $piece_id, CadenceContentRequest::KEY_META => $key_id,
-                 self::ADOPTED_META => $record];
+        $rows = [self::ADOPTED_META => $record, CadenceContentRequest::KEY_META => $key_id,
+                 CadenceContentRequest::META => $piece_id];
         $written = [];
         foreach ($rows as $meta => $value) {
             if (!is_string($value) || add_post_meta($post_id, $meta, wp_slash($value), true) === false) {
@@ -172,22 +216,30 @@ final class CadenceAdoptRequest {
             $written[] = $meta;
         }
         $landed = count($written) === count($rows);
+        wp_cache_delete($post_id, 'post_meta');
         foreach ($rows as $meta => $value) {
             $landed = $landed && get_post_meta($post_id, $meta, true) === $value;
         }
-        if (!$landed) {
-            foreach ($written as $meta) {
-                delete_post_meta($post_id, $meta);
-            }
-            self::release_claims($held);
-            return self::refuse('adopt_failed', sprintf(
-                'the adoption record for post %d could not be written; nothing was left on the post',
-                $post_id));
+        if ($landed && $wpdb->query('COMMIT') !== false) {
+            return null;
         }
-        self::release_claims($held);
 
-        return ['ok' => true, 'attestation' => 'verified', 'attestation_kid' => $gate['kid'],
-                'report' => self::reply(true, $piece_id, $checked, true)];
+        // UNDO, newest row first, and stop at the first delete that fails so
+        // the record is never removed while another row stays.
+        $wpdb->query('ROLLBACK');
+        foreach (array_reverse(array_keys($rows)) as $meta) {
+            if (in_array($meta, $written, true) && !delete_post_meta($post_id, $meta)) {
+                break;
+            }
+        }
+        wp_cache_delete($post_id, 'post_meta');
+        if (self::identified($post_id)) {
+            return self::refuse('adopt_failed', sprintf(
+                'the adoption record for post %d could not be written, and part of it could not be removed; '
+                . 'release the post, then adopt it again', $post_id));
+        }
+        return self::refuse('adopt_failed', sprintf(
+            'the adoption record for post %d could not be written; nothing was left on the post', $post_id));
     }
 
     /**
@@ -314,22 +366,25 @@ final class CadenceAdoptRequest {
         if (!$post instanceof WP_Post) {
             return self::refuse('post_missing', sprintf('there is no readable post %d on this site', $post_id));
         }
-        // ROW 7: only an adopted post. A post this plugin created carries no
-        // record and is never un-stamped here.
+        // ROW 7: only an adopted post, and through the API only one this key
+        // adopted. A post with no record and a post another key adopted answer
+        // alike, so a key learns nothing about posts it does not own. A post
+        // this plugin created carries no record and is never un-stamped here.
         $raw = get_post_meta($post_id, self::ADOPTED_META, true);
-        if (!is_string($raw) || $raw === '') {
+        $record = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
+        if (!is_string($raw) || $raw === ''
+                || ($key_id !== null && (!is_array($record) || ($record['key'] ?? null) !== $key_id))) {
             return self::refuse('not_adopted', sprintf(
-                'post %d was not adopted, so there is nothing to release; nothing was changed', $post_id));
+                'post %d was not adopted%s, so there is nothing to release; nothing was changed',
+                $post_id, $key_id === null ? '' : ' by this key'));
         }
         // ROW 8: this key's adoption, of this piece. A row already removed by
         // a release that failed part-way is not a mismatch, so a retry passes;
         // the record, removed last, still names the key.
         if ($key_id !== null) {
-            $record = json_decode($raw, true);
             $stamp = get_post_meta($post_id, CadenceContentRequest::KEY_META, true);
             $piece = get_post_meta($post_id, CadenceContentRequest::META, true);
-            if (!is_array($record) || ($record['key'] ?? null) !== $key_id
-                    || ($stamp !== '' && $stamp !== $key_id)
+            if (($stamp !== '' && $stamp !== $key_id)
                     || ($piece_id !== null && $piece !== '' && $piece !== $piece_id)) {
                 return self::refuse('post_already_identified', sprintf(
                     'post %d already carries a piece identity; nothing was changed', $post_id));
@@ -389,6 +444,11 @@ final class CadenceAdoptRequest {
      * search.
      */
     public static function resolve_link(string $link): int {
+        // A fragment is not part of what names a post, and a link carrying
+        // one is not the link a human was shown.
+        if (str_contains($link, '#')) {
+            return 0;
+        }
         $parts = wp_parse_url($link);
         $admin = wp_parse_url(admin_url());
         if (!is_array($parts) || !is_array($admin)) {
@@ -487,19 +547,11 @@ final class CadenceAdoptRequest {
         if (!$post instanceof WP_Post) {
             return self::refuse('post_missing', sprintf('there is no readable post %d on this site', $post_id));
         }
-        // ROW 8: a type the key names AND one that is viewable. The null scope
-        // asks `is_content_type` for viewability whatever the key names, which
-        // is stricter than the other routes and is what adopt requires.
+        $refused = self::admissible($post, $post_types);
+        if ($refused !== null) {
+            return $refused;
+        }
         $type = $post->post_type;
-        if (!in_array($type, $post_types, true) || !CadenceKey::is_content_type($type, null)) {
-            return self::refuse('adopt_post_type_out_of_scope', sprintf(
-                'post %d is of a type this key may not adopt; nothing was written', $post_id));
-        }
-        // ROW 9: an allow-list, and never a password-protected post.
-        if (!in_array($post->post_status, self::STATUSES, true) || $post->post_password !== '') {
-            return self::refuse('adopt_post_unavailable', sprintf(
-                'post %d is in a state that cannot be adopted; nothing was written', $post_id));
-        }
         // ROW 10: the site's own pages, compared as ints.
         foreach (self::SITE_PAGES as $option) {
             if ((int) get_option($option) === $post_id) {
@@ -548,6 +600,23 @@ final class CadenceAdoptRequest {
         return ['post' => $post, 'trid' => $trid, 'language' => $language];
     }
 
+    /** Rows 8 and 9 on one post, or null when both pass. */
+    private static function admissible(WP_Post $post, array $post_types): ?array {
+        // ROW 8: a type the key names AND one that is viewable. The null scope
+        // asks `is_content_type` for viewability whatever the key names, which
+        // is stricter than the other routes and is what adopt requires.
+        if (!in_array($post->post_type, $post_types, true) || !CadenceKey::is_content_type($post->post_type, null)) {
+            return self::refuse('adopt_post_type_out_of_scope', sprintf(
+                'post %d is of a type this key may not adopt; nothing was written', $post->ID));
+        }
+        // ROW 9: an allow-list, and never a password-protected post.
+        if (!in_array($post->post_status, self::STATUSES, true) || $post->post_password !== '') {
+            return self::refuse('adopt_post_unavailable', sprintf(
+                'post %d is in a state that cannot be adopted; nothing was written', $post->ID));
+        }
+        return null;
+    }
+
     /** Whether the post carries any of the three rows. */
     private static function identified(int $post_id): bool {
         foreach ([CadenceContentRequest::META, CadenceContentRequest::KEY_META, self::ADOPTED_META] as $meta) {
@@ -571,22 +640,19 @@ final class CadenceAdoptRequest {
     }
 
     /**
-     * Whether the piece is on any other post, in ANY status and ANY registered
-     * type: `'any'` leaves out `trash`, `auto-draft` and types excluded from
-     * search, and would place one piece on two posts.
+     * Whether the piece is on any other post, in ANY status and ANY type. A
+     * query on the meta table itself: no status or type filter can leave a
+     * post out, and no cached result from earlier in this request answers
+     * for it. A failed query counts as found.
      */
     private static function piece_elsewhere(string $piece_id, int $post_id): bool {
-        $found = get_posts([
-            'post_type'        => array_values(get_post_types()),
-            'post_status'      => array_values(array_unique(array_merge(
-                array_keys(get_post_stati()), ['trash', 'auto-draft', 'inherit']))),
-            'meta_key'         => CadenceContentRequest::META,
-            'meta_value'       => $piece_id,
-            'fields'           => 'ids',
-            'posts_per_page'   => -1,
-            'no_found_rows'    => true,
-            'suppress_filters' => true,
-        ]);
+        global $wpdb;
+        $found = $wpdb->get_col($wpdb->prepare(
+            "SELECT `post_id` FROM `{$wpdb->postmeta}` WHERE `meta_key` = %s AND `meta_value` = %s",
+            CadenceContentRequest::META, $piece_id));
+        if (!is_array($found) || $wpdb->last_error !== '') {
+            return true;
+        }
         foreach ($found as $id) {
             if ((int) $id !== $post_id) {
                 return true;
@@ -621,7 +687,15 @@ final class CadenceAdoptRequest {
         if (!$retry || $since === false || (int) $since > time() - self::CLAIM_TTL) {
             return false;
         }
-        delete_option($name);
+        // COMPARE-AND-DELETE: only the stale claim this request read goes. A
+        // request that took it over first holds a fresh value, and this one
+        // then deletes nothing and stops.
+        $gone = $wpdb->query($wpdb->prepare(
+            "DELETE FROM `{$wpdb->options}` WHERE `option_name` = %s AND `option_value` = %s",
+            $name, (string) $since));
+        if ((int) $gone !== 1) {
+            return false;
+        }
         return self::claim($name, false);
     }
 

@@ -337,9 +337,12 @@ final class AdoptRequestTest extends TestCase {
         $r = self::adopt(self::body(['piece_id' => $piece]));
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
 
-        $this->assertSame(['_cadence_external_id', '_cadence_key', '_cadence_adopted'],
+        // THE RECORD FIRST AND THE IDENTIFIER LAST, inside one transaction.
+        $this->assertSame(['_cadence_adopted', '_cadence_key', '_cadence_external_id'],
             array_map(static fn (array $w): string => $w[1], WpStub::$meta_added));
-        $this->assertSame(wp_slash($piece), WpStub::$meta_added[0][2], 'written unslashed');
+        $this->assertSame(wp_slash($piece), WpStub::$meta_added[2][2], 'written unslashed');
+        $this->assertSame(['START TRANSACTION', 'COMMIT'],
+            $GLOBALS['wpdb']->statements('START TRANSACTION', 'COMMIT', 'ROLLBACK'));
         $this->assertSame($piece, WpStub::$meta[41]['_cadence_external_id']);
         $this->assertSame(self::KEY, WpStub::$meta[41]['_cadence_key']);
         $record = json_decode(WpStub::$meta[41]['_cadence_adopted'], true);
@@ -409,12 +412,52 @@ final class AdoptRequestTest extends TestCase {
     }
 
     #[Group('wpml')]
-    public function test_the_meta_is_written_all_or_nothing(): void {
-        WpStub::$meta_add_fails = ['_cadence_adopted'];
+    public static function failing_row(): array {
+        return ['the record' => ['_cadence_adopted'], 'the stamp' => ['_cadence_key'],
+                'the identifier' => ['_cadence_external_id']];
+    }
+
+    #[DataProvider('failing_row')]
+    #[Group('wpml')]
+    public function test_the_meta_is_written_all_or_nothing(string $fails): void {
+        WpStub::$meta_add_fails = [$fails];
         $r = self::adopt(self::body());
         $this->assertSame('adopt_failed', $r['code']);
+        $this->assertStringContainsString('nothing was left on the post', $r['reason']);
         $this->assertSame(500, CadenceRestRoute::respond($r)['status']);
         $this->assertSame([], WpStub::$meta[41] ?? [], 'a part-written adoption was left behind');
+        $this->assertSame(['START TRANSACTION', 'ROLLBACK'],
+            $GLOBALS['wpdb']->statements('START TRANSACTION', 'COMMIT', 'ROLLBACK'));
+        $this->assertSame([], array_filter(array_keys(WpStub::$options),
+            static fn ($k) => str_starts_with($k, 'cadence_adopt_')), 'a claim was left behind');
+    }
+
+    /**
+     * A ROLLBACK THAT CANNOT REMOVE EVERY ROW leaves the record, never a lone
+     * identifier, says so, and the post can then be released by the same key.
+     */
+    #[Group('wpml')]
+    public function test_a_rollback_that_fails_part_way_leaves_the_record_and_says_so(): void {
+        WpStub::$meta_add_fails = ['_cadence_external_id'];
+        WpStub::$meta_delete_fails = ['_cadence_key'];
+        $r = self::adopt(self::body());
+        $this->assertSame('adopt_failed', $r['code']);
+        $this->assertStringContainsString('could not be removed', $r['reason']);
+        $this->assertSame(['_cadence_adopted', '_cadence_key'], array_keys(WpStub::$meta[41]));
+
+        WpStub::$meta_add_fails = [];
+        WpStub::$meta_delete_fails = [];
+        $released = self::release(self::release_body());
+        $this->assertTrue($released['ok'], $released['reason'] ?? '');
+        $this->assertSame([], WpStub::$meta[41]);
+    }
+
+    #[Group('wpml')]
+    public function test_a_site_that_will_not_open_a_transaction_writes_nothing(): void {
+        $GLOBALS['wpdb']->fails_on = 'START TRANSACTION';
+        $r = self::adopt(self::body());
+        $this->assertSame('adopt_failed', $r['code']);
+        $this->assertSame([], WpStub::$meta_added);
         $this->assertSame([], array_filter(array_keys(WpStub::$options),
             static fn ($k) => str_starts_with($k, 'cadence_adopt_')), 'a claim was left behind');
     }
@@ -672,13 +715,14 @@ final class AdoptRequestTest extends TestCase {
             'row 8: the stamp names another key' => [static function () use ($other): void {
                                                     WpStub::$meta[41]['_cadence_key'] = $other; },
                                                 [], 'post_already_identified'],
-            'row 8: the record names another key' => [static function () use ($other): void {
+            // A post another key adopted answers as one never adopted.
+            'row 7: the record names another key' => [static function () use ($other): void {
                                                     WpStub::$meta[41]['_cadence_adopted'] =
                                                         json_encode(['key' => $other]); },
-                                                [], 'post_already_identified'],
-            'row 8: a record naming no key' => [static function (): void {
+                                                [], 'not_adopted'],
+            'row 7: a record naming no key' => [static function (): void {
                                                     WpStub::$meta[41]['_cadence_adopted'] = '{}'; },
-                                                [], 'post_already_identified'],
+                                                [], 'not_adopted'],
             'row 8: another piece named'    => [$none, ['piece_id' => 'piece-else'], 'post_already_identified'],
             'row 8 twin: a part-released post' => [static function (): void {
                                                     unset(WpStub::$meta[41]['_cadence_external_id']); },
@@ -859,5 +903,123 @@ final class AdoptRequestTest extends TestCase {
         $r = CadenceAdoptRequest::release_by_admin(41);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
         $this->assertSame([], WpStub::$meta[41]);
+    }
+
+    // ------------------------------------------------------------------
+    // Under the claims: what another request wrote is read, not remembered.
+    // ------------------------------------------------------------------
+
+    /**
+     * ANOTHER REQUEST STAMPS THIS POST between the checks and the claim. The
+     * meta this request read during the checks is cached, so only a re-read
+     * past that cache sees the stamp.
+     */
+    #[Group('wpml')]
+    public function test_the_re_check_reads_past_a_cached_copy_of_the_post_meta(): void {
+        WpStub::$meta_cache_on = true;
+        WpStub::$on_claim = static function (): void {
+            WpStub::$meta[41]['_cadence_external_id'] = 'piece-other';
+        };
+        $r = self::adopt(self::body());
+        $this->assertSame('adopt_busy', $r['code'], $r['reason'] ?? '');
+        $this->assertSame([], WpStub::$meta_added);
+        $this->assertSame(['_cadence_external_id' => 'piece-other'], WpStub::$meta[41]);
+    }
+
+    /**
+     * ANOTHER REQUEST ADOPTS THIS PIECE ONTO ANOTHER POST between the checks
+     * and the claim. A lookup answered from this request's query cache would
+     * still say the piece is nowhere else.
+     */
+    #[Group('wpml')]
+    public function test_the_re_check_reads_past_a_cached_piece_lookup(): void {
+        WpStub::$meta_cache_on = true;
+        WpStub::$query_cache_on = true;
+        self::post(42, ['trid' => 542]);
+        WpStub::$on_claim = static function (): void {
+            WpStub::$meta[42]['_cadence_external_id'] = 'piece-new';
+        };
+        $r = self::adopt(self::body());
+        $this->assertSame('adopt_busy', $r['code'], $r['reason'] ?? '');
+        $this->assertArrayNotHasKey(41, WpStub::$meta, 'this adopt wrote after all');
+    }
+
+    /** The twin: with both caches on and nobody interleaved, the adopt lands. */
+    #[Group('wpml')]
+    public function test_twin_both_caches_on_and_nothing_interleaved_adopts(): void {
+        WpStub::$meta_cache_on = true;
+        WpStub::$query_cache_on = true;
+        $r = self::adopt(self::body());
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+    }
+
+    /** [what changes on the post after the checks, the answer]. */
+    public static function changed_under_the_claim(): array {
+        return [
+            'trashed'            => [['post_status' => 'trash'], 'adopt_post_unavailable'],
+            'given a password'   => [['post_password' => 'secret'], 'adopt_post_unavailable'],
+            'retyped'            => [['post_type' => 'product'], 'adopt_post_type_out_of_scope'],
+            'twin: retitled'     => [['post_title' => 'Another title'], 'ok'],
+        ];
+    }
+
+    #[DataProvider('changed_under_the_claim')]
+    #[Group('wpml')]
+    public function test_the_post_is_read_again_under_the_claim(array $change, string $want): void {
+        WpStub::$on_claim = static function () use ($change): void {
+            WpStub::$posts[41] = array_merge(WpStub::$posts[41], $change);
+        };
+        $r = self::adopt(self::body());
+        if ($want === 'ok') {
+            $this->assertTrue($r['ok'], $r['reason'] ?? '');
+            $this->assertSame('Another title', $r['report']['title']);
+            return;
+        }
+        $this->assertSame($want, $r['code'] ?? null, $r['reason'] ?? '');
+        $this->assertSame([], WpStub::$meta_added);
+        $this->assertSame([], array_filter(array_keys(WpStub::$options),
+            static fn ($k) => str_starts_with($k, 'cadence_adopt_')), 'a claim was left behind');
+    }
+
+    /**
+     * TWO REQUESTS FIND ONE STALE CLAIM. The other takes it over first, between
+     * this request's read of the stale value and its delete; deleting by name
+     * alone would remove the other's fresh claim and let both proceed.
+     */
+    #[Group('wpml')]
+    public function test_a_stale_claim_taken_over_by_another_request_first_is_busy(): void {
+        $option = 'cadence_adopt_post_41';
+        WpStub::$options[$option] = (string) (time() - 61);
+        WpStub::$on_option_read[$option] = static function () use ($option): void {
+            WpStub::$options[$option] = (string) time();
+        };
+        $r = self::adopt(self::body());
+        $this->assertSame('adopt_busy', $r['code'], $r['reason'] ?? '');
+        $this->assertSame([], WpStub::$meta_added);
+        $this->assertArrayHasKey($option, WpStub::$options, 'the other request\'s claim was deleted');
+    }
+
+    public function test_a_link_with_a_fragment_resolves_to_nothing(): void {
+        foreach (['https://example.test/?p=41#x', 'https://example.test/wp-admin/post.php?post=41#top'] as $link) {
+            $this->assertSame(0, CadenceAdoptRequest::resolve_link($link), $link);
+        }
+        // THE TWIN: the same link without its fragment.
+        $this->assertSame(41, CadenceAdoptRequest::resolve_link('https://example.test/?p=41'));
+    }
+
+    /**
+     * RELEASE IS NO ORACLE. A post another key adopted and a post nobody
+     * adopted answer one code and one reason, so a key learns nothing about
+     * posts it does not own.
+     */
+    #[Group('wpml')]
+    public function test_release_answers_alike_for_another_keys_post_and_an_unadopted_one(): void {
+        self::adopted();
+        WpStub::$meta[41]['_cadence_adopted'] = json_encode(['key' => 'someoneelse00key']);
+        $theirs = self::release(self::release_body());
+        unset(WpStub::$meta[41]);
+        $none = self::release(self::release_body());
+        $this->assertSame('not_adopted', $theirs['code']);
+        $this->assertSame($none, $theirs);
     }
 }

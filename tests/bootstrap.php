@@ -280,6 +280,33 @@ final class WpStub {
      */
     public static $on_claim = null;
 
+    /**
+     * AN OPT-IN META CACHE, as WordPress keeps one per request: the first
+     * `get_post_meta` for a post primes every row it has, and later reads
+     * answer from that copy until this process writes the post's meta or
+     * calls `wp_cache_delete($id, 'post_meta')`. A write made straight into
+     * `$meta` is another request's, and a primed copy does not see it.
+     */
+    public static bool $meta_cache_on = false;
+    /** @var array<int, array{0: array, 1: array}> */
+    public static array $meta_cache = [];
+
+    /**
+     * AN OPT-IN QUERY CACHE for `get_posts`, keyed on its arguments, unless the
+     * caller passes `'cache_results' => false`. Stands in for the result a
+     * request already holds for the same query.
+     */
+    public static bool $query_cache_on = false;
+    /** @var array<string, array> */
+    public static array $query_cache = [];
+
+    /**
+     * @var array<string, callable> option name => a hook `get_option` runs
+     * once, after it has read the value and before it answers with it: what
+     * another request does between this one's read and its next statement.
+     */
+    public static array $on_option_read = [];
+
     public static function read(string $what): void {
         self::$reads[$what] = (self::$reads[$what] ?? 0) + 1;
     }
@@ -329,6 +356,11 @@ final class WpStub {
         self::$meta_deleted = [];
         self::$permalinks = [];
         self::$on_claim = null;
+        self::$meta_cache_on = false;
+        self::$meta_cache = [];
+        self::$query_cache_on = false;
+        self::$query_cache = [];
+        self::$on_option_read = [];
     }
 
     public static function add_post(int $id, string $post_type = 'page',
@@ -382,6 +414,12 @@ final class WpdbStub {
     /** The options table's name. */
     public string $options = 'wp_options';
 
+    /** The post meta table's name. */
+    public string $postmeta = 'wp_postmeta';
+
+    /** What the last statement's error was, or blank. */
+    public string $last_error = '';
+
     /** @var list<string> every statement, in the order it was issued */
     public array $log = [];
 
@@ -417,7 +455,42 @@ final class WpdbStub {
             WpStub::$options[$m[1]] = $m[2];
             return 1;
         }
+        // A COMPARE-AND-DELETE on one option: 1 when the row held that value
+        // and is gone, 0 when it held another or was not there.
+        if (preg_match("/\\ADELETE FROM `wp_options` WHERE `option_name` = '([^']*)' AND `option_value` = '([^']*)'\\z/s",
+                       $sql, $m) === 1) {
+            $name = stripslashes($m[1]);
+            if (array_key_exists($name, WpStub::$options) && (string) WpStub::$options[$name] === stripslashes($m[2])) {
+                unset(WpStub::$options[$name]);
+                return 1;
+            }
+            return 0;
+        }
         return true;
+    }
+
+    /**
+     * One column. Only the post meta lookup by exact key and value, over
+     * every row the stub holds and never through the meta cache.
+     */
+    public function get_col(string $sql): array {
+        $this->log[] = $sql;
+        WpStub::read('wpdb:get_col');
+        if (preg_match("/\\ASELECT `post_id` FROM `wp_postmeta` WHERE `meta_key` = '((?:[^'\\\\]|\\\\.)*)' AND `meta_value` = '((?:[^'\\\\]|\\\\.)*)'\\z/s",
+                       $sql, $m) !== 1) {
+            return [];
+        }
+        [$key, $value] = [stripslashes($m[1]), stripslashes($m[2])];
+        $ids = [];
+        foreach (WpStub::$meta as $id => $meta) {
+            $rows = WpStub::$meta_rows[$id][$key] ?? (array_key_exists($key, $meta) ? [$meta[$key]] : []);
+            foreach ($rows as $row) {
+                if ($row === $value) {
+                    $ids[] = (string) $id;
+                }
+            }
+        }
+        return $ids;
     }
 
     /** The row, or null -- for a row that is not there and for a failed read alike. */
@@ -518,6 +591,9 @@ function wp_cache_delete(int $id, string $group = ''): bool {
     if ($group === 'posts') {
         WpStub::$cache_cleared[$id] = true;
     }
+    if ($group === 'post_meta') {
+        unset(WpStub::$meta_cache[$id]);
+    }
     return true;
 }
 
@@ -534,14 +610,19 @@ function is_post_type_viewable(string $type): bool {
 /** Single-value meta, including WordPress's own answer for meta that is not there. */
 function get_post_meta(int $post_id, string $key = '', bool $single = false) {
     WpStub::read('get_post_meta');
-    $value = WpStub::$meta[$post_id][$key] ?? null;
+    [$meta, $rows] = [WpStub::$meta, WpStub::$meta_rows];
+    if (WpStub::$meta_cache_on) {
+        WpStub::$meta_cache[$post_id] ??= [WpStub::$meta[$post_id] ?? [], WpStub::$meta_rows[$post_id] ?? []];
+        [$meta, $rows] = [[$post_id => WpStub::$meta_cache[$post_id][0]], [$post_id => WpStub::$meta_cache[$post_id][1]]];
+    }
+    $value = $meta[$post_id][$key] ?? null;
     if ($single) {
         // `''`, not null and not false. A plugin reading this as "no value" by
         // truthiness cannot tell it from a meta value that is an empty string.
         return $value ?? '';
     }
-    if (isset(WpStub::$meta_rows[$post_id][$key])) {
-        return WpStub::$meta_rows[$post_id][$key];
+    if (isset($rows[$post_id][$key])) {
+        return $rows[$post_id][$key];
     }
     return $value === null ? [] : [$value];
 }
@@ -929,6 +1010,7 @@ function wp_update_post(array $postarr, bool $wp_error = false) {
  * the `wp_unslash` stub, which the settings screen's tests read as identity.
  */
 function add_post_meta(int $post_id, string $key, $value, bool $unique = false) {
+    unset(WpStub::$meta_cache[$post_id]);
     if (in_array($key, WpStub::$meta_add_fails, true)) {
         return false;
     }
@@ -949,6 +1031,7 @@ function add_post_meta(int $post_id, string $key, $value, bool $unique = false) 
 }
 
 function delete_post_meta(int $post_id, string $key, $value = ''): bool {
+    unset(WpStub::$meta_cache[$post_id]);
     if (in_array($key, WpStub::$meta_delete_fails, true)) {
         return false;
     }
@@ -1002,6 +1085,7 @@ function delete_option(string $name): bool {
 }
 
 function update_post_meta(int $post_id, string $key, $value): bool {
+    unset(WpStub::$meta_cache[$post_id]);
     unset(WpStub::$meta_rows[$post_id][$key]);
     WpStub::$meta[$post_id][$key] = $value;
     return true;
@@ -1028,6 +1112,11 @@ function get_post_stati(): array {
 /** Only the meta_key/meta_value/fields=ids shape the plugin asks for. */
 function get_posts(array $args = []): array {
     WpStub::read('get_posts');
+    $cache_key = serialize($args);
+    $cached = WpStub::$query_cache_on && ($args['cache_results'] ?? true) !== false;
+    if ($cached && array_key_exists($cache_key, WpStub::$query_cache)) {
+        return WpStub::$query_cache[$cache_key];
+    }
     $key = $args['meta_key'] ?? null;
     $value = $args['meta_value'] ?? null;
     $want_status = $args['post_status'] ?? 'publish';
@@ -1066,6 +1155,9 @@ function get_posts(array $args = []): array {
         }
         $found[] = $id;
     }
+    if ($cached) {
+        WpStub::$query_cache[$cache_key] = $found;
+    }
     return $found;
 }
 
@@ -1103,7 +1195,13 @@ function delete_transient(string $key): bool {
 
 function get_option(string $name, $default = false) {
     WpStub::read('get_option:' . $name);
-    return array_key_exists($name, WpStub::$options) ? WpStub::$options[$name] : $default;
+    $value = array_key_exists($name, WpStub::$options) ? WpStub::$options[$name] : $default;
+    if (isset(WpStub::$on_option_read[$name])) {
+        $hook = WpStub::$on_option_read[$name];
+        unset(WpStub::$on_option_read[$name]);
+        $hook();
+    }
+    return $value;
 }
 
 function update_option(string $name, $value, $autoload = null): bool {

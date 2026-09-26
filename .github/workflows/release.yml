@@ -1,0 +1,115 @@
+# Release on a version bump: tag, GitHub release, then WordPress.org.
+#
+# A push to main that bumps nothing is a no-op: the version in the plugin header
+# already has its tag and its WordPress.org tag. Main only moves through a pull
+# request whose required checks passed, so the commit released is a checked one.
+#
+# Each step is skipped when its own result already exists, so a re-run after a
+# failure finishes the release instead of repeating it. A released WordPress.org
+# tag is never rewritten.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and show what would be committed, without releasing
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  SVN_URL: https://plugins.svn.wordpress.org/cadence-connector
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Read the version, and decide what is left to do
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 check-readme-version.py
+          version=$(sed -n 's/^ \* Version: *\([0-9.]*\)$/\1/p' cadence-connector.php)
+          stable=$(sed -n 's/^Stable tag: *\([0-9.]*\)$/\1/p' readme.txt)
+          if [ -z "$version" ] || [ "$version" != "$stable" ]; then
+            echo "Version '$version' and Stable tag '$stable' disagree; refusing." >&2
+            exit 1
+          fi
+          sudo apt-get install -y -qq subversion > /dev/null
+          if gh release view "v$version" > /dev/null 2>&1; then gh_done=1; else gh_done=0; fi
+          if svn ls --non-interactive "$SVN_URL/tags/$version/" > /dev/null 2>&1; then svn_done=1; else svn_done=0; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "gh_done=$gh_done" >> "$GITHUB_OUTPUT"
+          echo "svn_done=$svn_done" >> "$GITHUB_OUTPUT"
+          echo "version $version: GitHub release done=$gh_done, WordPress.org tag done=$svn_done"
+
+      - name: Build both zips
+        if: steps.plan.outputs.gh_done == '0' || steps.plan.outputs.svn_done == '0' || inputs.dry_run
+        run: |
+          set -euo pipefail
+          v=${{ steps.plan.outputs.version }}
+          python3 build-zip.py "$RUNNER_TEMP/cadence-connector-$v-install.zip"
+          python3 build-zip.py --for-directory elegiaio "$RUNNER_TEMP/directory.zip"
+          python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
+            "$RUNNER_TEMP/directory.zip" "$RUNNER_TEMP/directory"
+          test -f "$RUNNER_TEMP/directory/cadence-connector/readme.txt"
+
+      - name: GitHub release
+        if: steps.plan.outputs.gh_done == '0' && !inputs.dry_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v=${{ steps.plan.outputs.version }}
+          awk -v h="= $v =" '$0==h{f=1;next} /^= /{f=0} f' readme.txt > "$RUNNER_TEMP/notes.md"
+          printf '\nInstall via Plugins > Add New > Upload Plugin, choosing cadence-connector-%s-install.zip. Requires WordPress 6.5+ and PHP 8.1+.\n' "$v" >> "$RUNNER_TEMP/notes.md"
+          gh release create "v$v" "$RUNNER_TEMP/cadence-connector-$v-install.zip" \
+            --target "$GITHUB_SHA" --title "Cadence Connector $v" --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: WordPress.org
+        if: steps.plan.outputs.svn_done == '0' || inputs.dry_run
+        env:
+          SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.SVN_PASSWORD }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        run: |
+          set -euo pipefail
+          v=${{ steps.plan.outputs.version }}
+          co="$RUNNER_TEMP/svn-trunk"
+          svn checkout -q --non-interactive "$SVN_URL/trunk" "$co"
+          rsync -a --delete --exclude .svn "$RUNNER_TEMP/directory/cadence-connector/" "$co/"
+          svn add -q --force "$co"
+          svn status "$co" | awk '/^!/ {print $2}' | xargs -r svn rm -q
+          svn status "$co"
+          if [ "$DRY_RUN" = "1" ]; then
+            echo "Dry run: nothing committed."
+            exit 0
+          fi
+          if [ -z "$SVN_USERNAME" ] || [ -z "$SVN_PASSWORD" ]; then
+            echo "SVN_USERNAME or SVN_PASSWORD is not set; refusing." >&2
+            exit 1
+          fi
+          # The password goes in on stdin, never on the command line.
+          auth=(--non-interactive --no-auth-cache --username "$SVN_USERNAME" --password-from-stdin)
+          if [ -n "$(svn status "$co")" ]; then
+            printf '%s' "$SVN_PASSWORD" | svn commit "${auth[@]}" -m "Release $v" "$co"
+          fi
+          printf '%s' "$SVN_PASSWORD" | svn copy "${auth[@]}" "$SVN_URL/trunk" "$SVN_URL/tags/$v" -m "Tag $v"
+          svn ls --non-interactive "$SVN_URL/tags/$v/" > /dev/null

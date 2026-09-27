@@ -134,6 +134,7 @@ final class CadenceAttestation {
         // name carries its index, so dropping a member renumbers every one after
         // it and adding one appends a block. Either way the material differs. A
         // count would be a second spelling of a fact the framing already carries.
+        '/content/read'      => ['link'],
         '/translation-group' => ['trid', 'create_group', 'piece_id', self::MEMBERS],
         // THE ADOPT ROUTES SIGN WHICH SITE AND WHEN, last. Without `site` one
         // signed body serves every site the tenant's public key is pasted on;
@@ -151,7 +152,8 @@ final class CadenceAttestation {
      * not a connector key alone. A key carrying the exemption and sending no
      * header is refused here under its own branch.
      */
-    public const NO_EXEMPTION = ['/adopt', '/adopt/preview', '/adopt/release', '/adopt/release/preview'];
+    public const NO_EXEMPTION = ['/adopt', '/adopt/preview', '/adopt/release', '/adopt/release/preview',
+                                 '/content/read'];
 
     /**
      * THE SIGNED FIELD ORDER FOR ONE BODY, with `@members` expanded.

@@ -36,7 +36,8 @@ final class PluginTest extends TestCase {
         // Named, not indexed: a test reading `$routes[0]` starts asserting
         // about a different endpoint the day one is registered above it, and
         // still passes while doing so.
-        $this->assertSame(['/translation-group', '/content', '/content/replace', '/adopt/preview', '/adopt',
+        $this->assertSame(['/translation-group', '/content', '/content/replace', '/content/read',
+                           '/adopt/preview', '/adopt',
                            '/adopt/release/preview', '/adopt/release'],
             array_keys($this->routes));
         $this->route = ['cadence/v1', '/translation-group', $this->routes['/translation-group']];
@@ -94,6 +95,29 @@ final class PluginTest extends TestCase {
 
         $replacer = CadenceKey::issue('tenant-b', ['content.replace'], 7);
         $this->assertTrue($permit(new WP_REST_Request(['post_id' => 41], $this->key($replacer))));
+    }
+
+    /**
+     * READING IS ASKED OF THE KEY THAT MAY REWRITE, and no other: an adopting
+     * key, or one that may only create, reads nothing.
+     */
+    public function test_the_read_route_takes_only_a_replace_capable_key(): void {
+        $permit = $this->routes['/content/read']['permission_callback'];
+        $this->assertSame('POST', $this->routes['/content/read']['methods']);
+        $this->assertFalse($permit(new WP_REST_Request(null)));
+        foreach ([['content.adopt'], ['content.publish', 'translation.link']] as $i => $caps) {
+            $other = CadenceKey::issue('tenant-' . $i, $caps, 7);
+            $this->assertFalse($permit(new WP_REST_Request(['link' => 'x'], $this->key($other))),
+                implode(',', $caps) . ' was allowed to read');
+        }
+        $replacer = CadenceKey::issue('tenant-r', ['content.replace'], 7);
+        $this->assertTrue($permit(new WP_REST_Request(['link' => 'x'], $this->key($replacer))));
+    }
+
+    public function test_the_read_route_refuses_a_body_it_cannot_read(): void {
+        $r = ($this->routes['/content/read']['callback'])(new WP_REST_Request(null));
+        $this->assertSame(400, $r->get_status());
+        $this->assertSame('bad_read', $r->get_data()['code']);
     }
 
     /**

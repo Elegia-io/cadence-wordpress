@@ -29,6 +29,7 @@ require_once __DIR__ . '/includes/class-cadence-revision.php';
 require_once __DIR__ . '/includes/class-cadence-content-request.php';
 require_once __DIR__ . '/includes/class-cadence-replace-request.php';
 require_once __DIR__ . '/includes/class-cadence-adopt-request.php';
+require_once __DIR__ . '/includes/class-cadence-read-request.php';
 require_once __DIR__ . '/includes/class-cadence-rest-route.php';
 require_once __DIR__ . '/includes/class-cadence-admin.php';
 
@@ -152,6 +153,24 @@ add_action('rest_api_init', static function (): void {
                 // The signature over the rewrite's own bytes -- a different
                 // material from `/content`'s, over a field set that names WHICH
                 // post and WHICH text is being overwritten.
+                $request->get_header(CadenceAttestation::HEADER)
+            );
+            $answer = CadenceRestRoute::respond($result);
+            return new WP_REST_Response($answer['body'], $answer['status']);
+        },
+        'permission_callback' => static function ($request): bool {
+            return CadenceKey::authorises($request->get_header(CadenceKey::HEADER), 'content.replace');
+        },
+    ]);
+
+    // READING A POST BACK, for the key that may rewrite it: the revision a
+    // rewrite names comes from here. The same capability as `/content/replace`.
+    register_rest_route('cadence/v1', '/content/read', [
+        'methods'  => 'POST',
+        'callback' => static function ($request) {
+            $result = CadenceReadRequest::run(
+                (array) $request->get_json_params(),
+                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER)),
                 $request->get_header(CadenceAttestation::HEADER)
             );
             $answer = CadenceRestRoute::respond($result);

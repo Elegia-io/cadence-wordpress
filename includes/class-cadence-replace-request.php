@@ -94,6 +94,13 @@ final class CadenceReplaceRequest {
     public const CONFIRMATION = ['overwrite_adopted', 'site', 'issued_at'];
 
     /**
+     * OPTIONAL TEXT, written only when the body carries it and signed when it
+     * does. `revision` stays over title and content: these are not what a
+     * hand edit the caller must have seen is measured by.
+     */
+    public const OPTIONAL_TEXT = ['excerpt', 'seo_title', 'seo_description'];
+
+    /**
      * A REFUSAL CARRIES A CODE AS WELL AS A REASON. The reason is prose for a
      * human reading a log and is free to change. The code is the API, and it
      * tells the caller which of two things to do: re-read this site and try
@@ -446,7 +453,7 @@ final class CadenceReplaceRequest {
             // across, and it would be reported as a successful rewrite. The
             // identifier already on the post is what this request matched
             // against, so writing it again could only change it.
-        ], true);
+        ] + (isset($fields['excerpt']) ? ['post_excerpt' => $fields['excerpt']] : []), true);
 
         // WP_Error, or 0, and neither is an exception -- exactly as on the
         // insert path. Read as an id, `0` is falsy, which is what "no post"
@@ -463,6 +470,20 @@ final class CadenceReplaceRequest {
         // THE CONFIRMATION IS SPENT IN THE SAME TRANSACTION AS THE TEXT, so a
         // rewrite that commits has always recorded it and one that rolls back
         // never has.
+        // THE SEO TEXT, read back rather than trusted: `update_post_meta`
+        // answers false for a value that is already stored, so its return
+        // cannot tell a failure from a no-op.
+        foreach (CadenceReadRequest::SEO_META as $name => $meta) {
+            if (!isset($fields[$name])) {
+                continue;
+            }
+            update_post_meta($id, $meta, wp_slash($fields[$name]));
+            wp_cache_delete($id, 'post_meta');
+            if (get_post_meta($id, $meta, true) !== $fields[$name]) {
+                return self::release($wpdb, ['ok' => false, 'code' => 'update_failed',
+                    'reason' => sprintf('%s could not be stored, so the rewrite was not kept', $name)]);
+            }
+        }
         if ($spent !== null && add_post_meta($id, self::SPENT_META, $spent) === false) {
             return self::release($wpdb, ['ok' => false, 'code' => 'update_failed',
                 'reason' => 'the confirmation could not be recorded as spent, so the rewrite was not kept']);
@@ -593,12 +614,21 @@ final class CadenceReplaceRequest {
                 $confirmation[$name] = $body[$name];
             }
         }
+        $optional = [];
+        foreach (self::OPTIONAL_TEXT as $name) {
+            if (array_key_exists($name, $body)) {
+                if (!is_string($body[$name])) {
+                    return sprintf('%s, when present, must be a string', $name);
+                }
+                $optional[$name] = $body[$name];
+            }
+        }
         return [
             'piece_id'    => $body['piece_id'],
             'post_id'     => $body['post_id'],
             'revision'    => $body['revision'],
             'title'       => $body['title'],
             'content'     => $body['content'],
-        ] + $confirmation;
+        ] + $confirmation + $optional;
     }
 }

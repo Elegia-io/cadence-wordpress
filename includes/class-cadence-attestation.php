@@ -121,7 +121,10 @@ final class CadenceAttestation {
         // exactly as it did before the three existed.
         '/content/replace'   => ['piece_id', 'post_id', 'revision', 'title', 'content',
                                  self::OPTIONAL . 'overwrite_adopted', self::OPTIONAL . 'site',
-                                 self::OPTIONAL . 'issued_at'],
+                                 self::OPTIONAL . 'issued_at', self::OPTIONAL . 'excerpt',
+                                 self::OPTIONAL . 'seo_title', self::OPTIONAL . 'seo_description'],
+        '/content/reslug'    => ['piece_id', 'post_id', 'old_slug', 'slug', 'overwrite_adopted',
+                                 'site', 'issued_at'],
         // `/translation-group` signs `source_language_code` on every member
         // BECAUSE IT REACHES A WRITE: it goes straight into WPML's
         // `wpml_set_element_language_details`, so an intermediary that added or
@@ -153,7 +156,7 @@ final class CadenceAttestation {
      * header is refused here under its own branch.
      */
     public const NO_EXEMPTION = ['/adopt', '/adopt/preview', '/adopt/release', '/adopt/release/preview',
-                                 '/content/read'];
+                                 '/content/read', '/content/reslug'];
 
     /**
      * THE SIGNED FIELD ORDER FOR ONE BODY, with `@members` expanded.

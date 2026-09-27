@@ -37,6 +37,7 @@ final class PluginTest extends TestCase {
         // about a different endpoint the day one is registered above it, and
         // still passes while doing so.
         $this->assertSame(['/translation-group', '/content', '/content/replace', '/content/read',
+                           '/content/reslug',
                            '/adopt/preview', '/adopt',
                            '/adopt/release/preview', '/adopt/release'],
             array_keys($this->routes));
@@ -112,6 +113,19 @@ final class PluginTest extends TestCase {
         }
         $replacer = CadenceKey::issue('tenant-r', ['content.replace'], 7);
         $this->assertTrue($permit(new WP_REST_Request(['link' => 'x'], $this->key($replacer))));
+    }
+
+    public function test_the_reslug_route_takes_only_a_replace_capable_key(): void {
+        $permit = $this->routes['/content/reslug']['permission_callback'];
+        $this->assertSame('POST', $this->routes['/content/reslug']['methods']);
+        $this->assertFalse($permit(new WP_REST_Request(null)));
+        $other = CadenceKey::issue('tenant-a', ['content.publish', 'content.adopt', 'translation.link'], 7);
+        $this->assertFalse($permit(new WP_REST_Request(['post_id' => 41], $this->key($other))));
+        $replacer = CadenceKey::issue('tenant-r', ['content.replace'], 7);
+        $this->assertTrue($permit(new WP_REST_Request(['post_id' => 41], $this->key($replacer))));
+        $r = ($this->routes['/content/reslug']['callback'])(new WP_REST_Request(null));
+        $this->assertSame(400, $r->get_status());
+        $this->assertSame('bad_reslug', $r->get_data()['code']);
     }
 
     public function test_the_read_route_refuses_a_body_it_cannot_read(): void {

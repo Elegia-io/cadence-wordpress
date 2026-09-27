@@ -30,6 +30,7 @@ require_once __DIR__ . '/includes/class-cadence-content-request.php';
 require_once __DIR__ . '/includes/class-cadence-replace-request.php';
 require_once __DIR__ . '/includes/class-cadence-adopt-request.php';
 require_once __DIR__ . '/includes/class-cadence-read-request.php';
+require_once __DIR__ . '/includes/class-cadence-reslug-request.php';
 require_once __DIR__ . '/includes/class-cadence-rest-route.php';
 require_once __DIR__ . '/includes/class-cadence-admin.php';
 
@@ -170,6 +171,25 @@ add_action('rest_api_init', static function (): void {
         'callback' => static function ($request) {
             $result = CadenceReadRequest::run(
                 (array) $request->get_json_params(),
+                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER)),
+                $request->get_header(CadenceAttestation::HEADER)
+            );
+            $answer = CadenceRestRoute::respond($result);
+            return new WP_REST_Response($answer['body'], $answer['status']);
+        },
+        'permission_callback' => static function ($request): bool {
+            return CadenceKey::authorises($request->get_header(CadenceKey::HEADER), 'content.replace');
+        },
+    ]);
+
+    // CHANGING A POST'S SLUG: never part of a rewrite, always confirmed, and
+    // bound to the slug the caller saw. The same capability as a rewrite.
+    register_rest_route('cadence/v1', '/content/reslug', [
+        'methods'  => 'POST',
+        'callback' => static function ($request) {
+            $result = CadenceReslugRequest::run(
+                (array) $request->get_json_params(),
+                CadenceKey::publish_types_for($request->get_header(CadenceKey::HEADER)),
                 CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER)),
                 $request->get_header(CadenceAttestation::HEADER)
             );

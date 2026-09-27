@@ -572,6 +572,7 @@ final class WpdbStub {
         return (object) [
             'post_title'   => $over['post_title']   ?? ($post['post_title']   ?? ''),
             'post_content' => $over['post_content'] ?? ($post['post_content'] ?? ''),
+            'post_name'    => $over['post_name']    ?? ($post['post_name']    ?? ''),
         ];
     }
 
@@ -1163,7 +1164,8 @@ function delete_option(string $name): bool {
 function update_post_meta(int $post_id, string $key, $value): bool {
     unset(WpStub::$meta_cache[$post_id]);
     unset(WpStub::$meta_rows[$post_id][$key]);
-    WpStub::$meta[$post_id][$key] = $value;
+    // UNSLASHED, as `update_metadata` does -- see `add_post_meta`.
+    WpStub::$meta[$post_id][$key] = is_string($value) ? stripslashes($value) : $value;
     return true;
 }
 
@@ -1505,6 +1507,7 @@ require_once __DIR__ . '/../includes/class-cadence-admin.php';
 require_once __DIR__ . '/../includes/class-cadence-replace-request.php';
 require_once __DIR__ . '/../includes/class-cadence-adopt-request.php';
 require_once __DIR__ . '/../includes/class-cadence-read-request.php';
+require_once __DIR__ . '/../includes/class-cadence-reslug-request.php';
 
 /**
  * THE SIGNING SIDE, IN THE TEST SUITE ONLY.
@@ -1587,7 +1590,10 @@ final class CadenceAttest {
                 $out[$name] = is_int($value) ? $value : 0;
                 continue;
             }
-            $out[$name] = (is_string($value) || is_int($value)) ? $value : '';
+            // A REQUIRED BOOLEAN (`/content/reslug`'s confirmation) is
+            // rendered the same one way as an optional one.
+            $out[$name] = is_bool($value) ? ($value ? 'true' : 'false')
+                : ((is_string($value) || is_int($value)) ? $value : '');
         }
         return $out;
     }

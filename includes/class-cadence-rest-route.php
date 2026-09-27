@@ -243,6 +243,8 @@ final class CadenceRestRoute {
         'bad_adoption'               => 400,
         'bad_release'                => 400,
         'bad_read'                   => 400,
+        'bad_reslug'                 => 400,
+        'slug_mismatch'              => 409,
         'read_link_unresolved'       => 409,
         'read_password_protected'    => 403,
         'adopt_wrong_site'           => 403,

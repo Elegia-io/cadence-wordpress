@@ -21,12 +21,21 @@ final class ReadRequestTest extends TestCase {
     /** A post this key reaches, unless `$over` says otherwise. */
     private function post(array $over = [], array $meta = []): void {
         WpStub::$posts[self::ID] = array_merge([
-            'post_type' => 'post', 'status' => 'publish', 'language' => 'en', 'trid' => 5,
+            'post_type' => 'post', 'status' => 'publish', 'post_status' => 'publish',
+            'language' => 'en', 'trid' => 5,
             'post_title' => 'The title', 'post_content' => '<p>The body.</p>',
             'post_name' => 'the-title', 'post_excerpt' => 'An excerpt.', 'post_password' => '',
         ], $over);
-        WpStub::$posts[12] = ['post_type' => 'post', 'status' => 'draft', 'language' => 'it',
-                              'trid' => 5, 'post_title' => 'Il titolo', 'post_content' => ''];
+        // THE GROUP: 12 is this key's translation; 13 another key's; 14 a
+        // human's, which Cadence never touched.
+        foreach ([12 => 'it', 13 => 'de', 14 => 'fr'] as $id => $lang) {
+            WpStub::$posts[$id] = ['post_type' => 'post', 'status' => 'draft', 'language' => $lang,
+                                   'trid' => 5, 'post_title' => 'T ' . $lang, 'post_content' => ''];
+        }
+        WpStub::$meta[12] = [CadenceContentRequest::META => 'piece-1-it',
+                             CadenceContentRequest::KEY_META => CadenceAttest::KEY_ID];
+        WpStub::$meta[13] = [CadenceContentRequest::META => 'piece-9-de',
+                             CadenceContentRequest::KEY_META => 'ca11ab1e0000key2'];
         WpStub::$meta[self::ID] = array_merge([
             CadenceContentRequest::META     => 'piece-1',
             CadenceContentRequest::KEY_META => CadenceAttest::KEY_ID,
@@ -36,9 +45,9 @@ final class ReadRequestTest extends TestCase {
     }
 
     private function read(array $body = [], ?string $key_id = CadenceAttest::KEY_ID,
-                          $attestation = self::SIGN): array {
+                          $attestation = self::SIGN, ?array $post_types = null): array {
         $body = array_merge(['link' => 'https://example.test/?p=' . self::ID], $body);
-        return CadenceReadRequest::run($body, $key_id,
+        return CadenceReadRequest::run($body, $post_types, $key_id,
             $attestation === self::SIGN
                 ? CadenceAttest::header('/content/read', ['link' => $body['link']], $key_id)
                 : $attestation);
@@ -131,14 +140,80 @@ final class ReadRequestTest extends TestCase {
         $this->post();
         $r = $this->read(['link' => 'https://elsewhere.test/?p=' . self::ID]);
         $this->assertFalse($r['ok']);
-        $this->assertSame('read_link_unresolved', $r['code']);
+        $this->assertSame('post_out_of_scope', $r['code']);
     }
 
     public function test_a_link_to_no_post_is_refused(): void {
         $this->post();
         $r = $this->read(['link' => 'https://example.test/?p=999']);
         $this->assertFalse($r['ok']);
-        $this->assertSame('post_missing', $r['code']);
+        $this->assertSame('post_out_of_scope', $r['code']);
+    }
+
+    /**
+     * NO EXISTENCE ORACLE. A link that names no post, a post that is not here,
+     * and a post that is here and not this key's all answer one code and one
+     * sentence, so a key cannot map which ids exist on a shared site.
+     */
+    public function test_missing_unresolved_and_foreign_answer_alike(): void {
+        $this->post([], [CadenceContentRequest::KEY_META => 'ca11ab1e0000key2']);
+        $seen = [];
+        foreach (['https://example.test/?p=999', 'https://elsewhere.test/?p=11',
+                  'https://example.test/no-such-path/', 'https://example.test/?p=11'] as $link) {
+            $r = $this->read(['link' => $link]);
+            $seen[] = [$r['code'], $r['reason']];
+        }
+        $this->assertCount(1, array_unique(array_map('serialize', $seen)), print_r($seen, true));
+        $this->assertStringNotContainsString('11', $seen[0][1]);
+    }
+
+    /** CONJUNCT the key's post-type scope. Twin: the in-scope read below. */
+    public function test_a_post_outside_the_keys_type_scope_is_refused(): void {
+        $this->post();
+        $r = $this->read([], CadenceAttest::KEY_ID, self::SIGN, ['page']);
+        $this->assertSame('post_out_of_scope', $r['code']);
+        $this->post([], [CadenceContentRequest::META => '']);
+        $this->assertSame($this->read()['reason'], $r['reason'], 'the type refusal says which fact failed');
+    }
+
+    #[Group('wpml')]
+    public function test_a_post_inside_the_keys_type_scope_is_read(): void {
+        $this->post();
+        $r = $this->read([], CadenceAttest::KEY_ID, self::SIGN, ['page', 'post']);
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+    }
+
+    /** A translation reaches the reply only when this key reaches it too. */
+    #[Group('wpml')]
+    public function test_translations_list_only_this_keys_posts(): void {
+        $this->post();
+        $this->assertSame(['it' => 12], (array) $this->read()['report']['translations']);
+        // Twin: made this key's, the other tenant's post is listed.
+        WpStub::$meta[13][CadenceContentRequest::KEY_META] = CadenceAttest::KEY_ID;
+        $this->assertSame(['de' => 13, 'it' => 12], (array) $this->read()['report']['translations']);
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function statuses(): array {
+        return array_combine(CadenceAdoptRequest::STATUSES,
+                             array_map(static fn (string $s): array => [$s], CadenceAdoptRequest::STATUSES));
+    }
+
+    /** Twin of the refusal below: every status Cadence places a post in is read. */
+    #[Group('wpml')]
+    #[\PHPUnit\Framework\Attributes\DataProvider('statuses')]
+    public function test_a_post_in_a_placed_status_is_read(string $status): void {
+        $this->post(['post_status' => $status]);
+        $this->assertTrue($this->read()['ok']);
+    }
+
+    /** A trashed post, an auto-draft or a revision row is not text anyone placed; refused alike. */
+    public function test_a_trashed_post_is_refused(): void {
+        foreach (['trash', 'auto-draft', 'inherit'] as $status) {
+            $this->post(['post_status' => $status]);
+            $r = $this->read();
+            $this->assertSame('post_out_of_scope', $r['code'] ?? null, $status);
+        }
     }
 
     /** Twin: the answering test, signed over the same link it sends. */
@@ -166,7 +241,7 @@ final class ReadRequestTest extends TestCase {
     }
 
     public function test_a_body_without_a_link_is_refused(): void {
-        $r = CadenceReadRequest::run([], CadenceAttest::KEY_ID, null);
+        $r = CadenceReadRequest::run([], null, CadenceAttest::KEY_ID, null);
         $this->assertSame('bad_read', $r['code']);
         $this->assertSame(400, CadenceRestRoute::STATUS['bad_read']);
     }

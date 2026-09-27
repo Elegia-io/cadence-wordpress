@@ -8,12 +8,18 @@
  * not keep a copy of (an adopted post, above all).
  *
  * WHO MAY READ WHAT. The route is authorised on `content.replace`, and the post
- * must be one this key reaches: `CadenceKey::scope_admits` (Cadence published
- * or adopted it) AND `CadenceKey::created_by` (this key, and not another
- * tenant's, made it). Both refusals share one code and one sentence, so a
- * refusal tells the caller nothing about which fact failed on a post that is
- * not its own. A password-protected post is never read, as `/adopt` never
- * takes one.
+ * must be one this key reaches (`admits`): Cadence published or adopted it
+ * (`scope_admits`), this key and not another tenant's made it (`created_by`),
+ * its type is in the key's post-type scope, exactly as `/content/replace`
+ * asks, and its status is one Cadence places a post in (never `trash`,
+ * `auto-draft` or `inherit`). A password-protected post is never read, as
+ * `/adopt` never takes one.
+ *
+ * NO EXISTENCE ORACLE. A link that names no post, a post that is not here and
+ * a post this key does not reach all answer ONE code and ONE sentence, which
+ * names no id: a distinct "missing" would let a key map which ids exist on a
+ * site it shares with another tenant. The same predicate filters
+ * `translations`, so the group never lists a post this key could not read.
  *
  * THE REQUEST IS SIGNED, THE REPLY IS NOT. The signature over `link` proves
  * who asked; the text travels back under TLS only, as `/adopt/preview`'s does.
@@ -33,8 +39,6 @@ final class CadenceReadRequest {
     public const REFUSAL_CODES = [
         'bad_read',
         CadenceAttestation::CODE,
-        'read_link_unresolved',
-        'post_missing',
         'post_out_of_scope',
         'read_password_protected',
         'group_unknown',
@@ -53,10 +57,11 @@ final class CadenceReadRequest {
 
     /**
      * @param array       $body        `link`.
+     * @param array|null  $post_types  the types this key reaches, or null for any viewable type.
      * @param string|null $key_id      the asking key's public id.
      * @param string|null $attestation the signature header.
      */
-    public static function run(array $body, ?string $key_id, ?string $attestation): array {
+    public static function run(array $body, ?array $post_types, ?string $key_id, ?string $attestation): array {
         if (!is_string($body['link'] ?? null) || trim($body['link']) === '') {
             return self::refuse('bad_read', 'link must be present and a non-blank string');
         }
@@ -74,17 +79,10 @@ final class CadenceReadRequest {
         }
         // AFTER THE SIGNATURE: resolving a link reads the site.
         $post_id = CadenceAdoptRequest::resolve_link($body['link']);
-        if ($post_id < 1) {
-            return self::refuse('read_link_unresolved',
-                'the link is not an edit link or a permalink of a post on this site; nothing was read');
-        }
-        $post = get_post($post_id);
-        if (!$post instanceof WP_Post) {
-            return self::refuse('post_missing', sprintf('this site has no readable post %d', $post_id));
-        }
-        if (!CadenceKey::scope_admits($post_id) || !CadenceKey::created_by($post_id, $key_id)) {
-            return self::refuse('post_out_of_scope', sprintf(
-                'post %d is not a piece this key published or adopted; nothing was read', $post_id));
+        $post = $post_id > 0 ? get_post($post_id) : null;
+        if (!$post instanceof WP_Post || !self::admits($post, $post_types, $key_id)) {
+            return self::refuse('post_out_of_scope',
+                'the link does not name a post this key published or adopted; nothing was read');
         }
         if ($post->post_password !== '') {
             return self::refuse('read_password_protected', sprintf(
@@ -93,7 +91,7 @@ final class CadenceReadRequest {
         // LAST, so every refusal above answers without asking WPML anything.
         $element_type = 'post_' . $post->post_type;
         $language = CadenceLinkRequest::current_language($post_id, $element_type);
-        $translations = self::translations($post_id, $element_type);
+        $translations = self::translations($post_id, $element_type, $post_types, $key_id);
         if ($language === null || $translations === null) {
             return self::refuse('group_unknown', sprintf(
                 'WPML would not say which language post %d is in or which posts translate it; '
@@ -126,7 +124,8 @@ final class CadenceReadRequest {
      * `[]` in no group; null when WPML gives no usable answer, which is never
      * read as "no translations".
      */
-    private static function translations(int $post_id, string $element_type): ?array {
+    private static function translations(int $post_id, string $element_type, ?array $post_types,
+                                         ?string $key_id): ?array {
         $trid = CadenceLinkRequest::current_trid($post_id, $element_type);
         if ($trid === false) {
             return null;
@@ -146,12 +145,27 @@ final class CadenceReadRequest {
             if ($id === null || is_bool($id) || !ctype_digit((string) $id) || !is_string($lang) || $lang === '') {
                 return null;
             }
-            if ((int) $id !== $post_id) {
+            // ONLY A MEMBER THIS KEY WOULD BE ANSWERED FOR ON ITS OWN: another
+            // tenant's post, or a human's, is not listed, not even by id.
+            $member = (int) $id === $post_id ? null : get_post((int) $id);
+            if ($member instanceof WP_Post && self::admits($member, $post_types, $key_id)) {
                 $out[$lang] = (int) $id;
             }
         }
         ksort($out);
         return $out;
+    }
+
+    /**
+     * THE ONE PREDICATE a read and a listed translation both pass: a Cadence
+     * piece, made by this key, of a type in its scope, in a placed status.
+     */
+    private static function admits(WP_Post $post, ?array $post_types, ?string $key_id): bool {
+        return CadenceKey::scope_admits($post->ID)
+            && CadenceKey::created_by($post->ID, $key_id)
+            && CadenceKey::is_content_type($post->post_type, $post_types)
+            && ($post_types === null || in_array($post->post_type, $post_types, true))
+            && in_array($post->post_status, CadenceAdoptRequest::STATUSES, true);
     }
 
     private static function refuse(string $code, string $reason): array {

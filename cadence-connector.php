@@ -171,6 +171,8 @@ add_action('rest_api_init', static function (): void {
         'callback' => static function ($request) {
             $result = CadenceReadRequest::run(
                 (array) $request->get_json_params(),
+                // THE POST TYPES THIS KEY REACHES, as `/content/replace` asks.
+                CadenceKey::publish_types_for($request->get_header(CadenceKey::HEADER)),
                 CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER)),
                 $request->get_header(CadenceAttestation::HEADER)
             );

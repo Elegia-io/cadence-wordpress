@@ -39,7 +39,7 @@ final class AttestationTest extends TestCase {
     private const KEY = 'ca11ab1e0000key2';
 
     /**
-     * THE CONTRACT'S TWELVE VECTORS, verbatim: eight flat ones here, four link ones below.
+     * THE CONTRACT'S SIXTEEN VECTORS, verbatim: twelve flat ones here, four link ones below.
      *
      * `material` is base64 of the exact bytes hashed -- carried so a failure
      * can be diffed as BYTES. A digest that differs tells you the layout is
@@ -121,6 +121,49 @@ final class AttestationTest extends TestCase {
             'bytes'    => 386,
             'digest'   => 'fa2212dd17ca803f80d29e2a6c242be83769ac47f1560d811aec6c04475cada3',
             'header'   => 'v1 45da37c57dd21b36 uQK4W-BHVNM0-MeseKH8ke3aDKFN_INtuLa2O6IHLy-SvZdMXWMbqU1U1H_Q3oWYgF4AxD3lEIBvv9VXk5ImDg',
+        ],
+        [
+            'label'    => 'content-read',
+            'route'    => '/content/read',
+            // THE LINK, THE SITE AND THE INSTANT, as the adopt previews sign them.
+            // The link's byte and character lengths differ.
+            'fields'   => ['link' => 'https://example.test/blog/città-e-mare/', 'site' => 'example.test', 'issued_at' => '2026-09-28T12:00:00Z'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQvcmVhZApsaW5rOjQwOmh0dHBzOi8vZXhhbXBsZS50ZXN0L2Jsb2cvY2l0dMOgLWUtbWFyZS8Kc2l0ZToxMjpleGFtcGxlLnRlc3QKaXNzdWVkX2F0OjIwOjIwMjYtMDktMjhUMTI6MDA6MDBaCg==',
+            'bytes'    => 136,
+            'digest'   => '8bca31f4ae093969acdb11da90033bfa7e38d0783acf5ee6ccacb09032f907e3',
+            'header'   => 'v1 45da37c57dd21b36 RgtNgSmtUD6H6CcYclc8j5I1_97oB00p4KjV-4b0ud3JcmlP8T2AVEsLOSr3yQgIhd5nCUSKl3875w3G1g9zBQ',
+        ],
+        [
+            'label'    => 'content-reslug',
+            'route'    => '/content/reslug',
+            // THE CONFIRMATION TRIO INSIDE THE SET, not appended; the body's own
+            // boolean, reduced by the same rendering the route applies.
+            'fields'   => CadenceReplaceRequest::signable(['piece_id' => 'acme-blog-2026-09-12-attestation', 'post_id' => 41, 'old_slug' => 'orari', 'slug' => 'orari-di-città', 'overwrite_adopted' => true, 'site' => 'example.test/blog', 'issued_at' => '2026-09-24T12:00:00Z']),
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQvcmVzbHVnCnBpZWNlX2lkOjMyOmFjbWUtYmxvZy0yMDI2LTA5LTEyLWF0dGVzdGF0aW9uCnBvc3RfaWQ6Mjo0MQpvbGRfc2x1Zzo1Om9yYXJpCnNsdWc6MTU6b3JhcmktZGktY2l0dMOgCm92ZXJ3cml0ZV9hZG9wdGVkOjQ6dHJ1ZQpzaXRlOjE3OmV4YW1wbGUudGVzdC9ibG9nCmlzc3VlZF9hdDoyMDoyMDI2LTA5LTI0VDEyOjAwOjAwWgo=',
+            'bytes'    => 218,
+            'digest'   => '37d6c17a85e45c6ea2103c0ca15da5810445f1e7546762f3738fe9916396d72c',
+            'header'   => 'v1 45da37c57dd21b36 zX2664Vn-yCAxwzH582fNKZaRXamuApY7Zb44nUJmBKVMRhFHgDIvv6902dj6t7JGBptsgv0tFPkBAZTsAQhBQ',
+        ],
+        [
+            'label'    => 'replace-with-optional-text',
+            'route'    => '/content/replace',
+            // ALL THREE OPTIONAL TEXT FIELDS, after the trio, in their order.
+            'fields'   => CadenceReplaceRequest::signable(['piece_id' => 'acme-blog-2026-09-12-attestation', 'post_id' => 41, 'revision' => 'sha256:653d0e03211c28bf6d86ba229a45a6f055ee1586e700e99b0bd141423652a024', 'title' => 'Signing what we send (corrected)', 'content' => '<p>The wire carries a digest now, and the rewrite carries one too.</p>', 'overwrite_adopted' => true, 'site' => 'example.test/blog', 'issued_at' => '2026-09-24T12:00:00Z', 'excerpt' => 'Un estratto: città — 🔑', 'seo_title' => 'Firmare ciò che inviamo', 'seo_description' => '  Descrizione SEO, non trimmed  ']),
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQvcmVwbGFjZQpwaWVjZV9pZDozMjphY21lLWJsb2ctMjAyNi0wOS0xMi1hdHRlc3RhdGlvbgpwb3N0X2lkOjI6NDEKcmV2aXNpb246NzE6c2hhMjU2OjY1M2QwZTAzMjExYzI4YmY2ZDg2YmEyMjlhNDVhNmYwNTVlZTE1ODZlNzAwZTk5YjBiZDE0MTQyMzY1MmEwMjQKdGl0bGU6MzI6U2lnbmluZyB3aGF0IHdlIHNlbmQgKGNvcnJlY3RlZCkKY29udGVudDo3MDo8cD5UaGUgd2lyZSBjYXJyaWVzIGEgZGlnZXN0IG5vdywgYW5kIHRoZSByZXdyaXRlIGNhcnJpZXMgb25lIHRvby48L3A+Cm92ZXJ3cml0ZV9hZG9wdGVkOjQ6dHJ1ZQpzaXRlOjE3OmV4YW1wbGUudGVzdC9ibG9nCmlzc3VlZF9hdDoyMDoyMDI2LTA5LTI0VDEyOjAwOjAwWgpleGNlcnB0OjI4OlVuIGVzdHJhdHRvOiBjaXR0w6Ag4oCUIPCflJEKc2VvX3RpdGxlOjI0OkZpcm1hcmUgY2nDsiBjaGUgaW52aWFtbwpzZW9fZGVzY3JpcHRpb246MzI6ICBEZXNjcml6aW9uZSBTRU8sIG5vbiB0cmltbWVkICAK',
+            'bytes'    => 516,
+            'digest'   => 'e14043c9d7757c20ffe6c07d85b5734bab9c57d295e24b7d9d9f014f9ccb3e0b',
+            'header'   => 'v1 45da37c57dd21b36 UZQojzG3i4ewsCc5k-i31WEFK6PpP_Mas5x181Gqk8LFTPrjqgfc2S8gJ0zHePK5B5AWjd1eJ87sztB3GX8FCQ',
+        ],
+        [
+            'label'    => 'replace-with-one-optional-text',
+            'route'    => '/content/replace',
+            // ONE OPTIONAL TEXT FIELD and no trio: signed straight after `content`,
+            // and the two absent ones sign nothing.
+            'fields'   => ['piece_id' => 'acme-blog-2026-09-12-attestation', 'post_id' => 41, 'revision' => 'sha256:653d0e03211c28bf6d86ba229a45a6f055ee1586e700e99b0bd141423652a024', 'title' => 'Signing what we send (corrected)', 'content' => '<p>The wire carries a digest now, and the rewrite carries one too.</p>', 'seo_title' => 'Solo il titolo SEO'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQvcmVwbGFjZQpwaWVjZV9pZDozMjphY21lLWJsb2ctMjAyNi0wOS0xMi1hdHRlc3RhdGlvbgpwb3N0X2lkOjI6NDEKcmV2aXNpb246NzE6c2hhMjU2OjY1M2QwZTAzMjExYzI4YmY2ZDg2YmEyMjlhNDVhNmYwNTVlZTE1ODZlNzAwZTk5YjBiZDE0MTQyMzY1MmEwMjQKdGl0bGU6MzI6U2lnbmluZyB3aGF0IHdlIHNlbmQgKGNvcnJlY3RlZCkKY29udGVudDo3MDo8cD5UaGUgd2lyZSBjYXJyaWVzIGEgZGlnZXN0IG5vdywgYW5kIHRoZSByZXdyaXRlIGNhcnJpZXMgb25lIHRvby48L3A+CnNlb190aXRsZToxODpTb2xvIGlsIHRpdG9sbyBTRU8K',
+            'bytes'    => 333,
+            'digest'   => '1289433105e5abe6536201b3f6aa3e2ad5b159f9eaa024069427f54a3a14ac0d',
+            'header'   => 'v1 45da37c57dd21b36 TyM1bfalMC9APX4cXuAZRgEhrVaAu4A9XJAvyuG9uyby5CEs4hEDMfQwe-xWGCe_o8hMu_u7XF-_TIh6KvhRCQ',
         ],
         ];
         // THE LINK VECTORS JOIN THEM, reduced to the same flat shape by the ONE
@@ -238,6 +281,21 @@ final class AttestationTest extends TestCase {
      * character in the same place, and a length that differs is a field
      * separator, a missing terminator or an mb_strlen.
      */
+    /**
+     * THE DENOMINATOR, asserted rather than assumed: a loop over a silently
+     * shortened list passes every assertion inside it. The contract fixture
+     * carries the same sixteen labels.
+     */
+    public function test_every_contract_vector_is_transcribed(): void {
+        $labels = array_column($this->vectors(), 'label');
+        $this->assertCount(16, $labels);
+        $this->assertCount(16, array_unique($labels));
+        foreach (['content-read', 'content-reslug', 'replace-with-optional-text',
+                  'replace-with-one-optional-text'] as $label) {
+            $this->assertContains($label, $labels);
+        }
+    }
+
     public function test_every_contract_vector_composes_the_exact_bytes(): void {
         foreach ($this->vectors() as $v) {
             $material = CadenceAttestation::material($v['route'], $v['fields']);

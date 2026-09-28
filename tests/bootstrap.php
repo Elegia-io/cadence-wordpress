@@ -572,6 +572,7 @@ final class WpdbStub {
         return (object) [
             'post_title'   => $over['post_title']   ?? ($post['post_title']   ?? ''),
             'post_content' => $over['post_content'] ?? ($post['post_content'] ?? ''),
+            'post_name'    => $over['post_name']    ?? ($post['post_name']    ?? ''),
         ];
     }
 
@@ -620,7 +621,8 @@ function get_post($post_id = null): ?WP_Post {
     }
     return new WP_Post($id, $p['post_title'] ?? '', $p['post_content'] ?? '',
                        $p['post_status'] ?? 'draft', $p['post_type'] ?? 'post',
-                       $p['post_password'] ?? '');
+                       $p['post_password'] ?? '', $p['post_name'] ?? '',
+                       $p['post_excerpt'] ?? '');
 }
 
 /**
@@ -952,7 +954,9 @@ final class WP_Post {
         public string $post_content = '',
         public string $post_status = 'draft',
         public string $post_type = 'post',
-        public string $post_password = ''
+        public string $post_password = '',
+        public string $post_name = '',
+        public string $post_excerpt = ''
     ) {}
 }
 
@@ -1048,7 +1052,20 @@ function wp_update_post(array $postarr, bool $wp_error = false) {
     // back a field the caller never touched, and it lands back in the row
     // over whatever a concurrent edit put there.
     $cached = isset(WpStub::$posts[$id]) ? get_post($id) : null;
-    foreach (['post_title', 'post_content', 'post_status', 'post_password'] as $field) {
+    // A SLUG ANOTHER POST HOLDS IS SUFFIXED, as core's `wp_unique_post_slug`
+    // does: the caller asked for one slug and the row stores another.
+    if (isset($postarr['post_name'])) {
+        $base = $postarr['post_name'];
+        $taken = static fn (string $slug): bool => array_filter(WpStub::$posts,
+            static fn (array $p, int $other): bool => $other !== $id && ($p['post_name'] ?? '') === $slug,
+            ARRAY_FILTER_USE_BOTH) !== [];
+        for ($n = 2, $slug = $base; $taken($slug); $n++) {
+            $slug = $base . '-' . $n;
+        }
+        $postarr['post_name'] = $slug;
+    }
+    foreach (['post_title', 'post_content', 'post_status', 'post_password', 'post_name',
+              'post_excerpt'] as $field) {
         if (!isset(WpStub::$posts[$id])) {
             break;
         }
@@ -1147,7 +1164,8 @@ function delete_option(string $name): bool {
 function update_post_meta(int $post_id, string $key, $value): bool {
     unset(WpStub::$meta_cache[$post_id]);
     unset(WpStub::$meta_rows[$post_id][$key]);
-    WpStub::$meta[$post_id][$key] = $value;
+    // UNSLASHED, as `update_metadata` does -- see `add_post_meta`.
+    WpStub::$meta[$post_id][$key] = is_string($value) ? stripslashes($value) : $value;
     return true;
 }
 
@@ -1488,6 +1506,8 @@ require_once __DIR__ . '/../includes/class-cadence-content-request.php';
 require_once __DIR__ . '/../includes/class-cadence-admin.php';
 require_once __DIR__ . '/../includes/class-cadence-replace-request.php';
 require_once __DIR__ . '/../includes/class-cadence-adopt-request.php';
+require_once __DIR__ . '/../includes/class-cadence-read-request.php';
+require_once __DIR__ . '/../includes/class-cadence-reslug-request.php';
 
 /**
  * THE SIGNING SIDE, IN THE TEST SUITE ONLY.
@@ -1570,7 +1590,10 @@ final class CadenceAttest {
                 $out[$name] = is_int($value) ? $value : 0;
                 continue;
             }
-            $out[$name] = (is_string($value) || is_int($value)) ? $value : '';
+            // A REQUIRED BOOLEAN (`/content/reslug`'s confirmation) is
+            // rendered the same one way as an optional one.
+            $out[$name] = is_bool($value) ? ($value ? 'true' : 'false')
+                : ((is_string($value) || is_int($value)) ? $value : '');
         }
         return $out;
     }

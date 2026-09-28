@@ -22,7 +22,7 @@ final class CadenceRestRoute {
      * which reads the header directly and fails the moment a release bumps one
      * without the other, so drift is caught rather than merely discouraged.
      */
-    public const VERSION = '0.8.0';
+    public const VERSION = '0.9.0';
 
     /**
      * THE REPLY'S OWN SHAPE, as a number the caller can compare with `<=`
@@ -242,6 +242,12 @@ final class CadenceRestRoute {
         'bad_replacement'            => 400,
         'bad_adoption'               => 400,
         'bad_release'                => 400,
+        'bad_read'                   => 400,
+        'bad_reslug'                 => 400,
+        'slug_mismatch'              => 409,
+        'read_password_protected'    => 403,
+        'read_wrong_site'            => 403,
+        'read_expired'               => 403,
         'adopt_wrong_site'           => 403,
         'adopt_expired'              => 403,
         'adopt_types_unscoped'       => 403,

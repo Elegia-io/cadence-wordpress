@@ -1461,4 +1461,65 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertCount(1, WpStub::$updated);
         $this->assertCount(1, get_post_meta($p['post_id'], CadenceReplaceRequest::SPENT_META, false));
     }
+
+    /** THE OPTIONAL FIELDS ARE WRITTEN WHEN PRESENT AND SIGNED, and `revision` still covers title and content. */
+    #[Group('wpml')]
+    public function test_excerpt_and_seo_fields_are_written_when_present_and_signed(): void {
+        $p = $this->publish();
+        $r = $this->replace($this->body($p, ['excerpt' => 'New excerpt', 'seo_title' => 'New SEO title',
+                                              'seo_description' => 'New SEO description']));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('New excerpt', WpStub::$updated[0]['post_excerpt'] ?? null);
+        $this->assertSame('New SEO title',
+            WpStub::$meta[$p['post_id']][CadenceReadRequest::SEO_META['seo_title']] ?? null);
+        $this->assertSame('New SEO description',
+            WpStub::$meta[$p['post_id']][CadenceReadRequest::SEO_META['seo_description']] ?? null);
+        $this->assertSame(CadenceRevision::of('The rewrite', '<p>Rewritten body.</p>'), $r['revision']);
+    }
+
+    /** Twin of the above: absent, nothing is written over what the post holds. */
+    #[Group('wpml')]
+    public function test_absent_optional_fields_leave_the_post_alone(): void {
+        $p = $this->publish();
+        WpStub::$meta[$p['post_id']][CadenceReadRequest::SEO_META['seo_title']] = 'Kept';
+        $r = $this->replace($this->body($p));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertArrayNotHasKey('post_excerpt', WpStub::$updated[0]);
+        $this->assertSame('Kept', WpStub::$meta[$p['post_id']][CadenceReadRequest::SEO_META['seo_title']]);
+        $this->assertArrayNotHasKey(CadenceReadRequest::SEO_META['seo_description'], WpStub::$meta[$p['post_id']]);
+    }
+
+    /** An excerpt the signature does not cover is refused; the twin is the signed one above. */
+    #[Group('wpml')]
+    public function test_unsigned_excerpt_refused(): void {
+        $p = $this->publish();
+        $signed = $this->body($p);
+        $r = $this->replace($signed + ['excerpt' => 'Slipped in'], null, CadenceAttest::KEY_ID,
+            CadenceAttest::header('/content/replace', CadenceAttest::fields('/content/replace', $signed),
+                                  CadenceAttest::KEY_ID));
+        $this->assertSame(CadenceAttestation::CODE, $r['code']);
+        $this->assertSame('mismatch', $r['attestation_branch']);
+        $this->assertSame([], WpStub::$updated);
+    }
+
+    /** One unsigned field per row: each optional field is covered by the signature on its own. */
+    #[Group('wpml')]
+    public function test_each_unsigned_optional_field_is_refused(): void {
+        foreach (['excerpt', 'seo_title', 'seo_description'] as $name) {
+            WpStub::reset();
+            $p = $this->publish();
+            $signed = $this->body($p);
+            $r = $this->replace($signed + [$name => 'x'], null, CadenceAttest::KEY_ID,
+                CadenceAttest::header('/content/replace', CadenceAttest::fields('/content/replace', $signed),
+                                      CadenceAttest::KEY_ID));
+            $this->assertSame('mismatch', $r['attestation_branch'] ?? null, $name . ' was not signed');
+        }
+    }
+
+    public function test_a_non_string_optional_field_is_refused(): void {
+        $r = CadenceReplaceRequest::run(['piece_id' => 'p', 'post_id' => 3, 'revision' => 'r',
+                                         'title' => 't', 'content' => 'c', 'seo_title' => ['x']],
+                                        null, CadenceAttest::KEY_ID, null);
+        $this->assertSame('bad_replacement', $r['code']);
+    }
 }

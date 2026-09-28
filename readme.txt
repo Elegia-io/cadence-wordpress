@@ -4,7 +4,7 @@ Tags: rest-api, wpml, multilingual, publishing, translation
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 0.8.0
+Stable tag: 0.9.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -67,6 +67,15 @@ Only the translation-linking endpoint does. Publishing and replacing work on a
 monolingual site with no WPML installed.
 
 == Changelog ==
+
+= 0.9.0 =
+* New endpoint to read one post, signed and bound to this site and a short
+  time window, for a key allowed to rewrite that post.
+* The replace endpoint accepts an optional excerpt, SEO title and SEO
+  description, each signed when present.
+* New endpoint to change a post's slug, signed and confirmed once, and only
+  from the slug the caller saw. WordPress keeps redirecting the old address of
+  a published post, as it does for any slug change.
 
 = 0.8.0 =
 * New capability, `content.adopt`, and four endpoints to use it: preview then

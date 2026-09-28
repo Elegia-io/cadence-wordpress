@@ -125,12 +125,13 @@ final class AttestationTest extends TestCase {
         [
             'label'    => 'content-read',
             'route'    => '/content/read',
-            // ONE SIGNED FIELD. The link's byte and character lengths differ.
-            'fields'   => ['link' => 'https://example.test/blog/città-e-mare/'],
-            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQvcmVhZApsaW5rOjQwOmh0dHBzOi8vZXhhbXBsZS50ZXN0L2Jsb2cvY2l0dMOgLWUtbWFyZS8K',
-            'bytes'    => 81,
-            'digest'   => '866af17bb32c688585c8b730aad1bd5688e7f55de1177f4051a5af5dc137e5d9',
-            'header'   => 'v1 45da37c57dd21b36 YDjsgU5OMabKogklGkoNteIidaI1P74ZKK_xhS1OD9qWAyNhgqFQwxpClMNkUPJH4noRO37lx9LSdpckFvTiCg',
+            // THE LINK, THE SITE AND THE INSTANT, as the adopt previews sign them.
+            // The link's byte and character lengths differ.
+            'fields'   => ['link' => 'https://example.test/blog/città-e-mare/', 'site' => 'example.test', 'issued_at' => '2026-09-28T12:00:00Z'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQvcmVhZApsaW5rOjQwOmh0dHBzOi8vZXhhbXBsZS50ZXN0L2Jsb2cvY2l0dMOgLWUtbWFyZS8Kc2l0ZToxMjpleGFtcGxlLnRlc3QKaXNzdWVkX2F0OjIwOjIwMjYtMDktMjhUMTI6MDA6MDBaCg==',
+            'bytes'    => 136,
+            'digest'   => '8bca31f4ae093969acdb11da90033bfa7e38d0783acf5ee6ccacb09032f907e3',
+            'header'   => 'v1 45da37c57dd21b36 RgtNgSmtUD6H6CcYclc8j5I1_97oB00p4KjV-4b0ud3JcmlP8T2AVEsLOSr3yQgIhd5nCUSKl3875w3G1g9zBQ',
         ],
         [
             'label'    => 'content-reslug',

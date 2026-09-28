@@ -46,11 +46,23 @@ final class ReadRequestTest extends TestCase {
 
     private function read(array $body = [], ?string $key_id = CadenceAttest::KEY_ID,
                           $attestation = self::SIGN, ?array $post_types = null): array {
-        $body = array_merge(['link' => 'https://example.test/?p=' . self::ID], $body);
+        $body = array_merge(['link' => 'https://example.test/?p=' . self::ID,
+                             'site' => 'example.test', 'issued_at' => self::now()], $body);
         return CadenceReadRequest::run($body, $post_types, $key_id,
             $attestation === self::SIGN
-                ? CadenceAttest::header('/content/read', ['link' => $body['link']], $key_id)
+                ? CadenceAttest::header('/content/read', $body, $key_id)
                 : $attestation);
+    }
+
+    /** What the site was asked about posts: options (the key, `home`) are not posts. */
+    private static function post_reads(): array {
+        return array_filter(WpStub::$reads, static fn (string $k): bool =>
+            !str_starts_with($k, 'get_option:') && !str_starts_with($k, 'wpdb:option:'),
+            ARRAY_FILTER_USE_KEY);
+    }
+
+    private static function now(int $offset = 0): string {
+        return gmdate('Y-m-d\TH:i:s\Z', time() + $offset);
     }
 
     #[Group('wpml')]
@@ -220,7 +232,8 @@ final class ReadRequestTest extends TestCase {
     public function test_a_signature_over_another_link_is_refused(): void {
         $this->post();
         $r = $this->read(['link' => 'https://example.test/?p=' . self::ID], CadenceAttest::KEY_ID,
-            CadenceAttest::header('/content/read', ['link' => 'https://example.test/?p=12'],
+            CadenceAttest::header('/content/read', ['link' => 'https://example.test/?p=12',
+                                  'site' => 'example.test', 'issued_at' => self::now()],
                                   CadenceAttest::KEY_ID));
         $this->assertFalse($r['ok']);
         $this->assertSame(CadenceAttestation::CODE, $r['code']);
@@ -230,7 +243,8 @@ final class ReadRequestTest extends TestCase {
     /** THE READ TAKES NO EXEMPTION: a key allowed to publish unsigned still signs its reads. */
     public function test_an_exempt_key_reading_unsigned_is_refused(): void {
         $this->post();
-        CadenceAttest::header('/content/read', ['link' => 'x'], CadenceAttest::KEY_ID);
+        CadenceAttest::header('/content/read', ['link' => 'x', 'site' => 'example.test',
+                                                'issued_at' => self::now()], CadenceAttest::KEY_ID);
         CadenceKey::set_unsigned_ok(CadenceAttest::KEY_ID, true, 3);
         $r = $this->read([], CadenceAttest::KEY_ID, null);
         $this->assertFalse($r['ok']);
@@ -238,6 +252,58 @@ final class ReadRequestTest extends TestCase {
         // `NO_EXEMPTION` is the boundary and names the exemption; the check in
         // `run` is the tripwire behind it and says less.
         $this->assertStringContainsString('unsigned-publish exemption', $r['reason']);
+    }
+
+    /** A read signed for another site, or two sites sharing a host, reads nothing. */
+    public function test_a_read_signed_for_another_site_is_refused(): void {
+        $this->post();
+        WpStub::$reads = [];
+        foreach (['other.test', 'example.test/blog'] as $site) {
+            $r = $this->read(['site' => $site]);
+            $this->assertSame('read_wrong_site', $r['code'] ?? null, $site);
+            $this->assertSame(403, CadenceRestRoute::STATUS['read_wrong_site']);
+        }
+        $this->assertSame([], self::post_reads());
+    }
+
+    /** Twin: the same body signed for this site is read. */
+    #[Group('wpml')]
+    public function test_twin_a_read_signed_for_this_site_is_read(): void {
+        $this->post();
+        $r = $this->read(['site' => 'example.test']);
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+    }
+
+    /** A captured read replays for at most the window, either way. */
+    public function test_a_read_outside_the_window_is_expired(): void {
+        $this->post();
+        WpStub::$reads = [];
+        foreach ([-301, 301] as $offset) {
+            $r = $this->read(['issued_at' => self::now($offset)]);
+            $this->assertSame('read_expired', $r['code'] ?? null, (string) $offset);
+        }
+        $this->assertSame(403, CadenceRestRoute::STATUS['read_expired']);
+        $this->assertSame([], self::post_reads());
+    }
+
+    /** Twin: inside the window, at either edge, the read answers. */
+    #[Group('wpml')]
+    public function test_twin_a_read_inside_the_window_is_read(): void {
+        $this->post();
+        foreach ([-299, 299] as $offset) {
+            $r = $this->read(['issued_at' => self::now($offset)]);
+            $this->assertTrue($r['ok'], $r['reason'] ?? (string) $offset);
+        }
+    }
+
+    public function test_a_site_or_instant_missing_from_the_body_is_refused(): void {
+        foreach (['site', 'issued_at'] as $name) {
+            $body = ['link' => 'https://example.test/?p=' . self::ID, 'site' => 'example.test',
+                     'issued_at' => self::now()];
+            unset($body[$name]);
+            $r = CadenceReadRequest::run($body, null, CadenceAttest::KEY_ID, null);
+            $this->assertSame('bad_read', $r['code'], $name);
+        }
     }
 
     public function test_a_body_without_a_link_is_refused(): void {

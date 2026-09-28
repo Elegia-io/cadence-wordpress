@@ -21,8 +21,8 @@
  * site it shares with another tenant. The same predicate filters
  * `translations`, so the group never lists a post this key could not read.
  *
- * THE REQUEST IS SIGNED, THE REPLY IS NOT. The signature over `link` proves
- * who asked; the text travels back under TLS only, as `/adopt/preview`'s does.
+ * THE REQUEST IS SIGNED, THE REPLY IS NOT. The signature over `link`, `site`
+ * and `issued_at` proves who asked, for this site, within the window; the text travels back under TLS only, as `/adopt/preview`'s does.
  * The route takes no unsigned-publish exemption (`NO_EXEMPTION`).
  *
  * IT WRITES NOTHING: no post row, no meta, no WPML relation.
@@ -42,6 +42,8 @@ final class CadenceReadRequest {
         'post_out_of_scope',
         'read_password_protected',
         'group_unknown',
+        'read_wrong_site',
+        'read_expired',
     ];
 
     /** Every name the reply carries beside the envelope. A caller asserts each one present. */
@@ -56,7 +58,7 @@ final class CadenceReadRequest {
                              'seo_description' => '_yoast_wpseo_metadesc'];
 
     /**
-     * @param array       $body        `link`.
+     * @param array       $body        `link`, `site`, `issued_at`.
      * @param array|null  $post_types  the types this key reaches, or null for any viewable type.
      * @param string|null $key_id      the asking key's public id.
      * @param string|null $attestation the signature header.
@@ -65,8 +67,13 @@ final class CadenceReadRequest {
         if (!is_string($body['link'] ?? null) || trim($body['link']) === '') {
             return self::refuse('bad_read', 'link must be present and a non-blank string');
         }
-        $attested = CadenceAttestation::verify($attestation, '/content/read',
-                                               ['link' => $body['link']], $key_id);
+        foreach (['site', 'issued_at'] as $name) {
+            if (!is_string($body[$name] ?? null) || trim($body[$name]) === '') {
+                return self::refuse('bad_read', $name . ' must be present and a non-blank string');
+            }
+        }
+        $fields = ['link' => $body['link'], 'site' => $body['site'], 'issued_at' => $body['issued_at']];
+        $attested = CadenceAttestation::verify($attestation, '/content/read', $fields, $key_id);
         if ($attested['ok'] !== true) {
             return ['ok' => false, 'code' => $attested['code'], 'reason' => $attested['reason'],
                     'attestation_branch' => $attested['branch']];
@@ -76,6 +83,18 @@ final class CadenceReadRequest {
         if (($attested['attestation'] ?? null) !== 'verified' || !isset($attested['kid'])) {
             return ['ok' => false, 'code' => CadenceAttestation::CODE, 'attestation_branch' => 'exempt_refused',
                     'reason' => 'this route takes no exemption; nothing was read'];
+        }
+        // WHICH SITE AND WHEN, after the signature and before any read: the
+        // adopt previews' rows 3 and 4, on their window.
+        if ($fields['site'] !== CadenceAttestation::site()) {
+            return self::refuse('read_wrong_site',
+                'the request was signed for another site; nothing was read');
+        }
+        $at = CadenceAdoptRequest::issued_at($fields['issued_at']);
+        if ($at === null || abs(time() - $at) > CadenceAdoptRequest::WINDOW) {
+            return self::refuse('read_expired', sprintf(
+                'issued_at is more than %d seconds from this site\'s clock; nothing was read',
+                CadenceAdoptRequest::WINDOW));
         }
         // AFTER THE SIGNATURE: resolving a link reads the site.
         $post_id = CadenceAdoptRequest::resolve_link($body['link']);

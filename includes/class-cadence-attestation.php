@@ -137,7 +137,10 @@ final class CadenceAttestation {
         // name carries its index, so dropping a member renumbers every one after
         // it and adding one appends a block. Either way the material differs. A
         // count would be a second spelling of a fact the framing already carries.
-        '/content/read'      => ['link'],
+        // THE READ SIGNS WHICH SITE AND WHEN, as the adopt previews do: it
+        // writes nothing but answers a post's text, so one captured body must
+        // not replay forever or on another site the tenant's key is pasted on.
+        '/content/read'      => ['link', 'site', 'issued_at'],
         '/translation-group' => ['trid', 'create_group', 'piece_id', self::MEMBERS],
         // THE ADOPT ROUTES SIGN WHICH SITE AND WHEN, last. Without `site` one
         // signed body serves every site the tenant's public key is pasted on;

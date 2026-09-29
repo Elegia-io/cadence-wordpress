@@ -27,7 +27,9 @@ This plugin exposes an endpoint that writes that relationship through WPML's own
 - PHP 8.1+
 - WPML 4.5 or newer, for the translation-linking endpoint on a multilingual site:
   only WPML's core plugin is used, not the String Translation or Translation
-  Management add-ons. Monolingual sites run the same plugin with no WPML;
+  Management add-ons. This is the supported range, not a version check: the
+  plugin checks that WPML's translation hooks are present, so an older WPML is
+  not refused, but it is outside the supported range. Monolingual sites run the same plugin with no WPML;
   there is no second build, and which one a site is must be **declared** in
   the request rather than detected here. The publishing and replacing
   endpoints do not need WPML.
@@ -735,7 +737,7 @@ the reason is prose and changes freely.
 | `link_post_type_out_of_scope` | 403 | a post the plan names is in a type this key does not name |
 | `source_group_unset` | 500 | the source was written and the site still puts it in no group, so there was no group for the translations to join. **The source was written**; the translations were not |
 | `source_group_unreadable` | 500 | the source was written and WPML then said nothing usable about it, so its group cannot be named. **The source was written**; the translations were not |
-| `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks |
+| `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks. The reply carries `wpml_version`, the WPML version the site reports, when it reports one: a record for support, never a reason for the refusal |
 | `bad_request` | 400 | the content body is not the shape it claims |
 | `capability_mismatch` | 409 | the declaration and the site disagree about WPML |
 | `unsupported_language` | 409 | this site has no active WPML language for the piece itself |

@@ -187,9 +187,16 @@ final class CadenceLinkRequest {
         // and not of a name: `defined('ICL_SITEPRESS_VERSION')` would be a
         // check on the spelling of an implementation, and answers yes for a
         // WPML that is present but has these hooks disabled.
+        //
+        // THE VERSION IS RECORDED, NEVER CONSULTED. The plugin supports WPML
+        // 4.5 or newer, and a refusal here names the WPML the site reports,
+        // so a support report says which one was in play. It is the value of
+        // the refusal's `wpml_version` and nothing else:
+        // tests/WpmlVersionNotAGateTest.php fails if it reaches a condition.
         if (!has_filter('wpml_element_language_details') || !has_action('wpml_set_element_language_details')) {
-            return ['ok' => false, 'code' => 'wpml_unavailable', 'reason' =>
-                'nothing on this site implements the WPML translation-group hooks, so a link cannot be read or written here'];
+            return array_filter(['ok' => false, 'code' => 'wpml_unavailable', 'reason' =>
+                'nothing on this site implements the WPML translation-group hooks, so a link cannot be read or written here',
+                'wpml_version' => self::observed_wpml_version()], static fn ($v) => $v !== null);
         }
 
         $posts = self::validate_shape($plan);
@@ -940,5 +947,13 @@ final class CadenceLinkRequest {
     private static function posts_phrase(array $ids): string {
         sort($ids);
         return (count($ids) === 1 ? 'post ' : 'posts ') . implode(', ', $ids);
+    }
+
+    /**
+     * The WPML version the site reports, or null when it reports none. A
+     * record for the `wpml_unavailable` refusal only, never a condition.
+     */
+    private static function observed_wpml_version(): ?string {
+        return defined('ICL_SITEPRESS_VERSION') ? (string) ICL_SITEPRESS_VERSION : null;
     }
 }

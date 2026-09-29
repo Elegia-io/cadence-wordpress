@@ -34,8 +34,10 @@ does not run, a post this key did not publish.
 Nothing else is added: no post types, no front-end output, no telemetry, and no
 network requests of its own. The plugin never calls out; it only answers.
 
-WPML 4.5 or newer is needed for the translation-linking endpoint; only WPML's
-core plugin is used, not the String Translation or Translation Management
+The translation-linking endpoint supports WPML 4.5 or newer. The plugin checks
+that WPML's translation hooks are present, not which WPML version is installed,
+so an older WPML is not refused, but it is outside the supported range. Only
+WPML's core plugin is used, not the String Translation or Translation Management
 add-ons. Monolingual sites run the same plugin with no WPML; which one a site
 is must be declared in the request rather than detected here.
 
@@ -63,8 +65,8 @@ hosted plugin.
 
 = Does it need WPML? =
 
-Only the translation-linking endpoint does. Publishing and replacing work on a
-monolingual site with no WPML installed.
+Only the translation-linking endpoint does, and it supports WPML 4.5 or newer.
+Publishing and replacing work on a monolingual site with no WPML installed.
 
 == Changelog ==
 

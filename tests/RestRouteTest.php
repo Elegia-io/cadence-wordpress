@@ -404,4 +404,18 @@ final class RestRouteTest extends TestCase {
         $this->assertSame($written, $authorised);
         $this->assertNotEmpty($written);
     }
+
+    /**
+     * THE OBSERVED WPML VERSION REACHES THE WIRE when the refusal carries one,
+     * and is absent when it does not: a site with no WPML constant sends no
+     * `wpml_version` rather than a null one.
+     */
+    public function test_a_refusal_carrying_the_wpml_version_sends_it(): void {
+        $r = CadenceRestRoute::respond(['ok' => false, 'code' => 'wpml_unavailable',
+                                        'reason' => 'x', 'wpml_version' => '4.2.0']);
+        $this->assertSame(503, $r['status']);
+        $this->assertSame('4.2.0', $r['body']['wpml_version']);
+        $r = CadenceRestRoute::respond(['ok' => false, 'code' => 'wpml_unavailable', 'reason' => 'x']);
+        $this->assertArrayNotHasKey('wpml_version', $r['body']);
+    }
 }

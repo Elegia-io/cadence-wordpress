@@ -152,6 +152,11 @@ final class CadenceRestRoute {
         if (array_key_exists('attestation_branch', $result)) {
             $body['attestation_branch'] = $result['attestation_branch'];
         }
+        // THE WPML VERSION THE SITE REPORTS, on a `wpml_unavailable` that has
+        // one. A record for whoever reads the refusal, never a condition here.
+        if (array_key_exists('wpml_version', $result)) {
+            $body['wpml_version'] = $result['wpml_version'];
+        }
         if (isset($result['report']) && is_array($result['report'])) {
             $body = array_merge($body, $result['report']);
         }

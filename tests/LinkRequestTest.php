@@ -830,6 +830,47 @@ final class LinkRequestTest extends TestCase {
     }
 
     /**
+     * THE REFUSAL RECORDS WHICH WPML WAS IN PLAY, when one says so. A site
+     * running WPML older than the supported 4.5 with its hooks disabled is
+     * the support report this is for: the reply then names the version
+     * without the version having decided anything.
+     *
+     * DEFINED AND NEVER UNDEFINED. PHP has no way to remove a constant, so
+     * once this runs the rest of the process sees it. Only
+     * `observed_wpml_version` reads it (pinned in WpmlVersionNotAGateTest),
+     * and every test that defines it defines the same value.
+     */
+    #[Group('wpml')]
+    public function test_wpml_unavailable_records_the_observed_wpml_version(): void {
+        if (!defined('ICL_SITEPRESS_VERSION')) {
+            define('ICL_SITEPRESS_VERSION', '4.2.0');
+        }
+        $this->twoPosts(null);
+        WpStub::$wpml_reads = false;
+        WpStub::$wpml_writes = false;
+        $r = $this->link($this->plan(['trid' => null, 'create_group' => true]), null);
+        $this->assertSame('wpml_unavailable', $r['code']);
+        $this->assertSame('4.2.0', $r['wpml_version']);
+        $this->assertSame([], WpStub::$writes);
+    }
+
+    /**
+     * THE TWIN: the same version below the supported floor, on a site whose
+     * hooks work, links exactly as it would with no version at all. Recorded
+     * is not refused.
+     */
+    #[Group('wpml')]
+    public function test_a_wpml_version_below_the_supported_floor_is_not_refused(): void {
+        if (!defined('ICL_SITEPRESS_VERSION')) {
+            define('ICL_SITEPRESS_VERSION', '4.2.0');
+        }
+        $this->twoPosts(5);
+        $r = $this->link($this->plan());
+        $this->assertTrue($r['ok'], json_encode($r));
+        $this->assertArrayNotHasKey('wpml_version', $r);
+    }
+
+    /**
      * AND A READER WITHOUT A WRITER IS THE SAME REFUSAL. This is the asymmetric
      * half: every precondition can be read and agreed with, and the writes
      * still go nowhere -- which is the only configuration where the count

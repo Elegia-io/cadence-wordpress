@@ -737,7 +737,7 @@ the reason is prose and changes freely.
 | `link_post_type_out_of_scope` | 403 | a post the plan names is in a type this key does not name |
 | `source_group_unset` | 500 | the source was written and the site still puts it in no group, so there was no group for the translations to join. **The source was written**; the translations were not |
 | `source_group_unreadable` | 500 | the source was written and WPML then said nothing usable about it, so its group cannot be named. **The source was written**; the translations were not |
-| `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks |
+| `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks. The reply carries `wpml_version`, the WPML version the site reports, when it reports one: a record for support, never a reason for the refusal |
 | `bad_request` | 400 | the content body is not the shape it claims |
 | `capability_mismatch` | 409 | the declaration and the site disagree about WPML |
 | `unsupported_language` | 409 | this site has no active WPML language for the piece itself |

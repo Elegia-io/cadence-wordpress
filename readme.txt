@@ -4,7 +4,7 @@ Tags: rest-api, wpml, multilingual, publishing, translation
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 0.10.0
+Stable tag: 0.11.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,19 @@ Only the translation-linking endpoint does, and it supports WPML 4.5 or newer.
 Publishing and replacing work on a monolingual site with no WPML installed.
 
 == Changelog ==
+
+= 0.11.0 =
+* The adopt endpoints answer one code, `adopt_post_out_of_scope`, and one
+  sentence naming no id, for a post that is absent, of a type or in a state
+  the key may not adopt, one of the site's own pages, or carrying another
+  key's rows. `post_missing`, `adopt_post_type_out_of_scope`,
+  `adopt_post_unavailable` and `adopt_site_page` are gone from them.
+  `post_already_identified` now means the post carries this key's own rows.
+* A key's release answers `not_adopted`, with no id, for an absent post as
+  for one it did not adopt.
+* The replace and slug-change endpoints refuse a post in a status that is
+  not placed (trash, auto-draft and the like) with `post_out_of_scope`, as
+  the read endpoint already does.
 
 = 0.10.0 =
 * The replace and slug-change endpoints answer one code, `post_out_of_scope`,

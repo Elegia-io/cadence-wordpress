@@ -16,8 +16,9 @@
  * not a connector key alone.
  *
  * THE ORDER IS THE CONTRACT. One code per branch, in a fixed order, and
- * nothing is written before both claims are held. A type is checked before a
- * status so a key scoped to `post` learns nothing about a page's status.
+ * nothing is written before both claims are held. Every fact about a post
+ * the key may not adopt is asked in one gate (`admits`) and answered with one
+ * code, so a key learns nothing about a post outside it.
  *
  * @package cadence-connector
  * @license GPL-2.0-or-later
@@ -43,10 +44,7 @@ final class CadenceAdoptRequest {
         'adopt_link_unresolved',
         'wpml_unavailable',
         'adopt_types_unscoped',
-        'post_missing',
-        'adopt_post_type_out_of_scope',
-        'adopt_post_unavailable',
-        'adopt_site_page',
+        'adopt_post_out_of_scope',
         'post_already_identified',
         'adopt_repeat',
         'adopt_piece_taken',
@@ -67,7 +65,6 @@ final class CadenceAdoptRequest {
         'adopt_wrong_site',
         'adopt_expired',
         'wpml_unavailable',
-        'post_missing',
         'not_adopted',
         'post_already_identified',
         'group_unknown',
@@ -77,6 +74,15 @@ final class CadenceAdoptRequest {
 
     /** The three rows adoption writes, in the order a release removes them. */
     private const ROWS = [CadenceContentRequest::META, CadenceContentRequest::KEY_META, self::ADOPTED_META];
+
+    /** The one sentence `adopt_post_out_of_scope` carries. It names no id. */
+    public const OUT_OF_SCOPE_REASON =
+        'the post is not one this key may adopt: it is absent, of a type or in a state this key may not '
+        . 'adopt, one of the site\'s own pages, or already another key\'s; nothing was written';
+
+    /** The one sentence a key's release carries for a post it did not adopt. It names no id. */
+    public const NOT_ADOPTED_REASON =
+        'the post_id does not name a post this key adopted, so there is nothing to release; nothing was changed';
 
     /**
      * THE STATUSES A POST MAY BE ADOPTED IN, an allow-list. Not in it: `trash`,
@@ -160,15 +166,10 @@ final class CadenceAdoptRequest {
         }
         // Rows 7 to 9 again, on a fresh read: the post's type, status or
         // password may have changed since they were checked.
-        $fresh = get_post($post_id);
-        if (!$fresh instanceof WP_Post) {
+        $fresh = self::admits($post_id, $post_types, $key_id);
+        if ($fresh === null) {
             self::release_claims($held);
-            return self::refuse('post_missing', sprintf('there is no readable post %d on this site', $post_id));
-        }
-        $changed = self::admissible($fresh, $post_types);
-        if ($changed !== null) {
-            self::release_claims($held);
-            return $changed;
+            return self::out_of_scope();
         }
         $checked['post'] = $fresh;
 
@@ -361,22 +362,27 @@ final class CadenceAdoptRequest {
             return self::refuse('wpml_unavailable',
                 'nothing on this site implements the WPML translation-group hooks, so nothing can be released');
         }
-        // ROW 6.
-        $post = get_post($post_id);
-        if (!$post instanceof WP_Post) {
-            return self::refuse('post_missing', sprintf('there is no readable post %d on this site', $post_id));
-        }
-        // ROW 7: only an adopted post, and through the API only one this key
-        // adopted. A post with no record and a post another key adopted answer
-        // alike, so a key learns nothing about posts it does not own. A post
+        // ROWS 6 AND 7, ONE GATE FOR A KEY: the post exists and carries an
+        // adoption record naming this key. An absent post, a post with no
+        // record and a post another key adopted all answer `not_adopted` with
+        // one fixed sentence that names no id, so a key cannot sort post ids
+        // into "absent" and "someone else's". The administrator, who issued
+        // every key, still gets `post_missing` apart, with the id. A post
         // this plugin created carries no record and is never un-stamped here.
-        $raw = get_post_meta($post_id, self::ADOPTED_META, true);
-        $record = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
-        if (!is_string($raw) || $raw === ''
-                || ($key_id !== null && (!is_array($record) || ($record['key'] ?? null) !== $key_id))) {
-            return self::refuse('not_adopted', sprintf(
-                'post %d was not adopted%s, so there is nothing to release; nothing was changed',
-                $post_id, $key_id === null ? '' : ' by this key'));
+        $post = get_post($post_id);
+        if ($key_id !== null) {
+            if (!$post instanceof WP_Post || !self::adopted_by($post_id, $key_id)) {
+                return self::refuse('not_adopted', self::NOT_ADOPTED_REASON);
+            }
+        } else {
+            if (!$post instanceof WP_Post) {
+                return self::refuse('post_missing', sprintf('there is no readable post %d on this site', $post_id));
+            }
+            $raw = get_post_meta($post_id, self::ADOPTED_META, true);
+            if (!is_string($raw) || $raw === '') {
+                return self::refuse('not_adopted', sprintf(
+                    'post %d was not adopted, so there is nothing to release; nothing was changed', $post_id));
+            }
         }
         // ROW 8: this key's adoption, of this piece. A row already removed by
         // a release that failed part-way is not a mismatch, so a retry passes;
@@ -541,25 +547,16 @@ final class CadenceAdoptRequest {
             return self::refuse('adopt_types_unscoped',
                 'this key names no post types, and adopting needs a key that names the types it may reach');
         }
-        // ROW 7.
-        $post = get_post($post_id);
-        if (!$post instanceof WP_Post) {
-            return self::refuse('post_missing', sprintf('there is no readable post %d on this site', $post_id));
-        }
-        $refused = self::admissible($post, $post_types);
-        if ($refused !== null) {
-            return $refused;
+        // ROWS 7 TO 11, ONE GATE, ONE CODE, ONE SENTENCE. See `admits`.
+        $post = self::admits($post_id, $post_types, $key_id);
+        if ($post === null) {
+            return self::out_of_scope();
         }
         $type = $post->post_type;
-        // ROW 10: the site's own pages, compared as ints.
-        foreach (self::SITE_PAGES as $option) {
-            if ((int) get_option($option) === $post_id) {
-                return self::refuse('adopt_site_page', sprintf(
-                    'post %d is one of this site\'s own pages; nothing was written', $post_id));
-            }
-        }
         $element_type = 'post_' . $type;
-        // ROWS 11 AND 12: any of the three rows, except the exact repeat.
+        // ROWS 11 AND 12: this key's own rows, except the exact repeat. Only
+        // a post the gate admitted reaches here, so the rows are this key's
+        // and naming them discloses nothing the key does not own.
         if (self::identified($post_id)) {
             if (!self::is_repeat($post_id, $piece_id, $key_id)) {
                 return self::refuse('post_already_identified', sprintf(
@@ -599,21 +596,70 @@ final class CadenceAdoptRequest {
         return ['post' => $post, 'trid' => $trid, 'language' => $language];
     }
 
-    /** Rows 8 and 9 on one post, or null when both pass. */
-    private static function admissible(WP_Post $post, array $post_types): ?array {
-        // ROW 8: a type the key names AND one that is viewable. The null scope
-        // asks `is_content_type` for viewability whatever the key names, which
-        // is stricter than the other routes and is what adopt requires.
-        if (!in_array($post->post_type, $post_types, true) || !CadenceKey::is_content_type($post->post_type, null)) {
-            return self::refuse('adopt_post_type_out_of_scope', sprintf(
-                'post %d is of a type this key may not adopt; nothing was written', $post->ID));
+    /**
+     * THE POST THIS KEY MAY ADOPT, or null. Rows 7 to 11 asked as ONE
+     * predicate, the form the adopt routes answer in:
+     *
+     * - ROW 7: the post exists;
+     * - ROW 8: its type is one the key names AND a viewable one. The null
+     *   scope asks `is_content_type` for viewability whatever the key names,
+     *   which is stricter than the other routes and is what adopt requires;
+     * - ROW 9: its status is in the allow-list, and it has no password;
+     * - ROW 10: it is not one of the site's own pages, compared as ints;
+     * - ROW 11: it carries no Cadence row, or only this key's.
+     *
+     * The refusal is `adopt_post_out_of_scope` for every one of them, with
+     * one fixed sentence and no id. They used to answer `post_missing`,
+     * `adopt_post_type_out_of_scope`, `adopt_post_unavailable`,
+     * `adopt_site_page` and `post_already_identified` apart, and the
+     * difference sorted any post id into absent, another tenant's piece, a
+     * page, or a type, one signed request at a time. A signature in front
+     * narrows who can ask; it does not make the partition safe to hand back.
+     * The operator adopting a post sees it in wp-admin, and the sentence
+     * lists what to look for there.
+     */
+    private static function admits(int $post_id, array $post_types, ?string $key_id): ?WP_Post {
+        $post = get_post($post_id);
+        if (!$post instanceof WP_Post
+                || !in_array($post->post_type, $post_types, true)
+                || !CadenceKey::is_content_type($post->post_type, null)
+                || !in_array($post->post_status, self::STATUSES, true)
+                || $post->post_password !== '') {
+            return null;
         }
-        // ROW 9: an allow-list, and never a password-protected post.
-        if (!in_array($post->post_status, self::STATUSES, true) || $post->post_password !== '') {
-            return self::refuse('adopt_post_unavailable', sprintf(
-                'post %d is in a state that cannot be adopted; nothing was written', $post->ID));
+        foreach (self::SITE_PAGES as $option) {
+            if ((int) get_option($option) === $post_id) {
+                return null;
+            }
         }
-        return null;
+        if (self::identified($post_id) && !self::mine($post_id, $key_id)) {
+            return null;
+        }
+        return $post;
+    }
+
+    /** @return array{ok: false, code: string, reason: string} */
+    public static function out_of_scope(): array {
+        return self::refuse('adopt_post_out_of_scope', self::OUT_OF_SCOPE_REASON);
+    }
+
+    /**
+     * WHETHER THE POST'S CADENCE ROWS ARE THIS KEY'S: its stamp names this
+     * key, or its adoption record does. A post with a piece identity and no
+     * stamp (one that predates the stamp) is nobody's here, so it is refused
+     * like another key's: adopting it was never possible.
+     */
+    private static function mine(int $post_id, ?string $key_id): bool {
+        return is_string($key_id)
+            && (get_post_meta($post_id, CadenceContentRequest::KEY_META, true) === $key_id
+                || self::adopted_by($post_id, $key_id));
+    }
+
+    /** Whether the post's adoption record names this key. */
+    private static function adopted_by(int $post_id, string $key_id): bool {
+        $raw = get_post_meta($post_id, self::ADOPTED_META, true);
+        $record = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
+        return is_array($record) && ($record['key'] ?? null) === $key_id;
     }
 
     /** Whether the post carries any of the three rows. */
@@ -633,9 +679,7 @@ final class CadenceAdoptRequest {
                 || get_post_meta($post_id, CadenceContentRequest::KEY_META, true) !== $key_id) {
             return false;
         }
-        $record = get_post_meta($post_id, self::ADOPTED_META, true);
-        $record = is_string($record) ? json_decode($record, true) : null;
-        return is_array($record) && ($record['key'] ?? null) === $key_id;
+        return self::adopted_by($post_id, $key_id);
     }
 
     /**

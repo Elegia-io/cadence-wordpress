@@ -876,10 +876,18 @@ final class PluginTest extends TestCase {
         WpStub::add_post(5002, 'revision', 'en', null);
         WpStub::$meta[5002] = [CadenceContentRequest::META => 'piece-a',
                                CadenceContentRequest::KEY_META => $b['id']];
+        // B's OWN piece, in the trash: a post B cannot read, so it may not
+        // rewrite or reslug it either, and it answers like the rest.
+        $own = ($this->routes['/content']['callback'])(new WP_REST_Request([
+            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'publish',
+            'title' => 'T', 'content' => 'C', 'language' => 'en',
+            'declared' => ['multilingual' => true, 'languages' => ['en']]], $this->key($b)));
+        $this->assertSame(201, $own->get_status());
+        WpStub::$posts[$own->get_data()['post_id']]['post_status'] = 'trash';
 
         $bodies = [];
         foreach (['absent' => 5001, 'a human' => 5000, "tenant A's" => $made->get_data()['post_id'],
-                  'not content' => 5002] as $case => $id) {
+                  'not content' => 5002, 'its own, trashed' => $own->get_data()['post_id']] as $case => $id) {
             $body = $route === '/content/replace'
                 ? ['piece_id' => 'piece-a', 'post_id' => $id, 'revision' => 'sha256:' . str_repeat('0', 64),
                    'title' => 'X', 'content' => '<p>X</p>']
@@ -901,6 +909,201 @@ final class PluginTest extends TestCase {
 
     public static function scoped_routes(): array {
         return ['replace' => ['/content/replace'], 'reslug' => ['/content/reslug']];
+    }
+
+    /**
+     * A KEY'S OWN PIECE IN A STATUS THAT IS NOT PLACED answers the body an
+     * absent post answers, byte for byte with digits blanked, on both routes:
+     * `/content/read` refuses it, so replace and reslug refuse it alike.
+     */
+    #[Group('wpml')]
+    #[\PHPUnit\Framework\Attributes\DataProvider('unplaced_statuses')]
+    public function test_a_keys_own_piece_in_an_unplaced_status_answers_like_an_absent_post(
+            string $route, string $status): void {
+        $b = CadenceKey::issue('tenant-b', ['content.publish', 'content.replace'], 7);
+        $own = ($this->routes['/content']['callback'])(new WP_REST_Request([
+            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'publish',
+            'title' => 'T', 'content' => 'C', 'language' => 'en',
+            'declared' => ['multilingual' => true, 'languages' => ['en']]], $this->key($b)));
+        $this->assertSame(201, $own->get_status());
+        $id = $own->get_data()['post_id'];
+        WpStub::$posts[$id]['post_status'] = $status;
+        $bodies = [];
+        foreach (['absent' => 7001, $status => $id] as $case => $post_id) {
+            $body = $route === '/content/replace'
+                ? ['piece_id' => 'piece-a', 'post_id' => $post_id, 'revision' => 'sha256:' . str_repeat('0', 64),
+                   'title' => 'X', 'content' => '<p>X</p>']
+                : ['piece_id' => 'piece-a', 'post_id' => $post_id, 'old_slug' => 'a', 'slug' => 'b',
+                   'overwrite_adopted' => true, 'site' => CadenceAttestation::site(),
+                   'issued_at' => gmdate('Y-m-d\TH:i:s\Z')];
+            $headers = $this->key($b) + [strtolower(CadenceAttestation::HEADER) =>
+                CadenceAttest::header($route, CadenceAttest::fields($route, $body), $b['id'])];
+            WpStub::$updated = [];
+            $r = ($this->routes[$route]['callback'])(new WP_REST_Request($body, $headers));
+            $this->assertSame(403, $r->get_status(), $case . ': ' . json_encode($r->get_data()));
+            $this->assertSame('post_out_of_scope', $r->get_data()['code'], $case);
+            $this->assertSame([], WpStub::$updated, $case);
+            $bodies[$case] = preg_replace('/\d+/', '<n>', json_encode($r->get_data()));
+        }
+        $this->assertSame($bodies['absent'], $bodies[$status]);
+    }
+
+    public static function unplaced_statuses(): array {
+        $out = [];
+        foreach (['/content/replace', '/content/reslug'] as $route) {
+            foreach (['trash', 'auto-draft', 'inherit', 'wc-on-hold'] as $status) {
+                $out[$route . ' ' . $status] = [$route, $status];
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * THE TWIN of the trashed case above: the same key's own piece in a placed
+     * status is reached, so the answer is not the one-code refusal.
+     */
+    #[Group('wpml')]
+    #[\PHPUnit\Framework\Attributes\DataProvider('scoped_routes')]
+    public function test_a_key_reaches_its_own_piece_in_a_placed_status(string $route): void {
+        $b = CadenceKey::issue('tenant-b', ['content.publish', 'content.replace'], 7);
+        $own = ($this->routes['/content']['callback'])(new WP_REST_Request([
+            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'publish',
+            'title' => 'T', 'content' => 'C', 'language' => 'en',
+            'declared' => ['multilingual' => true, 'languages' => ['en']]], $this->key($b)));
+        $id = $own->get_data()['post_id'];
+        foreach (CadenceAdoptRequest::STATUSES as $status) {
+            WpStub::$posts[$id]['post_status'] = $status;
+            $body = $route === '/content/replace'
+                ? ['piece_id' => 'piece-a', 'post_id' => $id, 'revision' => 'sha256:' . str_repeat('0', 64),
+                   'title' => 'X', 'content' => '<p>X</p>']
+                : ['piece_id' => 'piece-a', 'post_id' => $id, 'old_slug' => 'a', 'slug' => 'b',
+                   'overwrite_adopted' => true, 'site' => CadenceAttestation::site(),
+                   'issued_at' => gmdate('Y-m-d\TH:i:s\Z')];
+            $headers = $this->key($b) + [strtolower(CadenceAttestation::HEADER) =>
+                CadenceAttest::header($route, CadenceAttest::fields($route, $body), $b['id'])];
+            $r = ($this->routes[$route]['callback'])(new WP_REST_Request($body, $headers));
+            $this->assertNotSame('post_out_of_scope', $r->get_data()['code'] ?? null, $status);
+        }
+    }
+
+    /**
+     * AT THE ROUTE, BOTH ADOPT ROUTES answer one body for every post a signed
+     * adopting key may not adopt: absent, of a type outside its scope, in a
+     * state that cannot be adopted, password-protected, one of the site's own
+     * pages, another key's piece, another key's adoption, and a piece that
+     * predates the stamp. Off the whole body, with digits blanked, and the
+     * sentence holds no digit at all, so no id.
+     */
+    #[Group('wpml')]
+    #[\PHPUnit\Framework\Attributes\DataProvider('adopt_routes')]
+    public function test_a_signed_adopting_key_cannot_tell_unadoptable_posts_apart(string $route): void {
+        $b = CadenceKey::issue('tenant-b', ['content.adopt'], 7, ['post']);
+        $cases = ['absent' => 6001, 'a page' => 6002, 'trashed' => 6003, 'a password' => 6004,
+                  'the front page' => 6005, "tenant A's piece" => 6006, "tenant A's adoption" => 6007,
+                  'a piece before the stamp' => 6008];
+        foreach (array_slice($cases, 1) as $id) {
+            WpStub::add_post($id, 'post', 'en', null);
+            WpStub::$posts[$id]['post_status'] = 'publish';
+        }
+        WpStub::$posts[6002]['post_type'] = 'page';
+        WpStub::$posts[6003]['post_status'] = 'trash';
+        WpStub::$posts[6004]['post_password'] = 'hunter2';
+        WpStub::$options['page_on_front'] = '6005';
+        WpStub::$meta[6006] = [CadenceContentRequest::META => 'piece-x', CadenceContentRequest::KEY_META => 'tenant-a-key'];
+        WpStub::$meta[6007] = [CadenceAdoptRequest::ADOPTED_META => '{"key":"tenant-a-key"}'];
+        WpStub::$meta[6008] = [CadenceContentRequest::META => 'piece-x'];
+        $before = WpStub::$meta;
+
+        $bodies = [];
+        foreach ($cases as $case => $id) {
+            $r = $this->adopt_at($route, $b, $id);
+            $this->assertSame(403, $r->get_status(), $case . ': ' . json_encode($r->get_data()));
+            $this->assertSame(CadenceAdoptRequest::OUT_OF_SCOPE_REASON, $r->get_data()['reason'], $case);
+            $this->assertSame(0, preg_match('/\d/', $r->get_data()['reason']), $case);
+            $bodies[$case] = preg_replace('/\d+/', '<n>', json_encode($r->get_data()));
+        }
+        $this->assertSame($before, WpStub::$meta, 'a refused adopt wrote a row');
+        $this->assertCount(1, array_unique($bodies),
+            'a signed key could tell the cases apart: ' . implode(' | ', $bodies));
+        $this->assertStringContainsString('adopt_post_out_of_scope', $bodies['absent']);
+    }
+
+    /**
+     * THE KEPT CODE, AND ITS TWIN. A post carrying THIS key's rows under
+     * another piece is this key's own, so it hears `post_already_identified`;
+     * the same rows naming another key are the one-code refusal.
+     */
+    #[Group('wpml')]
+    #[\PHPUnit\Framework\Attributes\DataProvider('adopt_routes')]
+    public function test_only_this_keys_own_rows_answer_post_already_identified(string $route): void {
+        $b = CadenceKey::issue('tenant-b', ['content.adopt'], 7, ['post']);
+        foreach (['stamp' => [CadenceContentRequest::META => 'piece-x', CadenceContentRequest::KEY_META => $b['id']],
+                  'record' => [CadenceAdoptRequest::ADOPTED_META => json_encode(['key' => $b['id']])]] as $what => $rows) {
+            WpStub::add_post(6010, 'post', 'en', null);
+            WpStub::$posts[6010]['post_status'] = 'publish';
+            WpStub::$meta[6010] = $rows;
+            $mine = $this->adopt_at($route, $b, 6010);
+            $this->assertSame(409, $mine->get_status(), $what);
+            $this->assertSame('post_already_identified', $mine->get_data()['code'], $what);
+
+            WpStub::$meta[6010] = str_replace($b['id'], 'tenant-a-key', $rows);
+            $theirs = $this->adopt_at($route, $b, 6010);
+            $this->assertSame('adopt_post_out_of_scope', $theirs->get_data()['code'], $what);
+        }
+    }
+
+    /**
+     * A KEY'S RELEASE answers one body for an absent post, a post nobody
+     * adopted and a post another key adopted. Its twin: the post this key
+     * adopted is released.
+     */
+    #[Group('wpml')]
+    public function test_a_signed_releasing_key_cannot_tell_posts_it_did_not_adopt_apart(): void {
+        $b = CadenceKey::issue('tenant-b', ['content.adopt'], 7, ['post']);
+        foreach ([6021, 6022, 6023] as $id) {
+            WpStub::add_post($id, 'post', 'en', 500 + $id);
+            WpStub::$posts[$id]['post_status'] = 'publish';
+        }
+        WpStub::$meta[6022] = [CadenceContentRequest::META => 'piece-x', CadenceContentRequest::KEY_META => 'tenant-a-key',
+                               CadenceAdoptRequest::ADOPTED_META => '{"key":"tenant-a-key"}'];
+        WpStub::$meta[6023] = [CadenceContentRequest::META => 'piece-x', CadenceContentRequest::KEY_META => $b['id'],
+                               CadenceAdoptRequest::ADOPTED_META => json_encode(['key' => $b['id']])];
+        $bodies = [];
+        foreach (['absent' => 6020, 'nobody adopted it' => 6021, "tenant A's" => 6022] as $case => $id) {
+            $r = $this->release_at($b, $id);
+            $this->assertSame(409, $r->get_status(), $case . ': ' . json_encode($r->get_data()));
+            $this->assertSame(0, preg_match('/\d/', $r->get_data()['reason']), $case);
+            $bodies[$case] = preg_replace('/\d+/', '<n>', json_encode($r->get_data()));
+        }
+        $this->assertCount(1, array_unique($bodies),
+            'a signed key could tell the cases apart: ' . implode(' | ', $bodies));
+        $this->assertStringContainsString('not_adopted', $bodies['absent']);
+
+        $mine = $this->release_at($b, 6023);
+        $this->assertSame(200, $mine->get_status(), json_encode($mine->get_data()));
+        $this->assertTrue($mine->get_data()['released']);
+    }
+
+    public static function adopt_routes(): array {
+        return ['adopt' => ['/adopt'], 'preview' => ['/adopt/preview']];
+    }
+
+    private function adopt_at(string $route, array $key, int $id): WP_REST_Response {
+        $body = ['piece_id' => 'piece-b', 'site' => CadenceAttestation::site(),
+                 'issued_at' => gmdate('Y-m-d\TH:i:s\Z')]
+            + ($route === '/adopt' ? ['post_id' => $id, 'language' => 'en']
+                                   : ['link' => 'https://example.test/?p=' . $id]);
+        $headers = $this->key($key) + [strtolower(CadenceAttestation::HEADER) =>
+            CadenceAttest::header($route, CadenceAttest::fields($route, $body), $key['id'])];
+        return ($this->routes[$route]['callback'])(new WP_REST_Request($body, $headers));
+    }
+
+    private function release_at(array $key, int $id): WP_REST_Response {
+        $body = ['piece_id' => 'piece-x', 'post_id' => $id, 'site' => CadenceAttestation::site(),
+                 'issued_at' => gmdate('Y-m-d\TH:i:s\Z')];
+        $headers = $this->key($key) + [strtolower(CadenceAttestation::HEADER) =>
+            CadenceAttest::header('/adopt/release', CadenceAttest::fields('/adopt/release', $body), $key['id'])];
+        return ($this->routes['/adopt/release']['callback'])(new WP_REST_Request($body, $headers));
     }
 
     /**

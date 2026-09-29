@@ -739,7 +739,6 @@ the reason is prose and changes freely.
 | `insert_failed` | 500 | WordPress refused the insert, or returned no id |
 | `attestation_unverified` | 403 | nothing on this site can show the body came from the tenant who holds the signing key. Five different repairs share this code and the `reason` names which: `absent` (no header, and this key is not exempt), `malformed` (a header that is not the shape a signed request produces), `unknown_kid` (a rotation half-done), `no_public_key` (nobody pasted one), `mismatch` (the body was changed after it was signed). **Nothing was written**, and the site was not read |
 | `bad_replacement` | 400 | the replacement body is not the shape it claims |
-| `post_missing` | 409 | an adoption names no readable post with that id |
 | `identifier_mismatch` | 409 | that post is a different piece this key published |
 | `revision_mismatch` | 409 | the post holds text the replacement does not name |
 | `update_failed` | 500 | WordPress refused the update, or returned no id |
@@ -755,14 +754,12 @@ the reason is prose and changes freely.
 | `adopt_expired` | 403 | `issued_at` is more than 300 seconds from this site's clock; nothing was read or written |
 | `adopt_link_unresolved` | 409 | the link is not this site's own wp-admin edit link or a permalink of a post on this site; nothing was read |
 | `adopt_types_unscoped` | 403 | the key names no post types, and adopting needs a key scoped to the types it may reach |
-| `adopt_post_type_out_of_scope` | 403 | the post is of a type this key may not adopt; nothing was written |
-| `adopt_post_unavailable` | 409 | the post is in a state that cannot be adopted, or carries a password |
-| `adopt_site_page` | 403 | the post is one of this site's own pages (front page, posts page, privacy policy); nothing was written |
-| `post_already_identified` | 409 | the post already carries a piece identity, so it cannot be adopted; or, on release, the post this key adopted carries another key's stamp or another piece |
+| `adopt_post_out_of_scope` | 403 | the post is not one this key may adopt: absent, of a type this key may not adopt, in a state that cannot be adopted or password-protected, one of this site's own pages (front page, posts page, privacy policy), or carrying another key's rows. One fixed sentence names no id, so a key cannot tell these apart; the operator checks the post in wp-admin. Nothing was written |
+| `post_already_identified` | 409 | the post carries this key's own piece identity under another piece, so it cannot be adopted again; or, on release, the post this key adopted carries another key's stamp or another piece |
 | `adopt_repeat` | 409 | the post is already adopted under this piece by this key; nothing was written again |
 | `adopt_piece_taken` | 409 | this piece is already on another post on this site; nothing was written |
 | `adopt_busy` | 409 | another adoption holds this post or piece right now; nothing was written |
-| `not_adopted` | 409 | the post was not adopted by the presenting key (from wp-admin: not adopted at all), so there is nothing to release |
+| `not_adopted` | 409 | the post is absent or was not adopted by the presenting key, told apart by nothing the caller can read (from wp-admin: not adopted at all, and an absent post is `post_missing`), so there is nothing to release |
 | `adopt_failed` | 500 | the adoption or release record could not be written, or removed, in full |
 
 **What the create path relies on, beyond what WPML documents.** Three

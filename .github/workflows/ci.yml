@@ -191,3 +191,9 @@ jobs:
       # maintainer happens to type the script's name.
       - name: A client install credits nobody, a submission needs the name twice
         run: python3 tests/build_zip_test.py
+
+      # The release workflow's decisions: version agreement, the no-op, the
+      # notes, and the required-checks refusal. release.yml runs this script,
+      # so a change to it is tested here before it can release anything.
+      - name: What the release workflow decides
+        run: python3 tests/release_plan_test.py

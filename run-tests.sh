@@ -36,6 +36,8 @@ $PODMAN run --rm --entrypoint php \
 # somebody else's name. Unconditional for the same reason the boundary check
 # below is: a run narrowed by "$@" proves nothing about it.
 python3 "${HERE}/tests/build_zip_test.py"
+# And what the release workflow decides, also a host script.
+python3 "${HERE}/tests/release_plan_test.py"
 
 # AND THE BOUNDARY BETWEEN THE TWO LANES, unconditionally -- including after a
 # run narrowed by "$@", since the check measures the whole suite and what a

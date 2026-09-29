@@ -73,9 +73,10 @@ Publishing and replacing work on a monolingual site with no WPML installed.
 = 0.10.0 =
 * The replace and slug-change endpoints answer one code, `post_out_of_scope`,
   and one sentence naming no id, for a post that is absent, not published or
-  adopted through this plugin, made by another key, or in a post type the key
-  does not reach. `replace_other_key` is gone, and `post_missing` and
-  `existing_post_type_out_of_scope` no longer come from these two endpoints.
+  adopted through this plugin, or made by another key. `replace_other_key` is
+  gone and `post_missing` no longer comes from these two endpoints. A key's own
+  piece in a post type it does not reach still answers
+  `existing_post_type_out_of_scope`.
 
 = 0.9.0 =
 * New endpoint to read one post, signed and bound to this site and a short

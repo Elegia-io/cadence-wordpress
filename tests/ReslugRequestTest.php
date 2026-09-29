@@ -120,6 +120,13 @@ final class ReslugRequestTest extends TestCase {
         $this->assertSame([], WpStub::$updated);
     }
 
+    /** Twin: the answering test, whose type is in scope. */
+    public function test_a_post_of_a_type_out_of_scope_is_refused(): void {
+        $r = $this->reslug($this->body(), CadenceAttest::KEY_ID, self::SIGN, ['page']);
+        $this->assertSame('existing_post_type_out_of_scope', $r['code']);
+        $this->assertSame([], WpStub::$updated);
+    }
+
     /** Twin: the answering test, whose old_slug is the post's. */
     public function test_an_old_slug_that_is_not_the_posts_is_refused(): void {
         WpStub::$posts[self::ID]['post_name'] = 'edited-by-hand';
@@ -146,8 +153,8 @@ final class ReslugRequestTest extends TestCase {
 
     /**
      * ONE ANSWER FOR EVERY POST THIS KEY DOES NOT REACH. A missing id,
-     * another key's post, a human's post and a post of a type out of this
-     * key's scope all refuse with the same code and the same sentence, and
+     * another key's post (in or out of this key's type scope) and a human's
+     * post all refuse with the same code and the same sentence, and
      * the sentence names no id. Each case differs from the answering test in
      * the one fact its conjunct is about; twins: `a_confirmed_reslug...`.
      */
@@ -173,7 +180,12 @@ final class ReslugRequestTest extends TestCase {
                 WpStub::$meta[self::ID] = [];
                 return [[], null];
             }],
-            'type out of scope' => [fn () => [[], ['page']]],
+            // THE TWIN of the hint: another key's post in a type this key
+            // does not reach still answers the one refusal.
+            'another key, type out of scope' => [function () {
+                WpStub::$meta[self::ID][CadenceContentRequest::KEY_META] = 'ca11ab1e0000key2';
+                return [[], ['page']];
+            }],
         ];
     }
 

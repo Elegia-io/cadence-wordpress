@@ -32,6 +32,7 @@ final class CadenceReslugRequest {
         CadenceAttestation::CODE,
         'post_out_of_scope',
         'identifier_mismatch',
+        'existing_post_type_out_of_scope',
         'post_adopted',
         'confirmation_wrong_site',
         'confirmation_expired',
@@ -69,15 +70,22 @@ final class CadenceReslugRequest {
         }
         $post_id = $fields['post_id'];
         // ONE CODE AND ONE SENTENCE for a post that is not there, not a
-        // connector piece, another key's, or out of this key's type scope:
+        // connector piece, or another key's:
         // the same gate `/content/replace` asks. Only the refusals below it,
         // over a post this key reaches, may say anything finer.
-        if (!CadenceReplaceRequest::admits($post_id, $post_types, $key_id)) {
+        if (!CadenceReplaceRequest::admits($post_id, $key_id)) {
             return CadenceReplaceRequest::out_of_scope();
         }
         if (get_post_meta($post_id, CadenceContentRequest::META, true) !== $fields['piece_id']) {
             return self::refuse('identifier_mismatch', sprintf(
                 'post %d is not `%s` on this site; nothing was written', $post_id, $fields['piece_id']));
+        }
+        $type = get_post_type($post_id);
+        if (!is_string($type) || !CadenceKey::is_content_type($type, $post_types)
+                || ($post_types !== null && !in_array($type, $post_types, true))) {
+            return self::refuse('existing_post_type_out_of_scope', sprintf(
+                'the piece %s is on a post of a type this key does not publish into; nothing was written',
+                $fields['piece_id']));
         }
         if ($fields['overwrite_adopted'] !== true) {
             return self::refuse('post_adopted', sprintf(

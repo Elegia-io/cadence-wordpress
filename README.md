@@ -177,8 +177,8 @@ over content already live. That set never grows.
 tenant's own operator surface), so "is this the post you name" was never the
 same question as "is this post yours", and a replacement *overwrites a
 published title and body*. A replace, or a slug change, naming a post that is
-absent, not this connector's, another key's, or in a type this key does not
-name is refused with `post_out_of_scope` and a `403`, before the identifier is
+absent, not this connector's, or another key's is refused with
+`post_out_of_scope` and a `403`, before the identifier is
 compared and before the row is touched. It is one code and one sentence that
 names no id, as on the reading and linking routes: separate answers would sort
 any post id into "absent" and "someone else's" for any holder of the key.
@@ -208,8 +208,10 @@ published before it recorded which key made it. It also makes a narrowing
 effective over the pieces a key already has: `/content` refuses to hand out
 the id and the revision of such a piece, but a caller that recorded the pair
 before the scope changed keeps it, so withholding it is a disclosure control
-and not a door. A rewrite outside the list is refused with the same
-`post_out_of_scope` as a post the key does not reach at all.
+and not a door. A rewrite of this key's own piece outside the list is refused
+with `existing_post_type_out_of_scope` and a `403`, the same code and the same
+fix (re-issue the key wider) as the repeat on `/content`. It is asked only after
+the key is shown to own the piece, so it never answers about another post.
 
 **Leave the field blank and the key publishes into any registered type**, which
 is what every key issued before this version does: they carry no post types at
@@ -454,7 +456,7 @@ something a human took down is the same destruction one field across.
 |---|---|---|
 | `200` | rewritten | `created: false`, with `post_id` and the new `revision` |
 | `400` | the body is wrong | `bad_replacement`; re-sending cannot help |
-| `403` | the key does not reach this post (`post_out_of_scope`): absent, not this connector's, another key's, or in a type this key does not name, told apart by nothing | nothing was written; re-reading cannot help |
+| `403` | the key does not reach this post (`post_out_of_scope`: absent, not this connector's, or another key's, told apart by nothing), or this key's own piece sits in a type it does not name (`existing_post_type_out_of_scope`) | nothing was written; re-reading cannot help |
 | `409` | the site disagrees | nothing was written; re-read and try again |
 | `503` | the site would not open a transaction | nothing was attempted |
 
@@ -668,7 +670,7 @@ again inside the window is refused rather than reapplied.
 |---|---|---|
 | `200` | Written. `written` is how many, and the report below says which. | Nothing. |
 | `400` | The request is wrong on its face. | Fix it; re-sending cannot help. |
-| `403` | The key is genuine and does not reach what the request names. | Read `code`: it names which. `post_out_of_scope`: the presenting key does not reach that post, and the refusal does not say whether the post is absent, not this connector's, another key's, or (on a replacement or slug change) in a type this key does not name. `post_type_out_of_scope`: the type the request names is not on this key; `existing_post_type_out_of_scope`: the piece is already placed in a type that is not; `link_post_type_out_of_scope`: the post a link names is in a type that is not. The last three are re-issued keys, not requests to re-send. |
+| `403` | The key is genuine and does not reach what the request names. | Read `code`: it names which. `post_out_of_scope`: the presenting key does not reach that post, and the refusal does not say whether the post is absent, not this connector's, or another key's. `post_type_out_of_scope`: the type the request names is not on this key; `existing_post_type_out_of_scope`: the piece is already placed in a type that is not; `link_post_type_out_of_scope`: the post a link names is in a type that is not. The last three are re-issued keys, not requests to re-send. |
 | `409` | The site disagrees with the request. | Re-read the site and try again. |
 | `503` | The site cannot do this at all. | Fix the site; the request is fine. |
 | `500` | This server tried and failed (including a `create_group` that wrote the source and could not finish) or refused for a reason this version cannot classify. | Read the body: `written` says what was applied. |
@@ -726,7 +728,7 @@ the reason is prose and changes freely.
 | `language_disagreement` | 409 | the site serves a post in a different language from the one the plan calls it. The plan's code is what would be written, so this would change the language the site serves |
 | `post_out_of_scope` | 403 | a post the plan names is not one the presenting key reaches: absent, not this connector's, or another key's, told apart by nothing the caller can read |
 | `post_type_out_of_scope` | 403 | the post type named is not one this key may create in |
-| `existing_post_type_out_of_scope` | 403 | the piece is already on a post of a type this key does not name, on a `/content` repeat |
+| `existing_post_type_out_of_scope` | 403 | this key's own piece is already on a post of a type this key does not name: on a `/content` repeat, a replacement or a slug change |
 | `link_post_type_out_of_scope` | 403 | a post the plan names is in a type this key does not name |
 | `source_group_unset` | 500 | the source was written and the site still puts it in no group, so there was no group for the translations to join. **The source was written**; the translations were not |
 | `source_group_unreadable` | 500 | the source was written and WPML then said nothing usable about it, so its group cannot be named. **The source was written**; the translations were not |

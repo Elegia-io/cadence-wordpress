@@ -197,6 +197,9 @@ final class ReplaceRequestTest extends TestCase {
         } elseif ($case === 'a human') {
             WpStub::$meta[$id] = [];
         } else {
+            // THE TWIN of the hint below: another key's post, in a type this
+            // key does not reach, still answers the one refusal.
+            WpStub::$meta[$id][CadenceContentRequest::KEY_META] = 'ca11ab1e0000key2';
             $post_types = ['page'];
         }
         $r = $this->replace($this->body($published, ['post_id' => $id]), $post_types);
@@ -208,7 +211,17 @@ final class ReplaceRequestTest extends TestCase {
 
     public static function unreached(): array {
         return ['missing id' => ['missing id'], 'another key' => ['another key'],
-                'a human' => ['a human'], 'type out of scope' => ['type out of scope']];
+                'a human' => ['a human'],
+                'another key, type out of scope' => ['another key, type out of scope']];
+    }
+
+    /** THE HINT, only over this key's own piece: re-issue the key wider. */
+    #[Group('wpml')]
+    public function test_this_keys_own_piece_in_an_out_of_scope_type_answers_the_hint(): void {
+        $published = $this->publish();
+        $r = $this->replace($this->body($published), ['page']);
+        $this->assertSame('existing_post_type_out_of_scope', $r['code'] ?? null);
+        $this->assertSame([], WpStub::$updated);
     }
 
     #[Group('wpml')]
@@ -460,10 +473,22 @@ final class ReplaceRequestTest extends TestCase {
                 return $this->body($p);
             },
         ];
+        // The one that needs the call itself narrowed: a scope is a property
+        // of the asking key, not of the request.
+        $scoped = ['existing_post_type_out_of_scope' => [['page'], 'key-a']];
+
         $seen = [];
         foreach ($causes as $expected => $arrange) {
             WpStub::reset();
             $r = $this->replace($arrange($this->publish()));
+            $this->assertFalse($r['ok'], $expected . ' was supposed to be refused');
+            $this->assertSame([], WpStub::$updated, $expected);
+            $this->assertSame($expected, $r['code'] ?? null, $expected);
+            $seen[] = $r['code'];
+        }
+        foreach ($scoped as $expected => [$types, $asking]) {
+            WpStub::reset();
+            $r = $this->replace($this->body($this->publish([], 'key-a')), $types, $asking);
             $this->assertFalse($r['ok'], $expected . ' was supposed to be refused');
             $this->assertSame([], WpStub::$updated, $expected);
             $this->assertSame($expected, $r['code'] ?? null, $expected);
@@ -505,7 +530,7 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertSame([], WpStub::$updated);
         $seen[] = $r['code'];
 
-        $this->assertCount(12, array_unique($seen));
+        $this->assertCount(13, array_unique($seen));
 
         // AND THE PUBLISHED LIST IS THAT LIST, so the coverage test over in
         // RestRouteTest has something real to be measured against: a code added
@@ -945,17 +970,29 @@ final class ReplaceRequestTest extends TestCase {
      */
     #[Group('wpml')]
     public function test_a_piece_in_a_type_this_key_does_not_reach_is_not_rewritten(): void {
-        // The piece is a PAGE, this key's own, and the key does not name `page`.
+        // The piece is a PAGE and the key does not name `page`, so the two
+        // type names are different strings and the pair of assertions below
+        // can each fail: the sentence has to carry one and not the other.
+        //
+        // AND THE SCOPE IS NOT SPELLED THE WAY THE PROSE IS. `post` on its own
+        // is a word this refusal uses for the row it is about -- "is on a post
+        // of a type" -- so a check for it is satisfied by the sentence with
+        // the scope removed from it entirely, which is exactly the mutation
+        // this test has to fail on. The scope asserted below is therefore the
+        // JOINED list, separator and all: a form only `implode` produces, and
+        // one carrying a second type name the sentence has no other use for.
         $published = $this->publish(['post_type' => 'page'], 'key-a');
         $r = $this->replace($this->body($published), ['post', 'cadence_brief'], 'key-a');
 
         $this->assertFalse($r['ok'], 'a key rewrote a piece in a type it does not reach');
-        $this->assertSame('post_out_of_scope', $r['code']);
+        $this->assertSame('existing_post_type_out_of_scope', $r['code']);
         $this->assertSame([], WpStub::$updated);
         $this->assertSame([], $this->statements(), 'the row was held for a refusal decided off it');
-        // The one out-of-scope sentence: neither the key's scope nor the
-        // post's type, so it cannot be told apart from a post that is absent.
-        $this->assertSame(CadenceReplaceRequest::OUT_OF_SCOPE_REASON, $r['reason']);
+        // The key's own scope is the caller's to know; the type the post is
+        // actually in is the site's, and is not in the sentence.
+        $this->assertStringContainsString('post, cadence_brief', $r['reason'],
+            'the refusal does not state the scope this key actually has');
+        $this->assertStringNotContainsString('page', $r['reason']);
     }
 
     /**
@@ -982,7 +1019,7 @@ final class ReplaceRequestTest extends TestCase {
             ], null, 'key-a');
 
             $this->assertFalse($r['ok'], "a $type was rewritten by a key naming no type");
-            $this->assertSame('post_out_of_scope', $r['code']);
+            $this->assertSame('existing_post_type_out_of_scope', $r['code']);
         }
         $this->assertSame([], WpStub::$updated, 'nothing was written to either row');
         $this->assertSame('Not a piece', WpStub::$posts[21]['post_title']);
@@ -1008,7 +1045,7 @@ final class ReplaceRequestTest extends TestCase {
         ], null, 'key-a');
 
         $this->assertFalse($r['ok'], 'an attachment was rewritten');
-        $this->assertSame('post_out_of_scope', $r['code']);
+        $this->assertSame('existing_post_type_out_of_scope', $r['code']);
         $this->assertSame([], WpStub::$updated);
     }
 
@@ -1058,9 +1095,12 @@ final class ReplaceRequestTest extends TestCase {
         $r = $this->replace($this->body($published), null, 'key-a');
 
         $this->assertFalse($r['ok'], 'an unscoped key rewrote a non-viewable type');
-        $this->assertSame('post_out_of_scope', $r['code']);
-        // The one out-of-scope sentence, which does not echo `private_doc` back.
-        $this->assertSame(CadenceReplaceRequest::OUT_OF_SCOPE_REASON, $r['reason'] ?? '');
+        $this->assertSame('existing_post_type_out_of_scope', $r['code']);
+        // AND THE REFUSAL SAYS THE FIX: name it on the key's own scope.
+        $this->assertStringContainsString("key's own post-type scope", $r['reason'] ?? '');
+        // NOT THE TYPE AGAIN -- the sentence is one fixed string whatever
+        // type triggered it, and does not echo `private_doc` back.
+        $this->assertStringNotContainsString('private_doc', $r['reason'] ?? '');
         $this->assertSame([], WpStub::$updated);
     }
 
@@ -1086,8 +1126,9 @@ final class ReplaceRequestTest extends TestCase {
             ], [$type], 'key-a');
 
             $this->assertFalse($r['ok'], "a $type was rewritten by a key explicitly scoped to it");
-            $this->assertSame(CadenceReplaceRequest::out_of_scope(), $r,
-                'a scoped key got a different refusal than the ordinary out-of-scope one');
+            $this->assertStringContainsString("this key publishes into $type", $r['reason'] ?? '',
+                'a scoped key got a different sentence than the ordinary out-of-scope refusal');
+            $this->assertSame('existing_post_type_out_of_scope', $r['code']);
         }
         $this->assertSame([], WpStub::$updated);
     }
@@ -1113,15 +1154,16 @@ final class ReplaceRequestTest extends TestCase {
      * `identifier_mismatch` and post 7 separates from post 8.
      */
     public function test_the_type_scope_cannot_be_asked_about_a_post_that_is_not_the_piece(): void {
-        // NEITHER POST IS THIS CONNECTOR'S: no identifier meta and no key
-        // stamp, which is every post that was on the site before the caller
-        // ever ran. They differ in type and in nothing else.
+        // BOTH POSTS ARE THIS KEY'S OWN PIECES, so both pass the scope gate,
+        // and the caller names neither: it guesses an identifier. They differ
+        // in type and in nothing else, so only the type check's POSITION can
+        // tell them apart.
         foreach ([7 => 'page', 8 => 'post'] as $id => $type) {
             WpStub::$posts[$id] = ['post_type' => $type, 'post_status' => 'publish',
-                                   'post_title' => 'Somebody else', 'post_content' => '<p>Theirs.</p>'];
+                                   'post_title' => 'Ours', 'post_content' => '<p>Ours.</p>'];
+            WpStub::$meta[$id] = [CadenceContentRequest::META => 'piece-' . $id,
+                                  CadenceContentRequest::KEY_META => 'key-a'];
         }
-        $this->assertSame([], WpStub::$meta[7] ?? [], 'post 7 carries meta, so it proves nothing');
-        $this->assertSame([], WpStub::$meta[8] ?? [], 'post 8 carries meta, so it proves nothing');
 
         $answers = [];
         foreach ([7, 8] as $id) {
@@ -1136,9 +1178,9 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertSame([], $this->statements(), 'the row was held for a refusal decided off it');
 
         // ONE CODE OVER BOTH, and it is the one that says nothing about type.
-        $this->assertSame('post_out_of_scope', $answers[7]['code'],
+        $this->assertSame('identifier_mismatch', $answers[7]['code'],
             'the page answered about its type to a caller that named no piece of this key');
-        $this->assertSame('post_out_of_scope', $answers[8]['code']);
+        $this->assertSame('identifier_mismatch', $answers[8]['code']);
 
         // AND ONE SENTENCE OVER BOTH. The post id is the caller's own, so it
         // is put back to a placeholder before the two are compared; anything
@@ -1395,7 +1437,7 @@ final class ReplaceRequestTest extends TestCase {
             $this->assertContains($code, CadenceReplaceRequest::REFUSAL_CODES);
             $this->assertSame($status, CadenceRestRoute::STATUS[$code], $code);
         }
-        $this->assertCount(12, CadenceReplaceRequest::REFUSAL_CODES);
+        $this->assertCount(13, CadenceReplaceRequest::REFUSAL_CODES);
     }
 
     /**

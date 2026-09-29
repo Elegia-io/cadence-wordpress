@@ -885,7 +885,7 @@ final class PluginTest extends TestCase {
 
         $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($narrow)));
         $this->assertSame(403, $refused->get_status(), (string) ($refused->get_data()['reason'] ?? ''));
-        $this->assertSame('post_out_of_scope', $refused->get_data()['code']);
+        $this->assertSame('existing_post_type_out_of_scope', $refused->get_data()['code']);
         $this->assertSame([], WpStub::$updated);
 
         // THE ACCEPT-PROOF: a key that names no type is the compatibility case

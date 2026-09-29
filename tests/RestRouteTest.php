@@ -282,13 +282,13 @@ final class RestRouteTest extends TestCase {
     }
 
     /**
-     * A REWRITE IS A DIFFERENT ANSWER FROM A BAD REQUEST. The three below say
+     * A REWRITE IS A DIFFERENT ANSWER FROM A BAD REQUEST. The two below say
      * the site disagrees with what the caller believed, and a caller that
      * re-reads may find the disagreement gone; `bad_replacement` is wrong
      * however many times it is sent, and `update_failed` is this server's own.
      */
     public function test_a_stale_replacement_is_409_and_a_malformed_one_is_400(): void {
-        foreach (['post_missing', 'identifier_mismatch', 'revision_mismatch'] as $code) {
+        foreach (['identifier_mismatch', 'revision_mismatch'] as $code) {
             $r = CadenceRestRoute::respond(['ok' => false, 'code' => $code, 'reason' => 'x']);
             $this->assertSame(409, $r['status'], $code);
             $this->assertSame($code, $r['body']['code']);

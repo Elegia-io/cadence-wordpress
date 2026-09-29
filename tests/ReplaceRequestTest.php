@@ -1019,7 +1019,7 @@ final class ReplaceRequestTest extends TestCase {
             ], null, 'key-a');
 
             $this->assertFalse($r['ok'], "a $type was rewritten by a key naming no type");
-            $this->assertSame('existing_post_type_out_of_scope', $r['code']);
+            $this->assertSame('post_out_of_scope', $r['code']);
         }
         $this->assertSame([], WpStub::$updated, 'nothing was written to either row');
         $this->assertSame('Not a piece', WpStub::$posts[21]['post_title']);
@@ -1045,7 +1045,7 @@ final class ReplaceRequestTest extends TestCase {
         ], null, 'key-a');
 
         $this->assertFalse($r['ok'], 'an attachment was rewritten');
-        $this->assertSame('existing_post_type_out_of_scope', $r['code']);
+        $this->assertSame('post_out_of_scope', $r['code']);
         $this->assertSame([], WpStub::$updated);
     }
 
@@ -1095,12 +1095,9 @@ final class ReplaceRequestTest extends TestCase {
         $r = $this->replace($this->body($published), null, 'key-a');
 
         $this->assertFalse($r['ok'], 'an unscoped key rewrote a non-viewable type');
-        $this->assertSame('existing_post_type_out_of_scope', $r['code']);
-        // AND THE REFUSAL SAYS THE FIX: name it on the key's own scope.
-        $this->assertStringContainsString("key's own post-type scope", $r['reason'] ?? '');
-        // NOT THE TYPE AGAIN -- the sentence is one fixed string whatever
-        // type triggered it, and does not echo `private_doc` back.
-        $this->assertStringNotContainsString('private_doc', $r['reason'] ?? '');
+        $this->assertSame('post_out_of_scope', $r['code']);
+        // The one out-of-scope sentence, which does not echo `private_doc` back.
+        $this->assertSame(CadenceReplaceRequest::OUT_OF_SCOPE_REASON, $r['reason'] ?? '');
         $this->assertSame([], WpStub::$updated);
     }
 
@@ -1126,9 +1123,8 @@ final class ReplaceRequestTest extends TestCase {
             ], [$type], 'key-a');
 
             $this->assertFalse($r['ok'], "a $type was rewritten by a key explicitly scoped to it");
-            $this->assertStringContainsString("this key publishes into $type", $r['reason'] ?? '',
-                'a scoped key got a different sentence than the ordinary out-of-scope refusal');
-            $this->assertSame('existing_post_type_out_of_scope', $r['code']);
+            $this->assertSame(CadenceReplaceRequest::out_of_scope(), $r,
+                'a scoped key got a different refusal than the ordinary out-of-scope one');
         }
         $this->assertSame([], WpStub::$updated);
     }

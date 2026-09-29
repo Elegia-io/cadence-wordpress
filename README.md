@@ -456,7 +456,7 @@ something a human took down is the same destruction one field across.
 |---|---|---|
 | `200` | rewritten | `created: false`, with `post_id` and the new `revision` |
 | `400` | the body is wrong | `bad_replacement`; re-sending cannot help |
-| `403` | the key does not reach this post (`post_out_of_scope`: absent, not this connector's, or another key's, told apart by nothing), or this key's own piece sits in a type it does not name (`existing_post_type_out_of_scope`) | nothing was written; re-reading cannot help |
+| `403` | the key does not reach this post (`post_out_of_scope`: absent, not this connector's, or another key's, told apart by nothing in the reply), or this key's own piece sits in a type it does not name (`existing_post_type_out_of_scope`) | nothing was written; re-reading cannot help |
 | `409` | the site disagrees | nothing was written; re-read and try again |
 | `503` | the site would not open a transaction | nothing was attempted |
 

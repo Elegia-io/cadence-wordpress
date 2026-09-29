@@ -108,10 +108,10 @@ final class CadenceKey {
      * turned out to be a provenance oracle: any id on the site sorted into
      * another tenant'''s Cadence posts or everything else, behind a credential
      * that route verifies no signature for. `CadenceKey::reaches` asks the
-     * conjunction there and answers once. `/content/replace` keeps the finer
-     * answer, because it verifies an attestation before it reads anything about
-     * the post, so its answer costs a signing key rather than a leaked
-     * connector key. Do not re-split the linking route'''s codes.
+     * conjunction there and answers once. `/content/read`, `/content/replace`
+     * and `/content/reslug` ask the same conjunction (replace and reslug through
+     * `CadenceReplaceRequest::admits`) and answer one code for every post the
+     * key does not reach. Do not re-split any of these routes' codes.
      *
      * NOT ASKED OF `content.publish`. Creating a post cannot be scoped by meta
      * the post does not have yet; that capability is scoped by the post types
@@ -189,11 +189,10 @@ final class CadenceKey {
      * connector never published; it would answer `true` for one (no stamp, so
      * the null-identity path), and a reader could mistake that for entitlement.
      *
-     * `/content/replace` asks `created_by` on its own instead, and is not the
-     * same exposure: it verifies the request's attestation before it reads
-     * anything about the post, so the finer answers there cost a signing key
-     * rather than a leaked connector key. Any route that asks WITHOUT
-     * verification first should ask here.
+     * `/content/replace` and `/content/reslug` ask it too, through
+     * `CadenceReplaceRequest::admits`, and answer one code for every post it
+     * refuses: a signature in front narrows who can ask, it does not make a
+     * finer answer safe. Any route that asks about a post should ask here.
      */
     public static function reaches(int $post_id, ?string $key_id): bool {
         return self::scope_admits($post_id) && self::created_by($post_id, $key_id);
@@ -277,9 +276,11 @@ final class CadenceKey {
      * and is, by `created_by` -- but that predicate admits every post made
      * before the stamp existed, and over that set two keys on one site do not
      * separate. The type list is the only narrowing left there.
-     * `CadenceReplaceRequest` refuses a rewrite outside it with
-     * `existing_post_type_out_of_scope`, the same code and the same operator
-     * fix as the repeat above.
+     * `CadenceReplaceRequest` and `CadenceReslugRequest` refuse this key's own
+     * piece outside it with `existing_post_type_out_of_scope`, the same code
+     * and the same operator fix as the repeat above -- asked only after the
+     * post is shown to be this key's and the named piece, so the hint never
+     * answers about another post.
      *
      * NULL MEANS ANY, and that is the compatibility path. Keys are live on
      * sites this repository does not control; a new required field would turn a

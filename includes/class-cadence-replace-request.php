@@ -154,7 +154,8 @@ final class CadenceReplaceRequest {
         // ONE GATE, ONE CODE, ONE SENTENCE, BEFORE ANYTHING ELSE ABOUT THE POST.
         //
         // A post that is not there, one this connector never published or
-        // adopted, and one another key made all answer `post_out_of_scope` with the same fixed sentence,
+        // adopted, one another key made, and one whose type is not content
+        // all answer `post_out_of_scope` with the same fixed sentence,
         // which names no id. Separate answers here were an oracle: any holder
         // of a replace key could sort post ids into "absent" and "someone
         // else's". Every refusal below this line is only ever shown for a
@@ -165,7 +166,7 @@ final class CadenceReplaceRequest {
         // A post carrying NO key stamp takes the null-identity path in
         // `CadenceKey::created_by` and is admitted, as on the other routes:
         // pieces on a site predate the stamp.
-        if (!self::admits($fields['post_id'], $key_id)) {
+        if (!self::admits($fields['post_id'], $post_types, $key_id)) {
             return self::out_of_scope();
         }
 
@@ -231,49 +232,25 @@ final class CadenceReplaceRequest {
         // sentence differs because the act does; the code is the API and the
         // reason is prose.
         //
-        // AND `CadenceKey::is_content_type` IS ASKED IN THE SAME BRANCH,
-        // WITH THE SAME CODE AND THE SAME SENTENCE -- not a separate check
-        // ahead of this one. A revision or an attachment is refused whatever
-        // the key's scope, and a null (wide) scope also refuses a registered
-        // type that is not publicly viewable (see that method's docblock);
-        // merged here rather than split, the two refusals are indistinguishable
-        // to a caller, which is the point -- a separate, earlier check would
-        // let a caller tell "this type is never content" apart from "this key
-        // was never scoped to it", and neither is the site's to disclose.
+        // `CadenceKey::is_content_type` IS NOT ASKED HERE: it is in the scope
+        // gate, so a revision, an attachment, or (for a null scope) a type
+        // that is not publicly viewable answers `post_out_of_scope` like any
+        // post this key does not reach. Only the key's explicit list is asked
+        // here.
         //
-        // AFTER the scope gate (the post exists and this key reaches it) and
-        // after `identifier_mismatch`, so it can only ever fire over a post
-        // this key reaches and that IS the piece named: the hint to re-issue
-        // the key wider is never an answer about somebody else's post. Asked earlier it would answer whether another tenant's post,
-        // or any post on the site, is inside this key's type scope -- naming
-        // the target's type is exactly what the refusals here must not do.
-        //
-        // AND THE POSITION IS PINNED, not merely asserted here: move this
-        // block above `identifier_mismatch` and
-        // `ReplaceRequestTest::test_the_type_scope_cannot_be_asked_about_a_post_that_is_not_the_piece`
-        // fails, because two posts this connector never published stop
-        // answering with the same refusal and the pair of codes becomes a type
-        // oracle over every post id a caller cares to name.
-        //
-        // `null` names no type and means ANY, so a key issued before the field
-        // existed replaces what it always replaced.
-        $actual_type = get_post_type($fields['post_id']);
-        if (!CadenceKey::is_content_type($actual_type, $post_types)
-                || ($post_types !== null && !in_array($actual_type, $post_types, true))) {
-            // The key's own scope and the identifier the caller sent, neither
-            // of which is the site's to disclose -- and NOT the type the post
-            // is in, which is: neither sentence below names it, so each is
-            // ONE FIXED STRING per key configuration and nothing about the
-            // refusal varies with what type the post actually is. The null
-            // branch states the fix: naming the type explicitly on the key's
-            // scope is what admits a type that is not publicly viewable.
-            return ['ok' => false, 'code' => 'existing_post_type_out_of_scope', 'reason' => $post_types !== null
-                ? sprintf('the piece %s is on a post of a type this key does not publish into; '
-                    . 'this key publishes into %s, and nothing was written',
-                    $fields['piece_id'], implode(', ', $post_types))
-                : sprintf('the piece %s is on a post of a type this key does not publish into; '
-                    . 'naming that type on the key\'s own post-type scope would allow it, and '
-                    . 'nothing was written', $fields['piece_id'])];
+        // AFTER the scope gate and after `identifier_mismatch`, so it only
+        // ever fires over a post this key reaches that IS the piece named:
+        // the hint never answers about somebody else's post, and a guessed
+        // identifier on an owned post answers `identifier_mismatch` whatever
+        // its type. Pinned by
+        // `ReplaceRequestTest::test_the_type_scope_cannot_be_asked_about_a_post_that_is_not_the_piece`.
+        if ($post_types !== null && !in_array(get_post_type($fields['post_id']), $post_types, true)) {
+            // `/content`'s shape: the key's own scope list, never the type
+            // the post is in.
+            return ['ok' => false, 'code' => 'existing_post_type_out_of_scope', 'reason' => sprintf(
+                'the piece %s is on a post of a type this key does not publish into; '
+                . 'this key publishes into %s, and nothing was written',
+                $fields['piece_id'], implode(', ', $post_types))];
         }
 
         // FROM HERE THE ROW IS HELD. Everything above is decided from copies
@@ -589,11 +566,16 @@ final class CadenceReplaceRequest {
 
     /**
      * WHETHER THIS KEY REACHES THE POST, as one predicate: it exists, this
-     * connector published or adopted it, and this key made it. The post-type
-     * scope is asked after, and only over a post this predicate admits.
+     * connector published or adopted it, this key made it, and its type is
+     * content at all (`CadenceKey::is_content_type`). The key's explicit type
+     * list is asked after, and only over a post this predicate admits.
      */
-    public static function admits(int $post_id, ?string $key_id): bool {
-        return get_post($post_id) instanceof WP_Post && CadenceKey::reaches($post_id, $key_id);
+    public static function admits(int $post_id, ?array $post_types, ?string $key_id): bool {
+        if (!get_post($post_id) instanceof WP_Post || !CadenceKey::reaches($post_id, $key_id)) {
+            return false;
+        }
+        $type = get_post_type($post_id);
+        return is_string($type) && CadenceKey::is_content_type($type, $post_types);
     }
 
     /** @return array{ok: false, code: string, reason: string} */

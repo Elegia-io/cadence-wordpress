@@ -9,7 +9,7 @@ set -euo pipefail
 : "${PODMAN:=sudo -n podman}"
 : "${PHP_IMAGE:=docker.io/library/wordpress:cli-php8.3}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-: "${PHPUNIT_PHAR:=${HERE}/.phpunit.phar}"
+PHPUNIT_PHAR="${HERE}/.phpunit.phar"
 
 # PINNED AND VERIFIED: tests/phpunit-phar names one exact release and its
 # SHA-256, the same file CI reads. A phar that does not match is refused, not
@@ -26,7 +26,8 @@ fi
 
 $PODMAN run --rm --entrypoint php \
   -v "${HERE}:/p:z" -w /p "$PHP_IMAGE" \
-  /p/.phpunit.phar --bootstrap tests/bootstrap.php --do-not-cache-result --colors=never "$@" tests
+  /p/.phpunit.phar --bootstrap tests/bootstrap.php --do-not-cache-result --colors=never \
+  --fail-on-empty-test-suite --fail-on-skipped --fail-on-incomplete --fail-on-risky "$@" tests
 
 # WHAT THE BUILD SCRIPT WILL AND WILL NOT BUILD, on the HOST rather than in
 # the container, because `build-zip.py` is a host script and the php image has

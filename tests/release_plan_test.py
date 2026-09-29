@@ -7,6 +7,7 @@ pins. One test runs the script against the tree, as the workflow does.
 import importlib.util
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -50,6 +51,11 @@ class Versions(unittest.TestCase):
     def test_a_version_that_is_not_x_y_z_refuses(self):
         with self.assertRaisesRegex(RP.Refusal, "not X.Y.Z"):
             RP.versions(*trees("1.3.0$x", "1.3.0$x", "1.3.0$x"))
+
+    def test_digits_from_other_scripts_are_not_a_version(self):
+        arabic = "\u0661.\u0662.\u0663"
+        with self.assertRaisesRegex(RP.Refusal, "not X.Y.Z"):
+            RP.versions(*trees(arabic, arabic, arabic))
 
     def test_stable_tag_in_the_changelog_is_not_the_field(self):
         self.assertEqual(RP.stable_tag(README.format(v="1.3.0")), "1.3.0")
@@ -97,9 +103,9 @@ def commit(sha, tree=TREE):
     return {"sha": sha, "commit": {"tree": {"sha": tree}}}
 
 
-def runs(conclusions, head=HEAD):
+def runs(conclusions, head=HEAD, app="github-actions"):
     return {"check_runs": [
-        {"id": i, "name": n, "head_sha": head, "conclusion": c}
+        {"id": i, "name": n, "head_sha": head, "conclusion": c, "app": {"slug": app}}
         for i, (n, c) in enumerate(conclusions, 1)
     ]}
 
@@ -129,6 +135,33 @@ class RequiredChecks(unittest.TestCase):
         with self.assertRaisesRegex(RP.Refusal, "PHPUnit"):
             self.check(check_runs=runs(GREEN + [("PHPUnit", "failure")]))
 
+    def test_a_same_named_green_run_from_another_app_does_not_count(self):
+        real = runs([(n, "failure" if n == "PHPUnit" else c) for n, c in GREEN])
+        forged = runs([("PHPUnit", "success")], app="some-other-app")["check_runs"][0]
+        forged["id"] = 99
+        real["check_runs"].append(forged)
+        with self.assertRaisesRegex(RP.Refusal, "PHPUnit"):
+            self.check(check_runs=real)
+        with self.assertRaisesRegex(RP.Refusal, "PHPUnit"):
+            self.check(check_runs={"check_runs": [dict(r, app=None) for r in runs(GREEN)["check_runs"]]})
+
+    def test_a_check_with_no_conclusion_yet_refuses(self):
+        with self.assertRaisesRegex(RP.Refusal, "PHPUnit"):
+            self.check(check_runs=runs([(n, None if n == "PHPUnit" else c) for n, c in GREEN]))
+
+    def test_a_non_sha_commit_or_head_refuses(self):
+        with self.assertRaisesRegex(RP.Refusal, "not a commit SHA"):
+            RP.required_checks("main", [pull()], commit(MERGE), commit(HEAD), runs(GREEN))
+        with self.assertRaisesRegex(RP.Refusal, "head is not a commit SHA"):
+            self.check(pulls=[pull(head={"sha": "refs/heads/x"})])
+
+    def test_a_commit_with_no_tree_refuses(self):
+        for broken in ({"sha": MERGE}, {"sha": MERGE, "commit": {}}, {"sha": MERGE, "commit": {"tree": None}}):
+            with self.subTest(commit=broken), self.assertRaisesRegex(RP.Refusal, "no tree SHA"):
+                self.check(merge=broken)
+        with self.assertRaisesRegex(RP.Refusal, "no tree SHA"):
+            self.check(merge={"sha": MERGE}, head={"sha": HEAD})
+
     def test_checks_on_another_commit_do_not_count(self):
         with self.assertRaisesRegex(RP.Refusal, "not green"):
             self.check(check_runs=runs(GREEN, head="d" * 40))
@@ -147,12 +180,67 @@ class RequiredChecks(unittest.TestCase):
             self.check(head=commit("d" * 40))
 
 
+TAGGED = "d" * 40
+
+
+def ref(sha=TAGGED, kind="commit"):
+    return {"ref": "refs/tags/v1.3.0", "object": {"type": kind, "sha": sha}}
+
+
+class Bound(unittest.TestCase):
+    """A GitHub release that exists must be of the tree WordPress.org gets."""
+
+    def bound(self, sha=MERGE, tag=None, tagged=None, merge=None, release=None):
+        return RP.bound(sha, ref() if tag is None else tag, tagged or commit(TAGGED), merge or commit(MERGE),
+                        {"isDraft": False} if release is None else release)
+
+    def test_a_rerun_of_the_push_that_made_the_release_passes(self):
+        self.assertEqual(self.bound(tag=ref(MERGE), tagged=commit(MERGE)), MERGE)
+
+    def test_another_commit_with_the_same_tree_passes(self):
+        self.assertEqual(self.bound(), TAGGED)
+
+    def test_a_later_push_with_another_tree_refuses(self):
+        with self.assertRaisesRegex(RP.Refusal, "whose tree is not the tree"):
+            self.bound(tagged=commit(TAGGED, tree="e" * 40))
+
+    def test_a_draft_or_unknown_draft_state_refuses(self):
+        for release in ({"isDraft": True}, {}, {"isDraft": None}):
+            with self.subTest(release=release), self.assertRaisesRegex(RP.Refusal, "draft"):
+                self.bound(release=release)
+
+    def test_an_annotated_or_malformed_tag_refuses(self):
+        for tag in (ref(kind="tag"), ref(sha="v1.3.0"), {}):
+            with self.subTest(tag=tag), self.assertRaisesRegex(RP.Refusal, "lightweight tag"):
+                self.bound(tag=tag)
+
+    def test_a_commit_fetched_for_another_sha_refuses(self):
+        with self.assertRaisesRegex(RP.Refusal, "not the one the tag points at"):
+            self.bound(tagged=commit("f" * 40))
+
+    def test_a_non_sha_release_commit_refuses(self):
+        with self.assertRaisesRegex(RP.Refusal, "not a commit SHA"):
+            self.bound(sha="main")
+
+
 class AgainstTheTree(unittest.TestCase):
     def test_the_tree_agrees_and_has_notes_for_its_version(self):
         out = subprocess.run([sys.executable, str(SCRIPT), "version"],
                              capture_output=True, text=True, check=True).stdout.strip()
         self.assertRegex(out, r"^\d+\.\d+\.\d+$")
         subprocess.run([sys.executable, str(SCRIPT), "notes", out], capture_output=True, check=True)
+
+    def test_stable_tag_refuses_a_built_readme_for_another_version(self):
+        with tempfile.TemporaryDirectory() as d:
+            readme = Path(d) / "readme.txt"
+            readme.write_text(README.format(v="1.3.0"))
+            ok = subprocess.run([sys.executable, str(SCRIPT), "stable-tag", str(readme), "1.3.0"],
+                                capture_output=True, text=True)
+            bad = subprocess.run([sys.executable, str(SCRIPT), "stable-tag", str(readme), "1.3.1"],
+                                 capture_output=True, text=True)
+        self.assertEqual(ok.returncode, 0)
+        self.assertEqual(bad.returncode, 1)
+        self.assertIn("says Stable tag 1.3.0, releasing 1.3.1", bad.stderr)
 
     def test_a_refusal_exits_one_with_the_reason(self):
         r = subprocess.run([sys.executable, str(SCRIPT), "notes", "0.0.0"], capture_output=True, text=True)

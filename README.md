@@ -821,13 +821,16 @@ version. The plugin header `Version`, `readme.txt` `Stable tag` and
 `CadenceRestRoute::VERSION` must agree, or the run refuses. A push that bumps
 nothing finds its GitHub release and WordPress.org tag already there, and does
 nothing. Before releasing, it refuses unless the commit is a merged pull request
-whose head had the same tree and passed the three required checks.
+whose head had the same tree and passed the three required checks, run by
+GitHub Actions. A GitHub release that already exists must be published and
+tagged on the same tree, so a later push cannot finish it with other code.
 
 It then creates tag `vX.Y.Z` and a GitHub release carrying the install zip, with
 that version's `readme.txt` changelog section as the notes. Last, it builds the
 directory zip, syncs it into WordPress.org SVN `trunk/`, commits, and copies
 trunk to `tags/X.Y.Z`. It never writes a tag that exists, and a re-run after a
-failure finishes only what is left. `assets/` is not touched.
+failure finishes only what is left. `assets/` is not touched. An empty tag listing
+refuses, so the first tag of a new WordPress.org plugin is committed by hand.
 
 The decisions live in `release-plan.py`, tested by `tests/release_plan_test.py`.
 `workflow_dispatch` with `dry_run` (the default) builds everything and prints
@@ -842,7 +845,8 @@ Maintainer setup, once:
   for an approval.
 
 The password reaches svn on stdin (`--password-from-stdin`) with
-`--no-auth-cache`, never on a command line and never in a cache on disk.
+`--no-auth-cache`, never on a command line, in svn's environment or in a cache
+on disk.
 
 ## Licence
 

@@ -7,7 +7,12 @@
 # `php -l on the declared minimum` green. `plan` does not take the ruleset on
 # trust: before a release it finds the pull request merged as this commit,
 # refuses unless the commit has that pull request's head tree, and refuses unless
-# the three checks passed on that head.
+# the three checks passed on that head, as run by GitHub Actions.
+#
+# WHAT THAT DOES NOT COVER: a pull request from this repository runs its own
+# ci.yml, so a pull request that guts a required job also turns it green. Only
+# a required review, or a CODEOWNERS rule on .github/workflows/ with review
+# from code owners required, keeps such a change from being merged unread.
 #
 # THE DECISIONS ARE IN release-plan.py, tested by tests/release_plan_test.py:
 # the version (plugin header, readme.txt Stable tag and CadenceRestRoute::VERSION
@@ -24,8 +29,14 @@
 # failure finishes the release instead of repeating it. Whether a result exists
 # is read from a listing that must succeed: a failed listing refuses the run
 # rather than reading as "not yet released". The commit step re-lists the tags
-# just before `svn copy` and refuses if the tag is there, so a released
-# WordPress.org tag is never rewritten.
+# before trunk moves and again before `svn copy`, and refuses if the tag is
+# there, so a released WordPress.org tag is never rewritten. It copies the
+# trunk revision it verified holds the build, never trunk HEAD.
+#
+# ONE VERSION, ONE TREE. When the GitHub release already exists and the
+# WordPress.org tag does not, `plan` refuses unless that release is published
+# and its tag is on this commit or on one with the same tree. So a later push
+# cannot finish an earlier version's release with different code.
 #
 # THREE JOBS SO EACH HOLDS ONLY WHAT IT USES. `plan` reads; `github` is the one
 # job with `contents: write`, the only thing that needs it being the release it
@@ -118,6 +129,22 @@ jobs:
           python3 release-plan.py checks "$GITHUB_SHA" \
             "$t/pulls.json" "$t/merge.json" "$t/head.json" "$t/runs.json"
 
+      - name: Refuse to finish a release made from another tree
+        if: steps.plan.outputs.gh_done == '1' && steps.plan.outputs.noop == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          t=$RUNNER_TEMP
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" > "$t/tag-ref.json"
+          tagged=$(python3 release-plan.py tag-commit "$t/tag-ref.json")
+          gh api "repos/$GITHUB_REPOSITORY/commits/$tagged" > "$t/tagged.json"
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" > "$t/this.json"
+          gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft > "$t/release.json"
+          python3 release-plan.py bound "$GITHUB_SHA" \
+            "$t/tag-ref.json" "$t/tagged.json" "$t/this.json" "$t/release.json"
+
   github:
     needs: plan
     if: needs.plan.outputs.noop == '0' || inputs.dry_run
@@ -203,7 +230,7 @@ jobs:
           # a global option: `svn help commit -v`), never on the command line,
           # where any process on the runner could read it. `printf` is a bash
           # builtin, so it is no process's argv either. `--no-auth-cache` keeps
-          # it out of ~/.subversion.
+          # it out of ~/.subversion. `env -u` keeps it out of svn's environment.
           auth=(--non-interactive --no-auth-cache --username "$SVN_USERNAME" --password-from-stdin)
           # Re-listed here, before trunk moves, as well as in `plan`: a
           # released tag is never rewritten, and trunk is not moved to a
@@ -217,9 +244,34 @@ jobs:
             fi
           }
           no_tag_yet
-          if [ -n "$(svn status "$co")" ]; then
-            printf '%s' "$SVN_PASSWORD" | svn commit "${auth[@]}" -m "Release $v" "$co"
+          # The revision is parsed from svn's own words, so they must be English.
+          export LC_ALL=C
+          # Its own line: inside `[ -n "$(...)" ]` a failed status reads as clean.
+          status=$(svn status "$co")
+          if [ -n "$status" ]; then
+            out=$(printf '%s' "$SVN_PASSWORD" \
+              | env -u SVN_PASSWORD svn commit "${auth[@]}" -m "Release $v" "$co")
+            echo "$out"
+            rev=$(sed -n 's/^Committed revision \([0-9][0-9]*\)\.$/\1/p' <<< "$out")
+          else
+            # A re-run after the commit landed: the fresh checkout is trunk
+            # at this revision, and it already holds the build.
+            rev=$(svn info --show-item revision "$co")
+          fi
+          if ! [[ "$rev" =~ ^[0-9]+$ ]]; then
+            echo "cannot tell which trunk revision holds the build; refusing" >&2
+            exit 1
+          fi
+          # Tag only what was built: trunk@rev must hold exactly the checkout's
+          # files. Properties are ignored, since the directory root of a
+          # just-committed checkout is still at its older revision.
+          diff=$(svn diff --non-interactive --summarize --ignore-properties --old="$SVN_URL/trunk@$rev" --new="$co")
+          if [ -n "$diff" ]; then
+            printf '%s\n' "$diff" >&2
+            echo "trunk@$rev is not the build; refusing to tag it" >&2
+            exit 1
           fi
           no_tag_yet
-          printf '%s' "$SVN_PASSWORD" | svn copy "${auth[@]}" "$SVN_URL/trunk" "$SVN_URL/tags/$v" -m "Tag $v"
+          printf '%s' "$SVN_PASSWORD" \
+            | env -u SVN_PASSWORD svn copy "${auth[@]}" "$SVN_URL/trunk@$rev" "$SVN_URL/tags/$v" -m "Tag $v"
           svn ls --non-interactive "$SVN_URL/tags/$v/" > /dev/null

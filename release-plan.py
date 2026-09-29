@@ -14,6 +14,9 @@ strict X.Y.Z version this script parsed or a 0/1 it computed.
     pr-head SHA PULLS       print the head SHA of the pull request merged as SHA
     checks SHA PULLS MERGE HEAD RUNS
                             refuse unless the merged tree is the checked one
+    tag-commit REF          print the commit a lightweight tag ref points at
+    bound SHA REF TAG MERGE RELEASE
+                            refuse unless an existing release is of this tree
 """
 import json
 import re
@@ -25,7 +28,8 @@ PLUGIN = HERE / "cadence-connector.php"
 README = HERE / "readme.txt"
 REST_ROUTE = HERE / "includes" / "class-cadence-rest-route.php"
 
-SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
+# [0-9], not \d: \d also matches digits from other scripts.
+SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 # The checks main's ruleset requires. Keep in step with the ruleset and with
@@ -35,6 +39,9 @@ REQUIRED_CHECKS = (
     "Repository checks that need no PHP",
     "php -l on the declared minimum",
 )
+# Only runs by GitHub Actions count: any app with checks:write can post a
+# check run under the same name.
+CHECKS_APP = "github-actions"
 
 
 class Refusal(Exception):
@@ -133,15 +140,15 @@ def required_checks(sha, pulls, merge_commit, head_commit, check_runs):
     the head's tree; that equality is what lets the head's green checks speak
     for the commit being released."""
     head = merged_pull(sha, pulls)
-    merge_tree = merge_commit.get("commit", {}).get("tree", {}).get("sha")
-    head_tree = head_commit.get("commit", {}).get("tree", {}).get("sha")
+    merge_tree = tree_of(merge_commit)
+    head_tree = tree_of(head_commit)
     if head_commit.get("sha") != head:
         raise Refusal("the head commit fetched is not the pull request's head")
-    if not merge_tree or merge_tree != head_tree:
+    if merge_tree != head_tree:
         raise Refusal(f"{sha} does not have the tree of the checked head {head}")
     latest = {}
     for run in check_runs.get("check_runs", []):
-        if run.get("head_sha") != head:
+        if run.get("head_sha") != head or (run.get("app") or {}).get("slug") != CHECKS_APP:
             continue
         name = run.get("name")
         if name not in latest or run.get("id", 0) > latest[name].get("id", 0):
@@ -150,6 +157,40 @@ def required_checks(sha, pulls, merge_commit, head_commit, check_runs):
     if failing:
         raise Refusal("required checks not green on the merged head: " + ", ".join(failing))
     return head
+
+
+def tree_of(commit):
+    tree = ((commit.get("commit") or {}).get("tree") or {}).get("sha", "")
+    if not SHA.match(tree):
+        raise Refusal(f"commit {commit.get('sha')!r} has no tree SHA")
+    return tree
+
+
+def tag_commit(ref):
+    """The commit a lightweight tag points at. `gh release create` makes
+    lightweight tags; an annotated one was made by hand and is refused."""
+    obj = ref.get("object") or {}
+    if obj.get("type") != "commit" or not SHA.match(obj.get("sha", "")):
+        raise Refusal("the release tag is not a lightweight tag on a commit")
+    return obj["sha"]
+
+
+def bound(sha, ref, tag_commit_json, merge_commit, release):
+    """Refuse unless the existing GitHub release is of the tree being released.
+
+    A GitHub release made by an earlier push, whose WordPress.org half failed,
+    must not be finished by a later push carrying a different tree: the two
+    halves of one version would hold different code."""
+    if not SHA.match(sha):
+        raise Refusal(f"{sha!r} is not a commit SHA")
+    if release.get("isDraft") is not False:
+        raise Refusal("the GitHub release is a draft, or its draft state is unknown")
+    tagged = tag_commit(ref)
+    if tag_commit_json.get("sha") != tagged:
+        raise Refusal("the commit fetched is not the one the tag points at")
+    if tagged != sha and tree_of(tag_commit_json) != tree_of(merge_commit):
+        raise Refusal(f"the release tag is on {tagged}, whose tree is not the tree of {sha}")
+    return tagged
 
 
 def load_json(path):
@@ -181,6 +222,11 @@ def main(argv):
     elif cmd == "checks" and len(args) == 5:
         head = required_checks(args[0], *(load_json(a) for a in args[1:]))
         print(f"{args[0]} has the tree of {head}, and {len(REQUIRED_CHECKS)} required checks passed on it")
+    elif cmd == "tag-commit" and len(args) == 1:
+        print(tag_commit(load_json(args[0])))
+    elif cmd == "bound" and len(args) == 5:
+        tagged = bound(args[0], *(load_json(a) for a in args[1:]))
+        print(f"the existing release is tagged on {tagged}, which has the tree of {args[0]}")
     else:
         raise Refusal(__doc__)
     return 0

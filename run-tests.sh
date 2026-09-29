@@ -9,16 +9,25 @@ set -euo pipefail
 : "${PODMAN:=sudo -n podman}"
 : "${PHP_IMAGE:=docker.io/library/wordpress:cli-php8.3}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-: "${PHPUNIT_PHAR:=${HERE}/.phpunit.phar}"
+PHPUNIT_PHAR="${HERE}/.phpunit.phar"
 
+# PINNED AND VERIFIED: tests/phpunit-phar names one exact release and its
+# SHA-256, the same file CI reads. A phar that does not match is refused, not
+# run, whether it was just fetched or left over from an older checkout.
+read -r PHPUNIT_VERSION PHPUNIT_SHA256 < "${HERE}/tests/phpunit-phar"
 if [ ! -f "$PHPUNIT_PHAR" ]; then
-  echo "run-tests: fetching PHPUnit to $PHPUNIT_PHAR" >&2
-  curl -sSfL -o "$PHPUNIT_PHAR" https://phar.phpunit.de/phpunit-11.phar
+  echo "run-tests: fetching PHPUnit ${PHPUNIT_VERSION} to $PHPUNIT_PHAR" >&2
+  curl -sSfL -o "$PHPUNIT_PHAR" "https://phar.phpunit.de/phpunit-${PHPUNIT_VERSION}.phar"
+fi
+if ! echo "${PHPUNIT_SHA256}  ${PHPUNIT_PHAR}" | sha256sum -c --quiet -; then
+  echo "run-tests: $PHPUNIT_PHAR is not PHPUnit ${PHPUNIT_VERSION} as pinned; delete it and re-run" >&2
+  exit 1
 fi
 
 $PODMAN run --rm --entrypoint php \
   -v "${HERE}:/p:z" -w /p "$PHP_IMAGE" \
-  /p/.phpunit.phar --bootstrap tests/bootstrap.php --do-not-cache-result --colors=never "$@" tests
+  /p/.phpunit.phar --bootstrap tests/bootstrap.php --do-not-cache-result --colors=never \
+  --fail-on-empty-test-suite --fail-on-skipped --fail-on-incomplete --fail-on-risky "$@" tests
 
 # WHAT THE BUILD SCRIPT WILL AND WILL NOT BUILD, on the HOST rather than in
 # the container, because `build-zip.py` is a host script and the php image has

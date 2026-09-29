@@ -1,12 +1,27 @@
 # Release on a version bump: tag, GitHub release, then WordPress.org.
 #
 # A push to main that bumps nothing is a no-op: the version in the plugin header
-# already has its tag and its WordPress.org tag. Main only moves through a pull
-# request whose required checks passed, so the commit released is a checked one.
+# already has its tag and its WordPress.org tag. Main is protected by a ruleset
+# with no bypass actors: a pull request, squash merged, up to date with main, and
+# the required checks `PHPUnit`, `Repository checks that need no PHP` and
+# `php -l on the declared minimum` green. So the commit released is a checked one.
+#
+# ONLY MAIN RELEASES. `plan` refuses a non-dry-run on any other ref, the commit
+# step runs only on main, and the `wordpress` job runs in the `wordpress-org`
+# environment.
 #
 # Each step is skipped when its own result already exists, so a re-run after a
-# failure finishes the release instead of repeating it. A released WordPress.org
-# tag is never rewritten.
+# failure finishes the release instead of repeating it. Whether a result exists
+# is read from a listing that must succeed: a failed listing refuses the run
+# rather than reading as "not yet released". The commit step re-lists the tags
+# just before `svn copy` and refuses if the tag is there, so a released
+# WordPress.org tag is never rewritten.
+#
+# THREE JOBS SO EACH HOLDS ONLY WHAT IT USES. `plan` reads; `github` is the one
+# job with `contents: write`, the only thing that needs it being the release it
+# creates; `wordpress` gets the SVN credentials, and only in the one step that
+# commits, which a dry run never reaches. No checkout keeps the token in
+# .git/config: nothing here pushes with git.
 
 name: Release
 
@@ -20,8 +35,7 @@ on:
         type: boolean
         default: true
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: release
@@ -31,20 +45,32 @@ env:
   SVN_URL: https://plugins.svn.wordpress.org/cadence-connector
 
 jobs:
-  release:
+  plan:
     runs-on: ubuntu-26.04-arm
-    timeout-minutes: 15
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      gh_done: ${{ steps.plan.outputs.gh_done }}
+      svn_done: ${{ steps.plan.outputs.svn_done }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
       - name: Read the version, and decide what is left to do
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REF: ${{ github.ref }}
         run: |
           set -euo pipefail
+          if [ "$DRY_RUN" != "true" ] && [ "$REF" != "refs/heads/main" ]; then
+            echo "Only main releases; $REF may only dry-run. Refusing." >&2
+            exit 1
+          fi
           python3 check-readme-version.py
           version=$(sed -n 's/^ \* Version: *\([0-9.]*\)$/\1/p' cadence-connector.php)
           stable=$(sed -n 's/^Stable tag: *\([0-9.]*\)$/\1/p' readme.txt)
@@ -52,56 +78,98 @@ jobs:
             echo "Version '$version' and Stable tag '$stable' disagree; refusing." >&2
             exit 1
           fi
+          # From the runner image's signed Ubuntu archive; apt verifies it.
           sudo apt-get install -y -qq subversion > /dev/null
-          if gh release view "v$version" > /dev/null 2>&1; then gh_done=1; else gh_done=0; fi
-          if svn ls --non-interactive "$SVN_URL/tags/$version/" > /dev/null 2>&1; then svn_done=1; else svn_done=0; fi
+          # A failed listing refuses: it must never read as "not yet released".
+          releases=$(gh release list --limit 1000 --json tagName --jq '.[].tagName') \
+            || { echo "cannot list GitHub releases; refusing" >&2; exit 1; }
+          tags=$(svn ls --non-interactive "$SVN_URL/tags/") \
+            || { echo "cannot list $SVN_URL/tags/; refusing" >&2; exit 1; }
+          if grep -qx "v$version" <<< "$releases"; then gh_done=1; else gh_done=0; fi
+          if grep -qx "$version/" <<< "$tags"; then svn_done=1; else svn_done=0; fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "gh_done=$gh_done" >> "$GITHUB_OUTPUT"
           echo "svn_done=$svn_done" >> "$GITHUB_OUTPUT"
           echo "version $version: GitHub release done=$gh_done, WordPress.org tag done=$svn_done"
 
-      - name: Build both zips
-        if: steps.plan.outputs.gh_done == '0' || steps.plan.outputs.svn_done == '0' || inputs.dry_run
+  github:
+    needs: plan
+    if: needs.plan.outputs.gh_done == '0' || needs.plan.outputs.svn_done == '0' || inputs.dry_run
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the install zip
         run: |
           set -euo pipefail
-          v=${{ steps.plan.outputs.version }}
-          python3 build-zip.py "$RUNNER_TEMP/cadence-connector-$v-install.zip"
+          python3 build-zip.py "$RUNNER_TEMP/cadence-connector-$VERSION-install.zip"
+
+      - name: GitHub release
+        if: needs.plan.outputs.gh_done == '0' && !inputs.dry_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v=$VERSION
+          awk -v h="= $v =" '$0==h{f=1;next} /^= /{f=0} f' readme.txt > "$RUNNER_TEMP/notes.md"
+          test -s "$RUNNER_TEMP/notes.md" || { echo "readme.txt has no changelog section for $v" >&2; exit 1; }
+          printf '\nInstall via Plugins > Add New > Upload Plugin, choosing cadence-connector-%s-install.zip. Requires WordPress 6.5+ and PHP 8.1+.\n' "$v" >> "$RUNNER_TEMP/notes.md"
+          gh release create "v$v" "$RUNNER_TEMP/cadence-connector-$v-install.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "Cadence Connector $v" --notes-file "$RUNNER_TEMP/notes.md"
+
+  # After `github`, as the single job did: a failed GitHub release stops the
+  # WordPress.org one too.
+  wordpress:
+    needs: [plan, github]
+    if: needs.plan.outputs.svn_done == '0' || inputs.dry_run
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    environment: wordpress-org
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the directory zip
+        run: |
+          set -euo pipefail
           python3 build-zip.py --for-directory elegiaio "$RUNNER_TEMP/directory.zip"
           python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
             "$RUNNER_TEMP/directory.zip" "$RUNNER_TEMP/directory"
           test -f "$RUNNER_TEMP/directory/cadence-connector/readme.txt"
 
-      - name: GitHub release
-        if: steps.plan.outputs.gh_done == '0' && !inputs.dry_run
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Stage trunk, and show what would be committed
         run: |
           set -euo pipefail
-          v=${{ steps.plan.outputs.version }}
-          awk -v h="= $v =" '$0==h{f=1;next} /^= /{f=0} f' readme.txt > "$RUNNER_TEMP/notes.md"
-          printf '\nInstall via Plugins > Add New > Upload Plugin, choosing cadence-connector-%s-install.zip. Requires WordPress 6.5+ and PHP 8.1+.\n' "$v" >> "$RUNNER_TEMP/notes.md"
-          gh release create "v$v" "$RUNNER_TEMP/cadence-connector-$v-install.zip" \
-            --target "$GITHUB_SHA" --title "Cadence Connector $v" --notes-file "$RUNNER_TEMP/notes.md"
-
-      - name: WordPress.org
-        if: steps.plan.outputs.svn_done == '0' || inputs.dry_run
-        env:
-          SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
-          SVN_PASSWORD: ${{ secrets.SVN_PASSWORD }}
-          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
-        run: |
-          set -euo pipefail
-          v=${{ steps.plan.outputs.version }}
+          sudo apt-get install -y -qq subversion > /dev/null
           co="$RUNNER_TEMP/svn-trunk"
           svn checkout -q --non-interactive "$SVN_URL/trunk" "$co"
           rsync -a --delete --exclude .svn "$RUNNER_TEMP/directory/cadence-connector/" "$co/"
           svn add -q --force "$co"
-          svn status "$co" | awk '/^!/ {print $2}' | xargs -r svn rm -q
+          svn status "$co" | awk '/^!/ {sub(/^! +/, ""); print}' | xargs -r -d '\n' svn rm -q
           svn status "$co"
-          if [ "$DRY_RUN" = "1" ]; then
-            echo "Dry run: nothing committed."
-            exit 0
-          fi
+
+      - name: Commit and tag on WordPress.org
+        if: "!inputs.dry_run && github.ref == 'refs/heads/main'"
+        env:
+          SVN_USERNAME: ${{ secrets.SVN_USERNAME }}
+          SVN_PASSWORD: ${{ secrets.SVN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          v=$VERSION
+          co="$RUNNER_TEMP/svn-trunk"
           if [ -z "$SVN_USERNAME" ] || [ -z "$SVN_PASSWORD" ]; then
             echo "SVN_USERNAME or SVN_PASSWORD is not set; refusing." >&2
             exit 1
@@ -110,6 +178,12 @@ jobs:
           auth=(--non-interactive --no-auth-cache --username "$SVN_USERNAME" --password-from-stdin)
           if [ -n "$(svn status "$co")" ]; then
             printf '%s' "$SVN_PASSWORD" | svn commit "${auth[@]}" -m "Release $v" "$co"
+          fi
+          tags=$(svn ls --non-interactive "$SVN_URL/tags/") \
+            || { echo "cannot list $SVN_URL/tags/; refusing" >&2; exit 1; }
+          if grep -qx "$v/" <<< "$tags"; then
+            echo "tags/$v already exists on WordPress.org; refusing to copy trunk into it" >&2
+            exit 1
           fi
           printf '%s' "$SVN_PASSWORD" | svn copy "${auth[@]}" "$SVN_URL/trunk" "$SVN_URL/tags/$v" -m "Tag $v"
           svn ls --non-interactive "$SVN_URL/tags/$v/" > /dev/null

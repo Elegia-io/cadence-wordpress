@@ -22,7 +22,7 @@ final class CadenceRestRoute {
      * which reads the header directly and fails the moment a release bumps one
      * without the other, so drift is caught rather than merely discouraged.
      */
-    public const VERSION = '0.9.0';
+    public const VERSION = '0.10.0';
 
     /**
      * THE REPLY'S OWN SHAPE, as a number the caller can compare with `<=`
@@ -221,15 +221,13 @@ final class CadenceRestRoute {
      * is one branch and one sentence. See the comment at the scope loop in
      * `CadenceLinkRequest::run` for what a legitimate caller gives up.
      *
-     * `replace_other_key` IS ITS OWN CODE and lives on `/content/replace`,
-     * which verifies the request's attestation before it reads anything about
-     * the post -- so its finer answer costs a signing key, not merely a leaked
-     * connector key. The linking route now verifies one too, and the coarser
-     * answer there STAYS: the merge was made because the PAIR of codes
-     * partitioned the id space, and a signature
-     * in front of it narrows who can ask rather than making the partition
-     * safe to hand back. An exempt key -- a site mid-migration -- reaches the
-     * refusal with no signature at all.
+     * `/content/read`, `/content/replace` and `/content/reslug` answer the
+     * same `post_out_of_scope`, with one fixed sentence per route, for a post
+     * that is absent, not a connector piece, another key's, or out of this
+     * key's type scope. They used to answer these apart, and the difference
+     * sorted any post id into "absent" and "someone else's" for any holder of
+     * the key. A signature in front narrows who can ask; it does not make the
+     * partition safe to hand back.
      *
      * `source_group_unset` and `source_group_unreadable` are 500s and NOT 409s,
      * though a re-read is the caller's next step for both. A 409 invites the
@@ -267,7 +265,6 @@ final class CadenceRestRoute {
         'not_adopted'                => 409,
         'adopt_failed'               => 500,
         'post_out_of_scope'          => 403,
-        'replace_other_key'          => 403,
         // An adopted post's rewrite, refused for want of the client's
         // confirmation: absent, unsigned, for another site, stale, or spent.
         'post_adopted'               => 403,

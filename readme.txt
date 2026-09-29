@@ -4,7 +4,7 @@ Tags: rest-api, wpml, multilingual, publishing, translation
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 0.9.0
+Stable tag: 0.10.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,13 @@ Only the translation-linking endpoint does, and it supports WPML 4.5 or newer.
 Publishing and replacing work on a monolingual site with no WPML installed.
 
 == Changelog ==
+
+= 0.10.0 =
+* The replace and slug-change endpoints answer one code, `post_out_of_scope`,
+  and one sentence naming no id, for a post that is absent, not published or
+  adopted through this plugin, made by another key, or in a post type the key
+  does not reach. `replace_other_key` is gone, and `post_missing` and
+  `existing_post_type_out_of_scope` no longer come from these two endpoints.
 
 = 0.9.0 =
 * New endpoint to read one post, signed and bound to this site and a short

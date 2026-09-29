@@ -30,10 +30,8 @@ final class CadenceReslugRequest {
     public const REFUSAL_CODES = [
         'bad_reslug',
         CadenceAttestation::CODE,
-        'post_missing',
-        'replace_other_key',
+        'post_out_of_scope',
         'identifier_mismatch',
-        'existing_post_type_out_of_scope',
         'post_adopted',
         'confirmation_wrong_site',
         'confirmation_expired',
@@ -70,24 +68,16 @@ final class CadenceReslugRequest {
                     'reason' => 'this route takes no exemption; nothing was written'];
         }
         $post_id = $fields['post_id'];
-        if (!get_post($post_id) instanceof WP_Post) {
-            return self::refuse('post_missing', sprintf('this site has no readable post %d', $post_id));
-        }
-        if (!CadenceKey::created_by($post_id, $key_id)) {
-            return self::refuse('replace_other_key', sprintf(
-                'post %d was published through a different connector key, and a key may change the '
-                . 'slug of its own pieces only; nothing was written', $post_id));
+        // ONE CODE AND ONE SENTENCE for a post that is not there, not a
+        // connector piece, another key's, or out of this key's type scope:
+        // the same gate `/content/replace` asks. Only the refusals below it,
+        // over a post this key reaches, may say anything finer.
+        if (!CadenceReplaceRequest::admits($post_id, $post_types, $key_id)) {
+            return CadenceReplaceRequest::out_of_scope();
         }
         if (get_post_meta($post_id, CadenceContentRequest::META, true) !== $fields['piece_id']) {
             return self::refuse('identifier_mismatch', sprintf(
                 'post %d is not `%s` on this site; nothing was written', $post_id, $fields['piece_id']));
-        }
-        $type = get_post_type($post_id);
-        if (!is_string($type) || !CadenceKey::is_content_type($type, $post_types)
-                || ($post_types !== null && !in_array($type, $post_types, true))) {
-            return self::refuse('existing_post_type_out_of_scope', sprintf(
-                'the piece %s is on a post of a type this key does not publish into; nothing was written',
-                $fields['piece_id']));
         }
         if ($fields['overwrite_adopted'] !== true) {
             return self::refuse('post_adopted', sprintf(
@@ -115,8 +105,7 @@ final class CadenceReslugRequest {
             $row = $wpdb->get_row($wpdb->prepare(
                 "SELECT post_name FROM {$wpdb->posts} WHERE ID = %d FOR UPDATE", $post_id));
             if ($row === null) {
-                return self::release($wpdb, self::refuse('post_missing', sprintf(
-                    'post %d could not be read for writing; nothing was written', $post_id)));
+                return self::release($wpdb, CadenceReplaceRequest::out_of_scope());
             }
             clean_post_cache($post_id);
             wp_cache_delete($post_id, 'posts');

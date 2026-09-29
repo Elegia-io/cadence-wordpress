@@ -176,17 +176,12 @@ over content already live. That set never grows.
 `piece_id` is not a secret (it travels in plan payloads, ledger rows and a
 tenant's own operator surface), so "is this the post you name" was never the
 same question as "is this post yours", and a replacement *overwrites a
-published title and body*. A replace naming a post another key published is
-refused with `replace_other_key` and a `403`, before the identifier is compared
-and before the row is touched. It stays its own code where the linking route
-merged: it was merged because the *pair of codes* partitioned the id space,
-which a signature in front of the route narrows but does not undo. One refusal ends *nothing was linked* and the other
-*nothing was written*, and a
-caller matching on the code to decide what did not happen must not be told
-about an act it never asked for. The refusal names the post id the caller
-already sent and nothing else (not the key that holds the post, not its type,
-title, author or revision), and it is the same sentence whether or not the post
-carries the identifier named, so it cannot be used to ask which.
+published title and body*. A replace, or a slug change, naming a post that is
+absent, not this connector's, another key's, or in a type this key does not
+name is refused with `post_out_of_scope` and a `403`, before the identifier is
+compared and before the row is touched. It is one code and one sentence that
+names no id, as on the reading and linking routes: separate answers would sort
+any post id into "absent" and "someone else's" for any holder of the key.
 
 **A post published before this version carries no key stamp, and stays reachable
 by any key that reaches it**, on both routes. That is deliberate, and it is what makes the change
@@ -213,9 +208,8 @@ published before it recorded which key made it. It also makes a narrowing
 effective over the pieces a key already has: `/content` refuses to hand out
 the id and the revision of such a piece, but a caller that recorded the pair
 before the scope changed keeps it, so withholding it is a disclosure control
-and not a door. A rewrite outside the list is refused with
-`existing_post_type_out_of_scope` and a `403`, the same code and the same fix
-(re-issue the key wider) as the repeat on `/content`.
+and not a door. A rewrite outside the list is refused with the same
+`post_out_of_scope` as a post the key does not reach at all.
 
 **Leave the field blank and the key publishes into any registered type**, which
 is what every key issued before this version does: they carry no post types at
@@ -460,7 +454,7 @@ something a human took down is the same destruction one field across.
 |---|---|---|
 | `200` | rewritten | `created: false`, with `post_id` and the new `revision` |
 | `400` | the body is wrong | `bad_replacement`; re-sending cannot help |
-| `403` | the key does not reach this post: another key published it (`replace_other_key`), or it sits in a type this key does not name (`existing_post_type_out_of_scope`) | nothing was written; re-reading cannot help |
+| `403` | the key does not reach this post (`post_out_of_scope`): absent, not this connector's, another key's, or in a type this key does not name, told apart by nothing | nothing was written; re-reading cannot help |
 | `409` | the site disagrees | nothing was written; re-read and try again |
 | `503` | the site would not open a transaction | nothing was attempted |
 
@@ -674,7 +668,7 @@ again inside the window is refused rather than reapplied.
 |---|---|---|
 | `200` | Written. `written` is how many, and the report below says which. | Nothing. |
 | `400` | The request is wrong on its face. | Fix it; re-sending cannot help. |
-| `403` | The key is genuine and does not reach what the request names. | Read `code`: it names which. `post_out_of_scope`: the presenting key does not reach that post, and the refusal does not say whether the post is absent, not this connector's, or another key's; `replace_other_key`: a replacement naming a post another key published. `post_type_out_of_scope`: the type the request names is not on this key; `existing_post_type_out_of_scope`: the piece is already placed in a type that is not; `link_post_type_out_of_scope`: the post a link names is in a type that is not. The last three are re-issued keys, not requests to re-send. |
+| `403` | The key is genuine and does not reach what the request names. | Read `code`: it names which. `post_out_of_scope`: the presenting key does not reach that post, and the refusal does not say whether the post is absent, not this connector's, another key's, or (on a replacement or slug change) in a type this key does not name. `post_type_out_of_scope`: the type the request names is not on this key; `existing_post_type_out_of_scope`: the piece is already placed in a type that is not; `link_post_type_out_of_scope`: the post a link names is in a type that is not. The last three are re-issued keys, not requests to re-send. |
 | `409` | The site disagrees with the request. | Re-read the site and try again. |
 | `503` | The site cannot do this at all. | Fix the site; the request is fine. |
 | `500` | This server tried and failed (including a `create_group` that wrote the source and could not finish) or refused for a reason this version cannot classify. | Read the body: `written` says what was applied. |
@@ -731,9 +725,8 @@ the reason is prose and changes freely.
 | `group_disagreement` | 409 | the site's group for a post is not the one named |
 | `language_disagreement` | 409 | the site serves a post in a different language from the one the plan calls it. The plan's code is what would be written, so this would change the language the site serves |
 | `post_out_of_scope` | 403 | a post the plan names is not one the presenting key reaches: absent, not this connector's, or another key's, told apart by nothing the caller can read |
-| `replace_other_key` | 403 | the post a replacement names was published through a different connector key |
 | `post_type_out_of_scope` | 403 | the post type named is not one this key may create in |
-| `existing_post_type_out_of_scope` | 403 | the piece is already on a post of a type this key does not name: on a `/content` repeat, or on a replacement |
+| `existing_post_type_out_of_scope` | 403 | the piece is already on a post of a type this key does not name, on a `/content` repeat |
 | `link_post_type_out_of_scope` | 403 | a post the plan names is in a type this key does not name |
 | `source_group_unset` | 500 | the source was written and the site still puts it in no group, so there was no group for the translations to join. **The source was written**; the translations were not |
 | `source_group_unreadable` | 500 | the source was written and WPML then said nothing usable about it, so its group cannot be named. **The source was written**; the translations were not |
@@ -744,8 +737,8 @@ the reason is prose and changes freely.
 | `insert_failed` | 500 | WordPress refused the insert, or returned no id |
 | `attestation_unverified` | 403 | nothing on this site can show the body came from the tenant who holds the signing key. Five different repairs share this code and the `reason` names which: `absent` (no header, and this key is not exempt), `malformed` (a header that is not the shape a signed request produces), `unknown_kid` (a rotation half-done), `no_public_key` (nobody pasted one), `mismatch` (the body was changed after it was signed). **Nothing was written**, and the site was not read |
 | `bad_replacement` | 400 | the replacement body is not the shape it claims |
-| `post_missing` | 409 | this site has no readable post with that id |
-| `identifier_mismatch` | 409 | that post is a different piece, or none of this plugin's |
+| `post_missing` | 409 | an adoption names no readable post with that id |
+| `identifier_mismatch` | 409 | that post is a different piece this key published |
 | `revision_mismatch` | 409 | the post holds text the replacement does not name |
 | `update_failed` | 500 | WordPress refused the update, or returned no id |
 | `no_row_lock` | 503 | the site would not open a transaction, so the text could not be checked and written as one act |

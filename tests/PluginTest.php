@@ -800,7 +800,7 @@ final class PluginTest extends TestCase {
         $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($b)));
 
         $this->assertSame(403, $refused->get_status());
-        $this->assertSame('replace_other_key', $refused->get_data()['code']);
+        $this->assertSame('post_out_of_scope', $refused->get_data()['code']);
         $this->assertSame([], WpStub::$updated, "A's post was rewritten anyway");
         $this->assertSame($a['id'], WpStub::$meta[$mine][CadenceContentRequest::KEY_META]);
     }
@@ -845,7 +845,7 @@ final class PluginTest extends TestCase {
         $this->assertTrue(($replace['permission_callback'])(new WP_REST_Request($rewrite, $this->key($b))));
         $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($b)));
         $this->assertSame(403, $refused->get_status(), (string) ($refused->get_data()['reason'] ?? ''));
-        $this->assertSame('replace_other_key', $refused->get_data()['code']);
+        $this->assertSame('post_out_of_scope', $refused->get_data()['code']);
         $this->assertSame([], WpStub::$updated, "a second tenant's key rewrote the post anyway");
         $this->assertSame("A's title", WpStub::$posts[$mine]['post_title']);
 
@@ -885,7 +885,7 @@ final class PluginTest extends TestCase {
 
         $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($narrow)));
         $this->assertSame(403, $refused->get_status(), (string) ($refused->get_data()['reason'] ?? ''));
-        $this->assertSame('existing_post_type_out_of_scope', $refused->get_data()['code']);
+        $this->assertSame('post_out_of_scope', $refused->get_data()['code']);
         $this->assertSame([], WpStub::$updated);
 
         // THE ACCEPT-PROOF: a key that names no type is the compatibility case

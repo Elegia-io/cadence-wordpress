@@ -912,6 +912,53 @@ final class PluginTest extends TestCase {
     }
 
     /**
+     * A KEY'S OWN PIECE IN A STATUS THAT IS NOT PLACED answers the body an
+     * absent post answers, byte for byte with digits blanked, on both routes:
+     * `/content/read` refuses it, so replace and reslug refuse it alike.
+     */
+    #[Group('wpml')]
+    #[\PHPUnit\Framework\Attributes\DataProvider('unplaced_statuses')]
+    public function test_a_keys_own_piece_in_an_unplaced_status_answers_like_an_absent_post(
+            string $route, string $status): void {
+        $b = CadenceKey::issue('tenant-b', ['content.publish', 'content.replace'], 7);
+        $own = ($this->routes['/content']['callback'])(new WP_REST_Request([
+            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'publish',
+            'title' => 'T', 'content' => 'C', 'language' => 'en',
+            'declared' => ['multilingual' => true, 'languages' => ['en']]], $this->key($b)));
+        $this->assertSame(201, $own->get_status());
+        $id = $own->get_data()['post_id'];
+        WpStub::$posts[$id]['post_status'] = $status;
+        $bodies = [];
+        foreach (['absent' => 7001, $status => $id] as $case => $post_id) {
+            $body = $route === '/content/replace'
+                ? ['piece_id' => 'piece-a', 'post_id' => $post_id, 'revision' => 'sha256:' . str_repeat('0', 64),
+                   'title' => 'X', 'content' => '<p>X</p>']
+                : ['piece_id' => 'piece-a', 'post_id' => $post_id, 'old_slug' => 'a', 'slug' => 'b',
+                   'overwrite_adopted' => true, 'site' => CadenceAttestation::site(),
+                   'issued_at' => gmdate('Y-m-d\TH:i:s\Z')];
+            $headers = $this->key($b) + [strtolower(CadenceAttestation::HEADER) =>
+                CadenceAttest::header($route, CadenceAttest::fields($route, $body), $b['id'])];
+            WpStub::$updated = [];
+            $r = ($this->routes[$route]['callback'])(new WP_REST_Request($body, $headers));
+            $this->assertSame(403, $r->get_status(), $case . ': ' . json_encode($r->get_data()));
+            $this->assertSame('post_out_of_scope', $r->get_data()['code'], $case);
+            $this->assertSame([], WpStub::$updated, $case);
+            $bodies[$case] = preg_replace('/\d+/', '<n>', json_encode($r->get_data()));
+        }
+        $this->assertSame($bodies['absent'], $bodies[$status]);
+    }
+
+    public static function unplaced_statuses(): array {
+        $out = [];
+        foreach (['/content/replace', '/content/reslug'] as $route) {
+            foreach (['trash', 'auto-draft', 'inherit', 'wc-on-hold'] as $status) {
+                $out[$route . ' ' . $status] = [$route, $status];
+            }
+        }
+        return $out;
+    }
+
+    /**
      * THE TWIN of the trashed case above: the same key's own piece in a placed
      * status is reached, so the answer is not the one-code refusal.
      */

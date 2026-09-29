@@ -22,7 +22,7 @@ final class CadenceRestRoute {
      * which reads the header directly and fails the moment a release bumps one
      * without the other, so drift is caught rather than merely discouraged.
      */
-    public const VERSION = '0.10.0';
+    public const VERSION = '0.11.0';
 
     /**
      * THE REPLY'S OWN SHAPE, as a number the caller can compare with `<=`
@@ -229,6 +229,13 @@ final class CadenceRestRoute {
      * the key. A signature in front narrows who can ask; it does not make the
      * partition safe to hand back.
      *
+     * `adopt_post_out_of_scope` is the same rule on the adopt routes: one
+     * code and one fixed sentence for a post that is absent, of a type or in a
+     * state the key may not adopt, one of the site's own pages, or carrying
+     * another key's rows. `post_already_identified` stays apart only for a
+     * post whose rows are this key's own. A key's release answers
+     * `not_adopted` alike for an absent post and one it did not adopt.
+     *
      * `source_group_unset` and `source_group_unreadable` are 500s and NOT 409s,
      * though a re-read is the caller's next step for both. A 409 invites the
      * same request again, and the likeliest cause of either is that WPML on this
@@ -254,9 +261,7 @@ final class CadenceRestRoute {
         'adopt_wrong_site'           => 403,
         'adopt_expired'              => 403,
         'adopt_types_unscoped'       => 403,
-        'adopt_post_type_out_of_scope' => 403,
-        'adopt_site_page'            => 403,
-        'adopt_post_unavailable'     => 409,
+        'adopt_post_out_of_scope'    => 403,
         'post_already_identified'    => 409,
         'adopt_repeat'               => 409,
         'adopt_piece_taken'          => 409,
@@ -291,7 +296,6 @@ final class CadenceRestRoute {
         'language_disagreement'      => 409,
         'source_group_unset'         => 500,
         'source_group_unreadable'    => 500,
-        'post_missing'               => 409,
         'identifier_mismatch'        => 409,
         'revision_mismatch'          => 409,
         'wpml_unavailable'           => 503,

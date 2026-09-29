@@ -224,29 +224,29 @@ final class AdoptRequestTest extends TestCase {
                                               ['post'], [], 'wpml_unavailable'],
             'row 6: a blank key'          => [$none, null, [], 'adopt_types_unscoped'],
             'row 6: an empty scope'       => [$none, [], [], 'adopt_types_unscoped'],
-            'row 7: no such post'         => [$none, ['post'], ['post_id' => 99], 'post_missing'],
+            'row 7: no such post'         => [$none, ['post'], ['post_id' => 99], 'adopt_post_out_of_scope'],
             'row 8: a type not named'     => [static fn () => self::post(41, ['type' => 'page']),
-                                              ['post'], [], 'adopt_post_type_out_of_scope'],
+                                              ['post'], [], 'adopt_post_out_of_scope'],
             'row 8 twin: the type named'  => [static fn () => self::post(41, ['type' => 'page']),
                                               ['post', 'page'], [], 'ok'],
             'row 8: not viewable, named'  => [static fn () => self::post(41, ['type' => 'nav_menu_item']),
-                                              ['post', 'nav_menu_item'], [], 'adopt_post_type_out_of_scope'],
+                                              ['post', 'nav_menu_item'], [], 'adopt_post_out_of_scope'],
             'row 8: a revision, named'    => [static fn () => self::post(41, ['type' => 'revision']),
-                                              ['revision'], [], 'adopt_post_type_out_of_scope'],
+                                              ['revision'], [], 'adopt_post_out_of_scope'],
             'row 8 twin: viewable, named' => [static fn () => self::post(41, ['type' => 'product']),
                                               ['product'], [], 'ok'],
             'row 9: trash'                => [static fn () => self::post(41, ['status' => 'trash']),
-                                              ['post'], [], 'adopt_post_unavailable'],
+                                              ['post'], [], 'adopt_post_out_of_scope'],
             'row 9: auto-draft'           => [static fn () => self::post(41, ['status' => 'auto-draft']),
-                                              ['post'], [], 'adopt_post_unavailable'],
+                                              ['post'], [], 'adopt_post_out_of_scope'],
             'row 9: inherit'              => [static fn () => self::post(41, ['status' => 'inherit']),
-                                              ['post'], [], 'adopt_post_unavailable'],
+                                              ['post'], [], 'adopt_post_out_of_scope'],
             'row 9: a plugin status'      => [static fn () => self::post(41, ['status' => 'wc-on-hold']),
-                                              ['post'], [], 'adopt_post_unavailable'],
+                                              ['post'], [], 'adopt_post_out_of_scope'],
             'row 9: a password'           => [static fn () => self::post(41, ['password' => 'hunter2']),
-                                              ['post'], [], 'adopt_post_unavailable'],
+                                              ['post'], [], 'adopt_post_out_of_scope'],
             'row 9: private, a password'  => [static fn () => self::post(41, ['status' => 'private',
-                                              'password' => 'hunter2']), ['post'], [], 'adopt_post_unavailable'],
+                                              'password' => 'hunter2']), ['post'], [], 'adopt_post_out_of_scope'],
             'row 9 twin: private'         => [static fn () => self::post(41, ['status' => 'private']),
                                               ['post'], [], 'ok'],
             'row 9 twin: publish'         => [static fn () => self::post(41, ['status' => 'publish']),
@@ -256,12 +256,12 @@ final class AdoptRequestTest extends TestCase {
             'row 9 twin: future'          => [static fn () => self::post(41, ['status' => 'future']),
                                               ['post'], [], 'ok'],
             'row 10: the front page'      => [static function (): void { WpStub::$options['page_on_front'] = '41'; },
-                                              ['post'], [], 'adopt_site_page'],
+                                              ['post'], [], 'adopt_post_out_of_scope'],
             'row 10: the posts page'      => [static function (): void { WpStub::$options['page_for_posts'] = 41; },
-                                              ['post'], [], 'adopt_site_page'],
+                                              ['post'], [], 'adopt_post_out_of_scope'],
             'row 10: the privacy page'    => [static function (): void {
                                                   WpStub::$options['wp_page_for_privacy_policy'] = '41'; },
-                                              ['post'], [], 'adopt_site_page'],
+                                              ['post'], [], 'adopt_post_out_of_scope'],
             'row 10 twin: another page'   => [static function (): void {
                                                   WpStub::$options['page_on_front'] = '42';
                                                   WpStub::$options['page_for_posts'] = '0';
@@ -273,16 +273,22 @@ final class AdoptRequestTest extends TestCase {
                                               ['post'], [], 'post_already_identified'],
             'row 11: the piece id alone'  => [static function (): void {
                                                   WpStub::$meta[41]['_cadence_external_id'] = 'piece-new'; },
-                                              ['post'], [], 'post_already_identified'],
+                                              ['post'], [], 'adopt_post_out_of_scope'],
             'row 11: the key alone'       => [static function (): void {
                                                   WpStub::$meta[41]['_cadence_key'] = self::KEY; },
                                               ['post'], [], 'post_already_identified'],
             'row 11: the record alone'    => [static function (): void {
                                                   WpStub::$meta[41]['_cadence_adopted'] = '{}'; },
-                                              ['post'], [], 'post_already_identified'],
+                                              ['post'], [], 'adopt_post_out_of_scope'],
             'row 11: another key made it' => [static function (): void {
                                                   WpStub::$meta[41] = ['_cadence_external_id' => 'piece-new',
                                                       '_cadence_key' => 'someoneelse00key']; },
+                                              ['post'], [], 'adopt_post_out_of_scope'],
+                        'row 11: another key\'s record alone' => [static function (): void {
+                                                  WpStub::$meta[41]['_cadence_adopted'] = '{"key":"someoneelse00key"}'; },
+                                              ['post'], [], 'adopt_post_out_of_scope'],
+            'row 11 twin: this key\'s record alone' => [static function (): void {
+                                                  WpStub::$meta[41]['_cadence_adopted'] = '{"key":"' . self::KEY . '"}'; },
                                               ['post'], [], 'post_already_identified'],
             'row 12: this key made it, no record' => [static function (): void {
                                                   WpStub::$meta[41] = ['_cadence_external_id' => 'piece-new',
@@ -427,7 +433,7 @@ final class AdoptRequestTest extends TestCase {
             'a path that is no post'  => ['https://example.test/no-such-post/', 'adopt_link_unresolved'],
             'an edit link with no id' => ['https://example.test/wp-admin/post.php?action=edit',
                                           'adopt_link_unresolved'],
-            'a page on a post key'    => ['https://example.test/?page_id=43', 'adopt_post_type_out_of_scope'],
+            'a page on a post key'    => ['https://example.test/?page_id=43', 'adopt_post_out_of_scope'],
         ];
     }
 
@@ -718,9 +724,9 @@ final class AdoptRequestTest extends TestCase {
         return ($r['ok'] ?? false) === true ? 'ok' : ($r['code'] ?? '?');
     }
 
-    public function test_release_has_eleven_codes_in_the_design_order(): void {
+    public function test_release_has_ten_codes_in_the_design_order(): void {
         $this->assertSame(['bad_release', 'attestation_unverified', 'adopt_wrong_site', 'adopt_expired',
-                           'wpml_unavailable', 'post_missing', 'not_adopted', 'post_already_identified',
+                           'wpml_unavailable', 'not_adopted', 'post_already_identified',
                            'group_unknown', 'already_grouped', 'adopt_failed'],
                           CadenceAdoptRequest::RELEASE_REFUSAL_CODES);
     }
@@ -800,7 +806,7 @@ final class AdoptRequestTest extends TestCase {
             'row 4 twin: 299 s old'         => [$none, ['issued_at' => self::now(-299)], 'ok'],
             'row 5: no WPML'                => [static function (): void { WpStub::$wpml_reads = false; },
                                                 [], 'wpml_unavailable'],
-            'row 6: no such post'           => [$none, ['post_id' => 99], 'post_missing'],
+            'row 6: no such post'           => [$none, ['post_id' => 99], 'not_adopted'],
             'row 7: no record'              => [static function (): void {
                                                     unset(WpStub::$meta[41]['_cadence_adopted']); },
                                                 [], 'not_adopted'],
@@ -1050,9 +1056,9 @@ final class AdoptRequestTest extends TestCase {
     /** [what changes on the post after the checks, the answer]. */
     public static function changed_under_the_claim(): array {
         return [
-            'trashed'            => [['post_status' => 'trash'], 'adopt_post_unavailable'],
-            'given a password'   => [['post_password' => 'secret'], 'adopt_post_unavailable'],
-            'retyped'            => [['post_type' => 'product'], 'adopt_post_type_out_of_scope'],
+            'trashed'            => [['post_status' => 'trash'], 'adopt_post_out_of_scope'],
+            'given a password'   => [['post_password' => 'secret'], 'adopt_post_out_of_scope'],
+            'retyped'            => [['post_type' => 'product'], 'adopt_post_out_of_scope'],
             'twin: retitled'     => [['post_title' => 'Another title'], 'ok'],
         ];
     }

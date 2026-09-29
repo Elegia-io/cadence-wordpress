@@ -567,11 +567,16 @@ final class CadenceReplaceRequest {
     /**
      * WHETHER THIS KEY REACHES THE POST, as one predicate: it exists, this
      * connector published or adopted it, this key made it, and its type is
-     * content at all (`CadenceKey::is_content_type`). The key's explicit type
-     * list is asked after, and only over a post this predicate admits.
+     * content at all (`CadenceKey::is_content_type`), and its status is a
+     * placed one (`CadenceAdoptRequest::STATUSES`), as `/content/read` asks. A
+     * trashed or auto-draft post is one the key cannot read, so it may not
+     * rewrite or reslug it either. The key's explicit type list is asked
+     * after, and only over a post this predicate admits.
      */
     public static function admits(int $post_id, ?array $post_types, ?string $key_id): bool {
-        if (!get_post($post_id) instanceof WP_Post || !CadenceKey::reaches($post_id, $key_id)) {
+        $post = get_post($post_id);
+        if (!$post instanceof WP_Post || !CadenceKey::reaches($post_id, $key_id)
+                || !in_array($post->post_status, CadenceAdoptRequest::STATUSES, true)) {
             return false;
         }
         $type = get_post_type($post_id);

@@ -3,7 +3,7 @@
  * Plugin Name:       Cadence Connector
  * Plugin URI:        https://github.com/Elegia-io/cadence-wordpress
  * Description:       Lets an external content pipeline publish posts into WordPress, replace the ones it published, and link them into WPML translation groups (WPML 4.5 or newer supported), refusing any request that disagrees with the site's own state.
- * Version:           0.10.0
+ * Version:           0.11.0
  * Requires at least: 6.5
  * Requires PHP:      8.1
  * Author:            Elegia

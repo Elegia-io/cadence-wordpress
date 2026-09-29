@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -119,14 +120,6 @@ final class ReslugRequestTest extends TestCase {
         $this->assertSame([], WpStub::$updated);
     }
 
-    /** Twin: the answering test, stamped with this key. */
-    public function test_another_keys_post_is_refused(): void {
-        WpStub::$meta[self::ID][CadenceContentRequest::KEY_META] = 'ca11ab1e0000key2';
-        $r = $this->reslug($this->body());
-        $this->assertSame('replace_other_key', $r['code']);
-        $this->assertSame([], WpStub::$updated);
-    }
-
     /** Twin: the answering test, whose type is in scope. */
     public function test_a_post_of_a_type_out_of_scope_is_refused(): void {
         $r = $this->reslug($this->body(), CadenceAttest::KEY_ID, self::SIGN, ['page']);
@@ -158,9 +151,47 @@ final class ReslugRequestTest extends TestCase {
         $this->assertArrayHasKey(CadenceReplaceRequest::SPENT_META, WpStub::$meta[self::ID]);
     }
 
-    public function test_a_post_that_is_not_here_is_refused(): void {
-        $r = $this->reslug($this->body(['post_id' => 999]));
-        $this->assertSame('post_missing', $r['code']);
+    /**
+     * ONE ANSWER FOR EVERY POST THIS KEY DOES NOT REACH. A missing id,
+     * another key's post (in or out of this key's type scope) and a human's
+     * post all refuse with the same code and the same sentence, and
+     * the sentence names no id. Each case differs from the answering test in
+     * the one fact its conjunct is about; twins: `a_confirmed_reslug...`.
+     */
+    #[DataProvider('unreached')]
+    public function test_a_post_this_key_does_not_reach_answers_one_refusal(callable $arrange): void {
+        [$over, $post_types] = $arrange();
+        $body = $this->body($over);
+        $r = $this->reslug($body, CadenceAttest::KEY_ID, self::SIGN, $post_types);
+        $this->assertSame(['ok' => false, 'code' => 'post_out_of_scope',
+                           'reason' => CadenceReplaceRequest::OUT_OF_SCOPE_REASON], $r);
+        $this->assertStringNotContainsString((string) $body['post_id'], $r['reason']);
+        $this->assertSame([], WpStub::$updated);
+    }
+
+    public static function unreached(): array {
+        return [
+            'missing id' => [fn () => [['post_id' => 999], null]],
+            'another key\'s post' => [function () {
+                WpStub::$meta[self::ID][CadenceContentRequest::KEY_META] = 'ca11ab1e0000key2';
+                return [[], null];
+            }],
+            'a human\'s post' => [function () {
+                WpStub::$meta[self::ID] = [];
+                return [[], null];
+            }],
+            // THE TWIN of the hint: another key's post in a type this key
+            // does not reach still answers the one refusal.
+            'another key, type out of scope' => [function () {
+                WpStub::$meta[self::ID][CadenceContentRequest::KEY_META] = 'ca11ab1e0000key2';
+                return [[], ['page']];
+            }],
+        ];
+    }
+
+    /** Twin of the type case: the same key, scoped to the post's own type, answers. */
+    public function test_a_key_scoped_to_the_posts_type_reslugs(): void {
+        $this->assertTrue($this->reslug($this->body(), CadenceAttest::KEY_ID, self::SIGN, ['post'])['ok']);
     }
 
     public function test_a_blank_slug_is_refused(): void {

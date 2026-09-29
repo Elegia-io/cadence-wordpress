@@ -800,7 +800,7 @@ final class PluginTest extends TestCase {
         $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($b)));
 
         $this->assertSame(403, $refused->get_status());
-        $this->assertSame('replace_other_key', $refused->get_data()['code']);
+        $this->assertSame('post_out_of_scope', $refused->get_data()['code']);
         $this->assertSame([], WpStub::$updated, "A's post was rewritten anyway");
         $this->assertSame($a['id'], WpStub::$meta[$mine][CadenceContentRequest::KEY_META]);
     }
@@ -845,7 +845,7 @@ final class PluginTest extends TestCase {
         $this->assertTrue(($replace['permission_callback'])(new WP_REST_Request($rewrite, $this->key($b))));
         $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($b)));
         $this->assertSame(403, $refused->get_status(), (string) ($refused->get_data()['reason'] ?? ''));
-        $this->assertSame('replace_other_key', $refused->get_data()['code']);
+        $this->assertSame('post_out_of_scope', $refused->get_data()['code']);
         $this->assertSame([], WpStub::$updated, "a second tenant's key rewrote the post anyway");
         $this->assertSame("A's title", WpStub::$posts[$mine]['post_title']);
 
@@ -854,6 +854,53 @@ final class PluginTest extends TestCase {
         $written = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($a)));
         $this->assertSame(200, $written->get_status(), (string) ($written->get_data()['reason'] ?? ''));
         $this->assertSame('B took it', WpStub::$posts[$mine]['post_title']);
+    }
+
+    /**
+     * AT THE ROUTE, the rewrite and slug routes answer one body for every post
+     * a signed key does not reach: absent, a human's, another tenant's, and a
+     * stamped post whose type is not content. Off the whole body, with digits
+     * blanked, as the linking test above does.
+     */
+    #[Group('wpml')]
+    #[\PHPUnit\Framework\Attributes\DataProvider('scoped_routes')]
+    public function test_a_signed_key_cannot_tell_unreached_posts_apart_at_the_route(string $route): void {
+        $a = CadenceKey::issue('tenant-a', ['content.publish', 'content.replace'], 7);
+        $b = CadenceKey::issue('tenant-b', ['content.publish', 'content.replace'], 7);
+        $made = ($this->routes['/content']['callback'])(new WP_REST_Request([
+            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'publish',
+            'title' => 'T', 'content' => 'C', 'language' => 'en',
+            'declared' => ['multilingual' => true, 'languages' => ['en']]], $this->key($a)));
+        $this->assertSame(201, $made->get_status());
+        WpStub::add_post(5000, 'post', 'en', null);
+        WpStub::add_post(5002, 'revision', 'en', null);
+        WpStub::$meta[5002] = [CadenceContentRequest::META => 'piece-a',
+                               CadenceContentRequest::KEY_META => $b['id']];
+
+        $bodies = [];
+        foreach (['absent' => 5001, 'a human' => 5000, "tenant A's" => $made->get_data()['post_id'],
+                  'not content' => 5002] as $case => $id) {
+            $body = $route === '/content/replace'
+                ? ['piece_id' => 'piece-a', 'post_id' => $id, 'revision' => 'sha256:' . str_repeat('0', 64),
+                   'title' => 'X', 'content' => '<p>X</p>']
+                : ['piece_id' => 'piece-a', 'post_id' => $id, 'old_slug' => 'a', 'slug' => 'b',
+                   'overwrite_adopted' => true, 'site' => CadenceAttestation::site(),
+                   'issued_at' => gmdate('Y-m-d\TH:i:s\Z')];
+            $headers = $this->key($b) + [strtolower(CadenceAttestation::HEADER) =>
+                CadenceAttest::header($route, CadenceAttest::fields($route, $body), $b['id'])];
+            WpStub::$updated = [];
+            $r = ($this->routes[$route]['callback'])(new WP_REST_Request($body, $headers));
+            $this->assertSame(403, $r->get_status(), $case . ': ' . json_encode($r->get_data()));
+            $this->assertSame([], WpStub::$updated, $case);
+            $bodies[$case] = preg_replace('/\d+/', '<n>', json_encode($r->get_data()));
+        }
+        $this->assertCount(1, array_unique($bodies),
+            'a signed key could tell the cases apart: ' . implode(' | ', $bodies));
+        $this->assertStringContainsString('post_out_of_scope', $bodies['absent']);
+    }
+
+    public static function scoped_routes(): array {
+        return ['replace' => ['/content/replace'], 'reslug' => ['/content/reslug']];
     }
 
     /**

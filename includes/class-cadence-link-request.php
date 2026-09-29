@@ -325,8 +325,7 @@ final class CadenceLinkRequest {
             // "nothing was written". This is asked of a POST the caller named
             // by id, and ends "nothing was linked". A caller matching on the
             // code to decide what did not happen would otherwise be told about
-            // an act it never asked for -- the same reason `replace_other_key`
-            // is not `post_other_key` over the one predicate they share.
+            // an act it never asked for.
             //
             // LAST OF THE THREE, AND THE ORDER IS THE GUARD. The linking route
             // is asked about a bare post ID -- it holds no identifier for the

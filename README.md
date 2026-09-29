@@ -27,7 +27,9 @@ This plugin exposes an endpoint that writes that relationship through WPML's own
 - PHP 8.1+
 - WPML 4.5 or newer, for the translation-linking endpoint on a multilingual site:
   only WPML's core plugin is used, not the String Translation or Translation
-  Management add-ons. Monolingual sites run the same plugin with no WPML;
+  Management add-ons. This is the supported range, not a version check: the
+  plugin checks that WPML's translation hooks are present, so an older WPML is
+  not refused, but it is outside the supported range. Monolingual sites run the same plugin with no WPML;
   there is no second build, and which one a site is must be **declared** in
   the request rather than detected here. The publishing and replacing
   endpoints do not need WPML.

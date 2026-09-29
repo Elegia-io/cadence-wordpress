@@ -4,7 +4,22 @@
 # already has its tag and its WordPress.org tag. Main is protected by a ruleset
 # with no bypass actors: a pull request, squash merged, up to date with main, and
 # the required checks `PHPUnit`, `Repository checks that need no PHP` and
-# `php -l on the declared minimum` green. So the commit released is a checked one.
+# `php -l on the declared minimum` green. `plan` does not take the ruleset on
+# trust: before a release it finds the pull request merged as this commit,
+# refuses unless the commit has that pull request's head tree, and refuses unless
+# the three checks passed on that head, as run by GitHub Actions.
+#
+# WHAT THAT DOES NOT COVER: a pull request from this repository runs its own
+# ci.yml, so a pull request that guts a required job also turns it green. Only
+# a required review, or a CODEOWNERS rule on .github/workflows/ with review
+# from code owners required, keeps such a change from being merged unread.
+#
+# THE DECISIONS ARE IN release-plan.py, tested by tests/release_plan_test.py:
+# the version (plugin header, readme.txt Stable tag and CadenceRestRoute::VERSION
+# must agree, or the run refuses), what is left to release, the release notes,
+# the built readme's Stable tag, and the required checks. The workflow only
+# fetches and runs svn. Everything written to $GITHUB_OUTPUT is a version the
+# script validated as X.Y.Z or a 0/1 it computed.
 #
 # ONLY MAIN RELEASES. `plan` refuses a non-dry-run on any other ref, the commit
 # step runs only on main, and the `wordpress` job runs in the `wordpress-org`
@@ -14,8 +29,14 @@
 # failure finishes the release instead of repeating it. Whether a result exists
 # is read from a listing that must succeed: a failed listing refuses the run
 # rather than reading as "not yet released". The commit step re-lists the tags
-# just before `svn copy` and refuses if the tag is there, so a released
-# WordPress.org tag is never rewritten.
+# before trunk moves and again before `svn copy`, and refuses if the tag is
+# there, so a released WordPress.org tag is never rewritten. It copies the
+# trunk revision it verified holds the build, never trunk HEAD.
+#
+# ONE VERSION, ONE TREE. When the GitHub release already exists and the
+# WordPress.org tag does not, `plan` refuses unless that release is published
+# and its tag is on this commit or on one with the same tree. So a later push
+# cannot finish an earlier version's release with different code.
 #
 # THREE JOBS SO EACH HOLDS ONLY WHAT IT USES. `plan` reads; `github` is the one
 # job with `contents: write`, the only thing that needs it being the release it
@@ -50,10 +71,15 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      # Read-only, for the required-checks refusal: the pull request a commit
+      # came from, and the check runs on that pull request's head.
+      pull-requests: read
+      checks: read
     outputs:
       version: ${{ steps.plan.outputs.version }}
       gh_done: ${{ steps.plan.outputs.gh_done }}
       svn_done: ${{ steps.plan.outputs.svn_done }}
+      noop: ${{ steps.plan.outputs.noop }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -72,29 +98,56 @@ jobs:
             exit 1
           fi
           python3 check-readme-version.py
-          version=$(sed -n 's/^ \* Version: *\([0-9.]*\)$/\1/p' cadence-connector.php)
-          stable=$(sed -n 's/^Stable tag: *\([0-9.]*\)$/\1/p' readme.txt)
-          if [ -z "$version" ] || [ "$version" != "$stable" ]; then
-            echo "Version '$version' and Stable tag '$stable' disagree; refusing." >&2
-            exit 1
-          fi
           # From the runner image's signed Ubuntu archive; apt verifies it.
           sudo apt-get install -y -qq subversion > /dev/null
-          # A failed listing refuses: it must never read as "not yet released".
-          releases=$(gh release list --limit 1000 --json tagName --jq '.[].tagName') \
+          # A failed listing refuses, and so does an empty one (in the script):
+          # neither may read as "not yet released".
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName' \
+            > "$RUNNER_TEMP/releases.txt" \
             || { echo "cannot list GitHub releases; refusing" >&2; exit 1; }
-          tags=$(svn ls --non-interactive "$SVN_URL/tags/") \
+          svn ls --non-interactive "$SVN_URL/tags/" > "$RUNNER_TEMP/svn-tags.txt" \
             || { echo "cannot list $SVN_URL/tags/; refusing" >&2; exit 1; }
-          if grep -qx "v$version" <<< "$releases"; then gh_done=1; else gh_done=0; fi
-          if grep -qx "$version/" <<< "$tags"; then svn_done=1; else svn_done=0; fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "gh_done=$gh_done" >> "$GITHUB_OUTPUT"
-          echo "svn_done=$svn_done" >> "$GITHUB_OUTPUT"
-          echo "version $version: GitHub release done=$gh_done, WordPress.org tag done=$svn_done"
+          python3 release-plan.py plan "$RUNNER_TEMP/releases.txt" "$RUNNER_TEMP/svn-tags.txt" \
+            > "$RUNNER_TEMP/plan.txt"
+          cat "$RUNNER_TEMP/plan.txt"
+          cat "$RUNNER_TEMP/plan.txt" >> "$GITHUB_OUTPUT"
+
+      # Every real release runs this (a non-dry run off main was refused above),
+      # and so does a dry run on main, so the refusal can be watched working.
+      - name: Refuse unless the required checks passed on the merged tree
+        if: github.ref == 'refs/heads/main' && (steps.plan.outputs.noop == '0' || inputs.dry_run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          t=$RUNNER_TEMP
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" > "$t/pulls.json"
+          head=$(python3 release-plan.py pr-head "$GITHUB_SHA" "$t/pulls.json")
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" > "$t/merge.json"
+          gh api "repos/$GITHUB_REPOSITORY/commits/$head" > "$t/head.json"
+          gh api "repos/$GITHUB_REPOSITORY/commits/$head/check-runs?per_page=100" > "$t/runs.json"
+          python3 release-plan.py checks "$GITHUB_SHA" \
+            "$t/pulls.json" "$t/merge.json" "$t/head.json" "$t/runs.json"
+
+      - name: Refuse to finish a release made from another tree
+        if: steps.plan.outputs.gh_done == '1' && steps.plan.outputs.noop == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          t=$RUNNER_TEMP
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" > "$t/tag-ref.json"
+          tagged=$(python3 release-plan.py tag-commit "$t/tag-ref.json")
+          gh api "repos/$GITHUB_REPOSITORY/commits/$tagged" > "$t/tagged.json"
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" > "$t/this.json"
+          gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft > "$t/release.json"
+          python3 release-plan.py bound "$GITHUB_SHA" \
+            "$t/tag-ref.json" "$t/tagged.json" "$t/this.json" "$t/release.json"
 
   github:
     needs: plan
-    if: needs.plan.outputs.gh_done == '0' || needs.plan.outputs.svn_done == '0' || inputs.dry_run
+    if: needs.plan.outputs.noop == '0' || inputs.dry_run
     runs-on: ubuntu-26.04-arm
     timeout-minutes: 10
     permissions:
@@ -118,8 +171,7 @@ jobs:
         run: |
           set -euo pipefail
           v=$VERSION
-          awk -v h="= $v =" '$0==h{f=1;next} /^= /{f=0} f' readme.txt > "$RUNNER_TEMP/notes.md"
-          test -s "$RUNNER_TEMP/notes.md" || { echo "readme.txt has no changelog section for $v" >&2; exit 1; }
+          python3 release-plan.py notes "$v" > "$RUNNER_TEMP/notes.md"
           printf '\nInstall via Plugins > Add New > Upload Plugin, choosing cadence-connector-%s-install.zip. Requires WordPress 6.5+ and PHP 8.1+.\n' "$v" >> "$RUNNER_TEMP/notes.md"
           gh release create "v$v" "$RUNNER_TEMP/cadence-connector-$v-install.zip" \
             --repo "$GITHUB_REPOSITORY" \
@@ -148,7 +200,7 @@ jobs:
           python3 build-zip.py --for-directory elegiaio "$RUNNER_TEMP/directory.zip"
           python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" \
             "$RUNNER_TEMP/directory.zip" "$RUNNER_TEMP/directory"
-          test -f "$RUNNER_TEMP/directory/cadence-connector/readme.txt"
+          python3 release-plan.py stable-tag "$RUNNER_TEMP/directory/cadence-connector/readme.txt" "$VERSION"
 
       - name: Stage trunk, and show what would be committed
         run: |
@@ -174,16 +226,52 @@ jobs:
             echo "SVN_USERNAME or SVN_PASSWORD is not set; refusing." >&2
             exit 1
           fi
-          # The password goes in on stdin, never on the command line.
+          # The password goes in on stdin (svn 1.10+ `--password-from-stdin`,
+          # a global option: `svn help commit -v`), never on the command line,
+          # where any process on the runner could read it. `printf` is a bash
+          # builtin, so it is no process's argv either. `--no-auth-cache` keeps
+          # it out of ~/.subversion. `env -u` keeps it out of svn's environment.
           auth=(--non-interactive --no-auth-cache --username "$SVN_USERNAME" --password-from-stdin)
-          if [ -n "$(svn status "$co")" ]; then
-            printf '%s' "$SVN_PASSWORD" | svn commit "${auth[@]}" -m "Release $v" "$co"
+          # Re-listed here, before trunk moves, as well as in `plan`: a
+          # released tag is never rewritten, and trunk is not moved to a
+          # version that is already tagged.
+          no_tag_yet() {
+            svn ls --non-interactive "$SVN_URL/tags/" > "$RUNNER_TEMP/svn-tags-now.txt" \
+              || { echo "cannot list $SVN_URL/tags/; refusing" >&2; exit 1; }
+            if grep -qxF "$v/" "$RUNNER_TEMP/svn-tags-now.txt"; then
+              echo "tags/$v already exists on WordPress.org; refusing to write it" >&2
+              exit 1
+            fi
+          }
+          no_tag_yet
+          # The revision is parsed from svn's own words, so they must be English.
+          export LC_ALL=C
+          # Its own line: inside `[ -n "$(...)" ]` a failed status reads as clean.
+          status=$(svn status "$co")
+          if [ -n "$status" ]; then
+            out=$(printf '%s' "$SVN_PASSWORD" \
+              | env -u SVN_PASSWORD svn commit "${auth[@]}" -m "Release $v" "$co")
+            echo "$out"
+            rev=$(sed -n 's/^Committed revision \([0-9][0-9]*\)\.$/\1/p' <<< "$out")
+          else
+            # A re-run after the commit landed: the fresh checkout is trunk
+            # at this revision, and it already holds the build.
+            rev=$(svn info --show-item revision "$co")
           fi
-          tags=$(svn ls --non-interactive "$SVN_URL/tags/") \
-            || { echo "cannot list $SVN_URL/tags/; refusing" >&2; exit 1; }
-          if grep -qx "$v/" <<< "$tags"; then
-            echo "tags/$v already exists on WordPress.org; refusing to copy trunk into it" >&2
+          if ! [[ "$rev" =~ ^[0-9]+$ ]]; then
+            echo "cannot tell which trunk revision holds the build; refusing" >&2
             exit 1
           fi
-          printf '%s' "$SVN_PASSWORD" | svn copy "${auth[@]}" "$SVN_URL/trunk" "$SVN_URL/tags/$v" -m "Tag $v"
+          # Tag only what was built: trunk@rev must hold exactly the checkout's
+          # files. Properties are ignored, since the directory root of a
+          # just-committed checkout is still at its older revision.
+          diff=$(svn diff --non-interactive --summarize --ignore-properties --old="$SVN_URL/trunk@$rev" --new="$co")
+          if [ -n "$diff" ]; then
+            printf '%s\n' "$diff" >&2
+            echo "trunk@$rev is not the build; refusing to tag it" >&2
+            exit 1
+          fi
+          no_tag_yet
+          printf '%s' "$SVN_PASSWORD" \
+            | env -u SVN_PASSWORD svn copy "${auth[@]}" "$SVN_URL/trunk@$rev" "$SVN_URL/tags/$v" -m "Tag $v"
           svn ls --non-interactive "$SVN_URL/tags/$v/" > /dev/null

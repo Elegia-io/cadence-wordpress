@@ -814,6 +814,40 @@ plugin header declares as its minimum, the PHPUnit suite on PHP 8.3, and
 and plugin-header `Version` disagree: the pair WordPress.org builds a release
 from against the number every install reports.
 
+### How a release ships
+
+`.github/workflows/release.yml` releases on a push to `main` that bumps the
+version. The plugin header `Version`, `readme.txt` `Stable tag` and
+`CadenceRestRoute::VERSION` must agree, or the run refuses. A push that bumps
+nothing finds its GitHub release and WordPress.org tag already there, and does
+nothing. Before releasing, it refuses unless the commit is a merged pull request
+whose head had the same tree and passed the three required checks, run by
+GitHub Actions. A GitHub release that already exists must be published and
+tagged on the same tree, so a later push cannot finish it with other code.
+
+It then creates tag `vX.Y.Z` and a GitHub release carrying the install zip, with
+that version's `readme.txt` changelog section as the notes. Last, it builds the
+directory zip, syncs it into WordPress.org SVN `trunk/`, commits, and copies
+trunk to `tags/X.Y.Z`. It never writes a tag that exists, and a re-run after a
+failure finishes only what is left. `assets/` is not touched. An empty tag listing
+refuses, so the first tag of a new WordPress.org plugin is committed by hand.
+
+The decisions live in `release-plan.py`, tested by `tests/release_plan_test.py`.
+`workflow_dispatch` with `dry_run` (the default) builds everything and prints
+the `svn status` it would commit, without releasing.
+
+Maintainer setup, once:
+
+- A GitHub environment `wordpress-org`, with deployment branches limited to `main`.
+- Its environment secrets `SVN_USERNAME` and `SVN_PASSWORD`: the WordPress.org
+  account and its SVN password (wordpress.org profile, Account & Security).
+- Optionally, a required reviewer on that environment, so each deploy waits
+  for an approval.
+
+The password reaches svn on stdin (`--password-from-stdin`) with
+`--no-auth-cache`, never on a command line, in svn's environment or in a cache
+on disk.
+
 ## Licence
 
 GPL-2.0-or-later. See [LICENSE](LICENSE).

@@ -4,7 +4,7 @@ Tags: rest-api, wpml, multilingual, publishing, translation
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 0.11.0
+Stable tag: 0.12.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,13 @@ Only the translation-linking endpoint does, and it supports WPML 4.5 or newer.
 Publishing and replacing work on a monolingual site with no WPML installed.
 
 == Changelog ==
+
+= 0.12.0 =
+* The adopt endpoints answer `adopt_piece_taken` only when the piece is on
+  another post this key published or adopted. A piece id is the key's own
+  name for its piece, as on the publish endpoint, so the same id on another
+  key's post no longer refuses, and the answer no longer tells a key whether
+  a piece id exists anywhere on the site.
 
 = 0.11.0 =
 * The adopt endpoints answer one code, `adopt_post_out_of_scope`, and one

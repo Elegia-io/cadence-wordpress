@@ -142,7 +142,7 @@ final class CadenceAdoptRequest {
         // changed are asked again under them. A second adopt that ran to
         // completion between the checks above and the claims holds no claim
         // any more, so only this re-check sees it.
-        $claims = [self::claim_name_post($post_id), self::claim_name_piece($piece_id)];
+        $claims = [self::claim_name_post($post_id), self::claim_name_piece($piece_id, $key_id)];
         $held = [];
         foreach ($claims as $name) {
             if (!self::claim($name)) {
@@ -158,7 +158,7 @@ final class CadenceAdoptRequest {
         // table itself for the same reason.
         wp_cache_delete($post_id, 'posts');
         wp_cache_delete($post_id, 'post_meta');
-        if (self::identified($post_id) || self::piece_elsewhere($piece_id, $post_id)) {
+        if (self::identified($post_id) || self::piece_elsewhere($piece_id, $post_id, $key_id)) {
             self::release_claims($held);
             return self::refuse('adopt_busy', sprintf(
                 'another adoption reached post %d or this piece while this one was being checked; '
@@ -568,10 +568,10 @@ final class CadenceAdoptRequest {
                     'report' => self::reply(false, $piece_id, ['post' => $post, 'language' => $language],
                                             !$preview)];
         }
-        // ROW 13.
-        if (self::piece_elsewhere($piece_id, $post_id)) {
+        // ROW 13: this key's piece on another post. See `piece_elsewhere`.
+        if (self::piece_elsewhere($piece_id, $post_id, $key_id)) {
             return self::refuse('adopt_piece_taken',
-                'this piece is already on another post on this site; nothing was written');
+                'this piece is already on another post this key published or adopted; nothing was written');
         }
         // ROW 14.
         $trid = CadenceLinkRequest::current_trid($post_id, $element_type);
@@ -683,12 +683,23 @@ final class CadenceAdoptRequest {
     }
 
     /**
-     * Whether the piece is on any other post, in ANY status and ANY type. A
-     * query on the meta table itself: no status or type filter can leave a
-     * post out, and no cached result from earlier in this request answers
-     * for it. A failed query counts as found.
+     * WHETHER THIS KEY'S PIECE IS ON ANY OTHER POST, in ANY status and ANY
+     * type. A query on the meta table itself: no status or type filter can
+     * leave a post out, and no cached result from earlier in this request
+     * answers for it. A failed query counts as found.
+     *
+     * ONLY A POST THIS KEY MADE OR ADOPTED COUNTS, asked by
+     * `CadenceKey::created_by` as `/content` asks it when it looks a piece
+     * up. The piece id is the caller's name for its own piece, and two keys
+     * on one site may choose the same string for two different pieces. A
+     * piece on another key's post answered `adopt_piece_taken` apart from
+     * every other case, so any key that may adopt could ask whether a piece
+     * id exists anywhere on the site, one request at a time. It now answers
+     * as if no post carried it. A post with no stamp (one that predates the
+     * stamp) still counts for every key, as it does on `/content`, so one
+     * piece id is never on two of this key's posts.
      */
-    private static function piece_elsewhere(string $piece_id, int $post_id): bool {
+    private static function piece_elsewhere(string $piece_id, int $post_id, ?string $key_id): bool {
         global $wpdb;
         $found = $wpdb->get_col($wpdb->prepare(
             "SELECT `post_id` FROM `{$wpdb->postmeta}` WHERE `meta_key` = %s AND `meta_value` = %s",
@@ -697,7 +708,13 @@ final class CadenceAdoptRequest {
             return true;
         }
         foreach ($found as $id) {
-            if ((int) $id !== $post_id) {
+            if ((int) $id === $post_id) {
+                continue;
+            }
+            // The stamp is read past this request's cache too, for the
+            // re-check under the claims.
+            wp_cache_delete((int) $id, 'post_meta');
+            if (CadenceKey::created_by((int) $id, $key_id)) {
                 return true;
             }
         }
@@ -708,8 +725,14 @@ final class CadenceAdoptRequest {
         return 'cadence_adopt_post_' . $post_id;
     }
 
-    private static function claim_name_piece(string $piece_id): string {
-        return 'cadence_adopt_piece_' . substr(hash('sha256', $piece_id), 0, 32);
+    /**
+     * THE PIECE CLAIM IS THIS KEY'S, as the piece id is. A claim shared by
+     * every key would make one key's adopt busy while another key adopts the
+     * same string, telling it so and letting it hold the other off. Two
+     * adopts of one piece by one key still take the same claim.
+     */
+    private static function claim_name_piece(string $piece_id, ?string $key_id): string {
+        return 'cadence_adopt_piece_' . substr(hash('sha256', (string) $key_id . "\0" . $piece_id), 0, 32);
     }
 
     /**

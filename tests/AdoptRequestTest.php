@@ -311,6 +311,30 @@ final class AdoptRequestTest extends TestCase {
                                                   self::post(77, ['type' => 'nav_menu_item']);
                                                   WpStub::$meta[77]['_cadence_external_id'] = 'piece-new'; },
                                               ['post'], [], 'adopt_piece_taken'],
+            // THE PIECE ID IS THIS KEY'S NAME FOR ITS OWN PIECE, as on
+            // `/content`: a piece on a post another key made is not this key's
+            // piece, and answers as if no post carried it.
+            'row 13: this key\'s piece elsewhere' => [static function (): void {
+                                                  self::post(77, ['status' => 'publish']);
+                                                  WpStub::$meta[77] = ['_cadence_external_id' => 'piece-new',
+                                                      '_cadence_key' => self::KEY]; },
+                                              ['post'], [], 'adopt_piece_taken'],
+            'row 13: this key\'s, in the trash' => [static function (): void {
+                                                  self::post(77, ['status' => 'trash']);
+                                                  WpStub::$meta[77] = ['_cadence_external_id' => 'piece-new',
+                                                      '_cadence_key' => self::KEY]; },
+                                              ['post'], [], 'adopt_piece_taken'],
+            'row 13 twin: another key\'s piece elsewhere' => [static function (): void {
+                                                  self::post(77, ['status' => 'publish']);
+                                                  WpStub::$meta[77] = ['_cadence_external_id' => 'piece-new',
+                                                      '_cadence_key' => 'someoneelse00key']; },
+                                              ['post'], [], 'ok'],
+            'row 13 twin: another key\'s, in the trash' => [static function (): void {
+                                                  self::post(77, ['status' => 'trash']);
+                                                  WpStub::$meta[77] = ['_cadence_external_id' => 'piece-new',
+                                                      '_cadence_key' => 'someoneelse00key',
+                                                      '_cadence_adopted' => '{"key":"someoneelse00key"}']; },
+                                              ['post'], [], 'ok'],
             'row 13 twin: another piece'  => [static function (): void {
                                                   self::post(77, ['status' => 'trash']);
                                                   WpStub::$meta[77]['_cadence_external_id'] = 'piece-other'; },
@@ -633,6 +657,48 @@ final class AdoptRequestTest extends TestCase {
         $this->assertSame([], array_values(array_filter(array_keys(WpStub::$options),
             static fn ($k) => $k !== $option && str_starts_with($k, 'cadence_adopt_'))),
             'a claim was left behind');
+    }
+
+    /**
+     * A PIECE ON ANOTHER KEY'S POST IS NOT THIS KEY'S PIECE, so it answers
+     * byte for byte what no post carrying it answers, on the adopt and on the
+     * preview alike. Otherwise any key that may adopt learns, one request at
+     * a time, which piece ids exist on the site.
+     */
+    #[Group('wpml')]
+    public function test_a_piece_on_another_keys_post_answers_as_if_no_post_carried_it(): void {
+        $answers = [];
+        $issued = self::now();
+        foreach (['absent', 'another key\'s'] as $case) {
+            WpStub::reset();
+            WpStub::$post_types[] = 'product';
+            self::post(41);
+            if ($case !== 'absent') {
+                self::post(77, ['status' => 'publish']);
+                WpStub::$meta[77] = ['_cadence_external_id' => 'piece-new', '_cadence_key' => 'someoneelse00key'];
+            }
+            $preview = CadenceRestRoute::respond(self::preview(self::preview_body()));
+            $adopt = CadenceRestRoute::respond(self::adopt(self::body(['issued_at' => $issued])));
+            $answers[$case] = json_encode([$preview, $adopt]);
+        }
+        $this->assertSame($answers['absent'], $answers['another key\'s']);
+    }
+
+    /**
+     * THE RE-CHECK UNDER THE CLAIMS asks the same question as the check: a
+     * piece that reached another key's post meanwhile is not this key's, and
+     * does not make this adopt busy.
+     */
+    #[Group('wpml')]
+    public function test_row_17_another_keys_piece_reached_before_the_claim_is_not_busy(): void {
+        self::post(42, ['trid' => 542]);
+        WpStub::$on_claim = static function (): void {
+            WpStub::$meta[42] = ['_cadence_external_id' => 'piece-new', '_cadence_key' => 'someoneelse00key',
+                                 '_cadence_adopted' => '{"key":"someoneelse00key"}'];
+        };
+        $r = self::adopt(self::body());
+        $this->assertTrue($r['ok'] ?? false, $r['reason'] ?? '');
+        $this->assertSame('piece-new', WpStub::$meta[41]['_cadence_external_id']);
     }
 
     /**

@@ -757,7 +757,7 @@ the reason is prose and changes freely.
 | `adopt_post_out_of_scope` | 403 | the post is not one this key may adopt: absent, of a type this key may not adopt, in a state that cannot be adopted or password-protected, one of this site's own pages (front page, posts page, privacy policy), or carrying another key's rows. One fixed sentence names no id, so a key cannot tell these apart; the operator checks the post in wp-admin. Nothing was written |
 | `post_already_identified` | 409 | the post carries this key's own piece identity under another piece, so it cannot be adopted again; or, on release, the post this key adopted carries another key's stamp or another piece |
 | `adopt_repeat` | 409 | the post is already adopted under this piece by this key; nothing was written again |
-| `adopt_piece_taken` | 409 | this piece is already on another post on this site; nothing was written |
+| `adopt_piece_taken` | 409 | this piece is already on another post this key published or adopted (or one that predates the per-key stamp); nothing was written. A piece id is the key's own name for its piece, as on `/content`: the same id on another key's post is not this key's piece and does not refuse |
 | `adopt_busy` | 409 | another adoption holds this post or piece right now; nothing was written |
 | `not_adopted` | 409 | the post is absent or was not adopted by the presenting key, told apart by nothing the caller can read (from wp-admin: not adopted at all, and an absent post is `post_missing`), so there is nothing to release |
 | `adopt_failed` | 500 | the adoption or release record could not be written, or removed, in full |

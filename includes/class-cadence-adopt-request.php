@@ -142,7 +142,7 @@ final class CadenceAdoptRequest {
         // changed are asked again under them. A second adopt that ran to
         // completion between the checks above and the claims holds no claim
         // any more, so only this re-check sees it.
-        $claims = [self::claim_name_post($post_id), self::claim_name_piece($piece_id)];
+        $claims = [self::claim_name_post($post_id), self::claim_name_piece($piece_id, $key_id)];
         $held = [];
         foreach ($claims as $name) {
             if (!self::claim($name)) {
@@ -725,8 +725,14 @@ final class CadenceAdoptRequest {
         return 'cadence_adopt_post_' . $post_id;
     }
 
-    private static function claim_name_piece(string $piece_id): string {
-        return 'cadence_adopt_piece_' . substr(hash('sha256', $piece_id), 0, 32);
+    /**
+     * THE PIECE CLAIM IS THIS KEY'S, as the piece id is. A claim shared by
+     * every key would make one key's adopt busy while another key adopts the
+     * same string, telling it so and letting it hold the other off. Two
+     * adopts of one piece by one key still take the same claim.
+     */
+    private static function claim_name_piece(string $piece_id, ?string $key_id): string {
+        return 'cadence_adopt_piece_' . substr(hash('sha256', (string) $key_id . "\0" . $piece_id), 0, 32);
     }
 
     /**

@@ -628,10 +628,11 @@ final class AdoptRequestTest extends TestCase {
         $theirs = (new ReflectionMethod(CadenceAdoptRequest::class, 'claim_name_piece'))
             ->invoke(null, 'piece-new', 'someoneelse00key');
         $this->assertNotSame(self::piece_claim(self::KEY, 'piece-new'), $theirs);
-        WpStub::$options[$theirs] = (string) time();
+        $now = (string) time();
+        WpStub::$options[$theirs] = $now;
         $r = self::adopt(self::body());
         $this->assertTrue($r['ok'] ?? false, $r['reason'] ?? '');
-        $this->assertSame((string) time(), WpStub::$options[$theirs] ?? null, 'the other key\'s claim was touched');
+        $this->assertSame($now, WpStub::$options[$theirs] ?? null, 'the other key\'s claim was touched');
     }
 
     #[Group('wpml')]

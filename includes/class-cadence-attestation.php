@@ -155,11 +155,13 @@ final class CadenceAttestation {
      * ROUTES THE UNSIGNED-PUBLISH EXEMPTION DOES NOT REACH. They read and
      * stamp posts this plugin did not write, and their refusals are finer
      * than one "out of scope": every one of them must cost a signing key,
-     * not a connector key alone. A key carrying the exemption and sending no
-     * header is refused here under its own branch.
+     * not a connector key alone. `/content/replace` is here because every
+     * rewrite of a live post carries the client's confirmation, and an
+     * unsigned confirmation is nobody's statement. A key carrying the
+     * exemption and sending no header is refused here under its own branch.
      */
     public const NO_EXEMPTION = ['/adopt', '/adopt/preview', '/adopt/release', '/adopt/release/preview',
-                                 '/content/read', '/content/reslug'];
+                                 '/content/read', '/content/reslug', '/content/replace'];
 
     /**
      * THE SIGNED FIELD ORDER FOR ONE BODY, with `@members` expanded.

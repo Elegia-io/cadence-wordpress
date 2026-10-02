@@ -95,8 +95,17 @@ final class ReplaceRequestTest extends TestCase {
         return $GLOBALS['wpdb']->log;
     }
 
-    /** A replacement for that piece, naming the revision publishing answered with. */
+    /**
+     * A replacement for that piece, naming the revision publishing answered
+     * with, and carrying the signed confirmation EVERY rewrite needs: a post
+     * this connector delivered is a live page as much as an adopted one is.
+     */
     private function body(array $published, array $over = []): array {
+        return array_merge($this->bare($published), self::confirmation(), $over);
+    }
+
+    /** The same replacement with no confirmation at all. */
+    private function bare(array $published, array $over = []): array {
         return array_merge([
             'piece_id' => 'piece-1',
             'post_id'     => $published['post_id'],
@@ -266,7 +275,10 @@ final class ReplaceRequestTest extends TestCase {
         $first = $this->replace($this->body($published));
         $this->assertTrue($first['ok'], $first['reason'] ?? '');
 
-        $replay = $this->replace($this->body($published));
+        // A FRESH CONFIRMATION, so what refuses is the revision and not the
+        // spent record of the first one.
+        $replay = $this->replace($this->body($published, self::confirmation([
+            'issued_at' => gmdate('Y-m-d\TH:i:s\Z', time() - 1)])));
         $this->assertFalse($replay['ok']);
         $this->assertSame('revision_mismatch', $replay['code']);
         $this->assertCount(1, WpStub::$updated, 'the replay rewrote the post a second time');
@@ -507,17 +519,13 @@ final class ReplaceRequestTest extends TestCase {
         // AND THE FIVE AN ADOPTED POST ADDS, each over the same published piece.
         $adopted = [
             'post_adopted'            => [[], self::SIGN],
-            'confirmation_unsigned'   => [self::confirmation(), null],
             'confirmation_wrong_site' => [self::confirmation(['site' => 'other.test']), self::SIGN],
             'confirmation_expired'    => [self::confirmation(['issued_at' => '2020-01-01T00:00:00Z']), self::SIGN],
         ];
         foreach ($adopted as $expected => [$over, $attestation]) {
             WpStub::reset();
             $p = $this->adopted();
-            if ($attestation === null) {
-                CadenceAttest::exempt_key();
-            }
-            $r = $this->replace($this->body($p, $over), null, CadenceAttest::KEY_ID, $attestation);
+            $r = $this->replace($this->bare($p, $over), null, CadenceAttest::KEY_ID, $attestation);
             $this->assertSame($expected, $r['code'] ?? null, $expected);
             $this->assertSame([], WpStub::$updated, $expected);
             $seen[] = $r['code'];
@@ -530,7 +538,21 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertSame([], WpStub::$updated);
         $seen[] = $r['code'];
 
-        $this->assertCount(13, array_unique($seen));
+        // AND A DELIVERED POST'S OWN ABSENCE, under its own code.
+        WpStub::reset();
+        $p = $this->publish();
+        $r = $this->replace($this->bare($p));
+        $this->assertSame([], WpStub::$updated);
+        $seen[] = $r['code'];
+
+        // `confirmation_unsigned` IS UNREACHABLE while this route is in
+        // NO_EXEMPTION: no unsigned body gets past the attestation. The branch
+        // stays, so dropping the route from that list cannot quietly admit an
+        // unsigned confirmation.
+        $this->assertContains('/content/replace', CadenceAttestation::NO_EXEMPTION);
+        $seen[] = 'confirmation_unsigned';
+
+        $this->assertCount(14, array_unique($seen));
 
         // AND THE PUBLISHED LIST IS THAT LIST, so the coverage test over in
         // RestRouteTest has something real to be measured against: a code added
@@ -1167,7 +1189,7 @@ final class ReplaceRequestTest extends TestCase {
                 'piece_id' => 'a-guess', 'post_id' => $id,
                 'revision' => 'whatever-the-caller-believes',
                 'title' => 'Taken', 'content' => '<p>Taken.</p>',
-            ], ['post'], 'key-a');
+            ] + self::confirmation(), ['post'], 'key-a');
             $this->assertFalse($answers[$id]['ok'], 'a guessed identifier rewrote post ' . $id);
         }
         $this->assertSame([], WpStub::$updated);
@@ -1231,7 +1253,7 @@ final class ReplaceRequestTest extends TestCase {
     #[Group('wpml')]
     public function test_an_adopted_post_is_not_rewritten_without_the_confirmation(): void {
         $p = $this->adopted();
-        $r = $this->replace($this->body($p));
+        $r = $this->replace($this->bare($p));
         $this->assert_refused_unwritten('post_adopted', 403, $r, $p['post_id']);
         $this->assertStringContainsString('adopted', $r['reason']);
     }
@@ -1254,25 +1276,49 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertSame('COMMIT', end($log));
     }
 
-    /** A post this connector created needs no confirmation, and none of the five is asked. */
+    /**
+     * A POST THIS CONNECTOR DELIVERED IS REWRITTEN ONLY OVER THE SAME SIGNED
+     * CONFIRMATION. It is live on the client's site, and a rewrite replaces
+     * its text with no copy kept here, whoever wrote it first.
+     */
     #[Group('wpml')]
-    public function test_a_created_post_is_rewritten_with_no_confirmation_and_none_is_asked(): void {
+    public function test_a_delivered_post_is_not_rewritten_without_the_confirmation(): void {
         $p = $this->publish();
-        $this->assertTrue($this->replace($this->body($p))['ok']);
+        $r = $this->replace($this->bare($p));
+        $this->assert_refused_unwritten('rewrite_unconfirmed', 403, $r, $p['post_id']);
+        $this->assertStringNotContainsString('adopted', $r['reason']);
+    }
 
-        WpStub::reset();
+    /** THE TWIN: the same delivered post, the three fields under the signature, is written. */
+    #[Group('wpml')]
+    public function test_a_delivered_post_is_rewritten_over_a_signed_confirmation(): void {
         $p = $this->publish();
-        // Another host and a stale instant: on a created post nothing reads them.
-        $r = $this->replace($this->body($p, self::confirmation(['site' => 'other.test',
-            'issued_at' => gmdate('Y-m-d\TH:i:s\Z', time() - 3600)])));
+        $body = $this->bare($p, self::confirmation());
+        $r = $this->replace($body);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('verified', $r['attestation']);
+        $this->assertSame('The rewrite', WpStub::$posts[$p['post_id']]['post_title']);
+        $this->assertSame(hash('sha256', CadenceAttestation::material('/content/replace',
+                              CadenceAttest::fields('/content/replace', $body))),
+                          WpStub::$meta[$p['post_id']][CadenceReplaceRequest::SPENT_META]);
+    }
+
+    /** On a delivered post the confirmation is checked as on an adopted one: its site and its clock. */
+    #[Group('wpml')]
+    public function test_a_delivered_posts_confirmation_for_another_site_or_instant_is_refused(): void {
+        $p = $this->publish();
+        $r = $this->replace($this->bare($p, self::confirmation(['site' => 'other.test'])));
+        $this->assert_refused_unwritten('confirmation_wrong_site', 403, $r, $p['post_id']);
+        $r = $this->replace($this->bare($p, self::confirmation([
+            'issued_at' => gmdate('Y-m-d\TH:i:s\Z', time() - 3600)])));
+        $this->assert_refused_unwritten('confirmation_expired', 403, $r, $p['post_id']);
     }
 
     /** The three fields outside their signature: a five-field signature over an eight-field body. */
     #[Group('wpml')]
     public function test_the_confirmation_outside_its_signature_is_a_mismatch_and_reads_nothing(): void {
         $p = $this->adopted();
-        $five = $this->body($p);
+        $five = $this->bare($p);
         $header = CadenceAttest::header('/content/replace',
             CadenceAttest::fields('/content/replace', $five), CadenceAttest::KEY_ID);
         WpStub::$reads = [];
@@ -1322,14 +1368,30 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertSame([], WpStub::$updated);
     }
 
-    /** The exempt key with no header: the confirmation would be unsigned. */
+    public static function adopted_or_delivered(): array {
+        return ['adopted' => [true], 'delivered' => [false]];
+    }
+
+    /**
+     * THE EXEMPT KEY WITH NO HEADER IS REFUSED BEFORE THE SITE IS READ, on
+     * an adopted post and on a delivered one alike: `/content/replace` takes
+     * no unsigned-publish exemption, so the confirmation is never nobody's
+     * statement.
+     */
     #[Group('wpml')]
-    public function test_an_exempt_confirmation_is_refused_and_its_signed_twin_passes(): void {
-        $p = $this->adopted();
+    #[\PHPUnit\Framework\Attributes\DataProvider('adopted_or_delivered')]
+    public function test_an_exempt_key_is_refused_unsigned_and_its_signed_twin_passes(bool $adopted): void {
+        $this->assertContains('/content/replace', CadenceAttestation::NO_EXEMPTION);
+        $p = $adopted ? $this->adopted() : $this->publish();
         CadenceAttest::exempt_key();
-        $body = $this->body($p, self::confirmation());
+        $body = $this->body($p);
+        WpStub::$reads = [];
         $r = $this->replace($body, null, CadenceAttest::KEY_ID, null);
-        $this->assert_refused_unwritten('confirmation_unsigned', 403, $r, $p['post_id']);
+        $this->assertSame(CadenceAttestation::CODE, $r['code'] ?? null, $r['reason'] ?? '');
+        $this->assertSame('exempt_refused', $r['attestation_branch'] ?? null);
+        $this->assertSame([], self::site_reads(), 'an unsigned body on an exempt key read the site');
+        $this->assertSame([], WpStub::$updated);
+        $this->assertSame('The original', WpStub::$posts[$p['post_id']]['post_title']);
 
         // THE TWIN: the same key, the same body, signed.
         $r = $this->replace($body);
@@ -1427,13 +1489,14 @@ final class ReplaceRequestTest extends TestCase {
     }
 
     public function test_the_five_confirmation_codes_are_published_at_their_statuses(): void {
-        $want = ['post_adopted' => 403, 'confirmation_unsigned' => 403, 'confirmation_wrong_site' => 403,
+        $want = ['post_adopted' => 403, 'rewrite_unconfirmed' => 403,
+                 'confirmation_unsigned' => 403, 'confirmation_wrong_site' => 403,
                  'confirmation_expired' => 403, 'confirmation_spent' => 409];
         foreach ($want as $code => $status) {
             $this->assertContains($code, CadenceReplaceRequest::REFUSAL_CODES);
             $this->assertSame($status, CadenceRestRoute::STATUS[$code], $code);
         }
-        $this->assertCount(13, CadenceReplaceRequest::REFUSAL_CODES);
+        $this->assertCount(14, CadenceReplaceRequest::REFUSAL_CODES);
     }
 
     /**

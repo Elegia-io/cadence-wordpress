@@ -4,7 +4,7 @@ Tags: rest-api, wpml, multilingual, publishing, translation
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 0.12.0
+Stable tag: 0.13.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,15 @@ Only the translation-linking endpoint does, and it supports WPML 4.5 or newer.
 Publishing and replacing work on a monolingual site with no WPML installed.
 
 == Changelog ==
+
+= 0.13.0 =
+* The replace endpoint requires the client's signed confirmation
+  (`overwrite_adopted`, `site`, `issued_at`) for every rewrite, of a post
+  this connector delivered as well as an adopted one. A delivered post
+  rewritten without it is refused with `rewrite_unconfirmed`.
+* The replace endpoint takes no unsigned-publish exemption: a key carrying
+  it is refused with no signature, as on the read, slug-change and adopt
+  endpoints.
 
 = 0.12.0 =
 * The adopt endpoints answer `adopt_piece_taken` only when the piece is on

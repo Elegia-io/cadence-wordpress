@@ -1336,6 +1336,14 @@ final class ReplaceRequestTest extends TestCase {
         $this->assert_refused_unwritten('post_adopted', 403, $r, $p['post_id']);
     }
 
+    /** THE DELIVERED TWIN: `false` under the signature is absence there too. */
+    #[Group('wpml')]
+    public function test_false_under_the_signature_on_a_delivered_post_refuses_like_absence(): void {
+        $p = $this->publish();
+        $r = $this->replace($this->body($p, self::confirmation(['overwrite_adopted' => false])));
+        $this->assert_refused_unwritten('rewrite_unconfirmed', 403, $r, $p['post_id']);
+    }
+
     public static function malformed_confirmations(): array {
         return [
             'null'                    => [['overwrite_adopted' => null]],

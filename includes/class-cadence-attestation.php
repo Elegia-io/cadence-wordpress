@@ -112,13 +112,13 @@ final class CadenceAttestation {
 
     public const FIELDS = [
         '/content'           => ['piece_id', 'language', 'post_type', 'status', 'title', 'content'],
-        // THE REWRITE CONFIRMATION, LAST AND SIGNED ONLY WHEN PRESENT. An
-        // adopted post is rewritten only over a client's confirmation, and the
-        // three names below carry it. Optional the way `@members` is expanded:
-        // present in the body means present in the material, so an
-        // intermediary can neither add one nor strip one without a `mismatch`,
-        // and a five-field body from a caller that never adopts verifies
-        // exactly as it did before the three existed.
+        // THE REWRITE CONFIRMATION, LAST AND SIGNED ONLY WHEN PRESENT. Every
+        // post, delivered or adopted, is rewritten only over a client's
+        // confirmation, and the three names below carry it. Optional the way
+        // `@members` is expanded: present in the body means present in the
+        // material, so an intermediary can neither add one nor strip one
+        // without a `mismatch`. A five-field body still verifies, and is then
+        // refused by the replace route for carrying no confirmation.
         '/content/replace'   => ['piece_id', 'post_id', 'revision', 'title', 'content',
                                  self::OPTIONAL . 'overwrite_adopted', self::OPTIONAL . 'site',
                                  self::OPTIONAL . 'issued_at', self::OPTIONAL . 'excerpt',

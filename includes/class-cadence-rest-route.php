@@ -22,7 +22,7 @@ final class CadenceRestRoute {
      * which reads the header directly and fails the moment a release bumps one
      * without the other, so drift is caught rather than merely discouraged.
      */
-    public const VERSION = '0.12.0';
+    public const VERSION = '0.13.0';
 
     /**
      * THE REPLY'S OWN SHAPE, as a number the caller can compare with `<=`
@@ -270,9 +270,11 @@ final class CadenceRestRoute {
         'not_adopted'                => 409,
         'adopt_failed'               => 500,
         'post_out_of_scope'          => 403,
-        // An adopted post's rewrite, refused for want of the client's
-        // confirmation: absent, unsigned, for another site, stale, or spent.
+        // A rewrite refused for want of the client's confirmation: absent on
+        // an adopted post or on a delivered one, unsigned, for another site,
+        // stale, or spent.
         'post_adopted'               => 403,
+        'rewrite_unconfirmed'        => 403,
         'confirmation_unsigned'      => 403,
         'confirmation_wrong_site'    => 403,
         'confirmation_expired'       => 403,

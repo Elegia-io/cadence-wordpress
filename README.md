@@ -115,7 +115,9 @@ different fact from `exempt` and should not be folded into it.
 this key*. That exempts an **absent** header and nothing else: a request that
 carries a header which does not verify is still refused, on an exempt key
 exactly as on any other. Absence is a site that has not been upgraded yet; a bad
-signature is not. The screen warns, by name, for every key that carries it.
+signature is not. Nor does it reach the routes that read, stamp or
+rewrite a live post (`/content/replace`, `/content/read`, `/content/reslug`
+and the adopt routes): those refuse an unsigned request on any key. The screen warns, by name, for every key that carries it.
 
 Four capabilities exist, and a key carries only the ones it was issued for:
 
@@ -655,10 +657,12 @@ record, visible only to someone holding `manage_options`; it calls the same
 release with no key and no signature, because the administrator is the
 authority that issued the keys in the first place.
 
-**Rewriting an adopted post needs a signed confirmation.** `/content/replace`
-refuses to touch an adopted post's title or text unless the body also
-carries `overwrite_adopted: true`, `site` and `issued_at`, all three or
-none, signed in the same attestation as the rest of the body. The
+**Every rewrite needs a signed confirmation.** `/content/replace`
+refuses to touch a post's title or text, whether this connector delivered it
+or it was adopted, unless the body also carries `overwrite_adopted: true`,
+`site` and `issued_at`, all three or none, signed in the same attestation as
+the rest of the body. The route takes no unsigned-publish exemption: a key
+carrying it is refused with no header all the same. The
 confirmation must name this site, be no more than 300 seconds old, and not
 already have been spent by an earlier rewrite: each confirmed rewrite
 records the signed material's digest, so the exact same confirmed body sent
@@ -744,7 +748,8 @@ the reason is prose and changes freely.
 | `update_failed` | 500 | WordPress refused the update, or returned no id |
 | `no_row_lock` | 503 | the site would not open a transaction, so the text could not be checked and written as one act |
 | `post_adopted` | 403 | the post is adopted, not made by this connector, and the request carries no confirmation to rewrite it; nothing was written |
-| `confirmation_unsigned` | 403 | a confirmation to rewrite an adopted post is honoured only when signed, and this one was not; nothing was written |
+| `rewrite_unconfirmed` | 403 | the post is one this connector delivered, and the request carries no confirmation to rewrite it; nothing was written |
+| `confirmation_unsigned` | 403 | a confirmation to rewrite a post is honoured only when signed, and this one was not; unreachable while the route takes no exemption. Nothing was written |
 | `confirmation_wrong_site` | 403 | the confirmation was signed for another site; nothing was written |
 | `confirmation_expired` | 403 | the confirmation is more than 300 seconds from this site's clock; nothing was written |
 | `confirmation_spent` | 409 | this exact confirmed rewrite has already been applied; nothing was written |

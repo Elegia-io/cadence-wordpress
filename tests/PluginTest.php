@@ -141,22 +141,28 @@ final class PluginTest extends TestCase {
      */
     #[Group('wpml')]
     public function test_the_replace_route_rewrites_once_and_refuses_the_replay(): void {
+        $k = CadenceKey::issue('tenant-r', ['content.publish', 'content.replace'], 7);
         $made = ($this->routes['/content']['callback'])(new WP_REST_Request([
             'piece_id' => 'p-1', 'post_type' => 'post', 'status' => 'draft',
             'title' => 'T', 'content' => 'C', 'language' => 'en',
-            'declared' => ['multilingual' => true, 'languages' => ['en']]]));
-        $body = ['piece_id' => 'p-1', 'post_id' => $made->get_data()['post_id'],
+            'declared' => ['multilingual' => true, 'languages' => ['en']]], $this->key($k)));
+        [$body, $headers] = $this->signed_rewrite($k, ['piece_id' => 'p-1',
+                 'post_id' => $made->get_data()['post_id'],
                  'revision' => $made->get_data()['revision'],
-                 'title' => 'T2', 'content' => 'C2'];
+                 'title' => 'T2', 'content' => 'C2']);
 
         $call = $this->routes['/content/replace']['callback'];
-        $done = $call(new WP_REST_Request($body));
+        $done = $call(new WP_REST_Request($body, $headers));
         $this->assertSame(200, $done->get_status());
         $this->assertFalse($done->get_data()['created']);
         $this->assertNotSame($body['revision'], $done->get_data()['revision']);
         $this->assertCount(1, WpStub::$updated);
 
-        $replay = $call(new WP_REST_Request($body));
+        // A FRESH CONFIRMATION over the same text, so what refuses is the
+        // revision, not the spent record of the first one.
+        unset($body['overwrite_adopted'], $body['site'], $body['issued_at']);
+        [$body, $headers] = $this->signed_rewrite($k, $body, 1);
+        $replay = $call(new WP_REST_Request($body, $headers));
         $this->assertSame(409, $replay->get_status());
         $this->assertSame('revision_mismatch', $replay->get_data()['code']);
         $this->assertCount(1, WpStub::$updated, 'the replay rewrote the post again');
@@ -227,6 +233,21 @@ final class PluginTest extends TestCase {
         // that send a header pass it explicitly beside this.
         CadenceKey::set_unsigned_ok($issued['id'], true, 1);
         return [strtolower(CadenceKey::HEADER) => $issued['secret']];
+    }
+
+    /**
+     * A rewrite as the sending service sends one: the client's confirmation in
+     * the body and the whole body signed. `/content/replace` takes no
+     * unsigned-publish exemption, so `key()` alone no longer reaches it.
+     *
+     * @return array{0: array, 1: array} the body and its headers
+     */
+    private function signed_rewrite(array $issued, array $body, int $issued_at = 0): array {
+        $body += ['overwrite_adopted' => true, 'site' => CadenceAttestation::site(),
+                  'issued_at' => gmdate('Y-m-d\TH:i:s\Z', time() - $issued_at)];
+        return [$body, $this->key($issued) + [strtolower(CadenceAttestation::HEADER) =>
+            CadenceAttest::header('/content/replace',
+                CadenceAttest::fields('/content/replace', $body), $issued['id'])]];
     }
 
     #[Group('wpml')]
@@ -793,11 +814,11 @@ final class PluginTest extends TestCase {
         // a revision the caller re-read would satisfy the second and can never
         // satisfy the first.
         $replace = $this->routes['/content/replace'];
-        $rewrite = ['piece_id' => 'shared-slug', 'post_id' => $mine,
+        [$rewrite, $headers] = $this->signed_rewrite($b, ['piece_id' => 'shared-slug', 'post_id' => $mine,
                     'revision' => $repeat->get_data()['revision'],
-                    'title' => 'B took it', 'content' => '<p>B body.</p>'];
+                    'title' => 'B took it', 'content' => '<p>B body.</p>']);
         $this->assertTrue(($replace['permission_callback'])(new WP_REST_Request($rewrite, $this->key($b))));
-        $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($b)));
+        $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $headers));
 
         $this->assertSame(403, $refused->get_status());
         $this->assertSame('post_out_of_scope', $refused->get_data()['code']);
@@ -834,16 +855,16 @@ final class PluginTest extends TestCase {
         $mine = $made->get_data()['post_id'];
 
         $replace = $this->routes['/content/replace'];
-        $rewrite = ['piece_id' => 'piece-a', 'post_id' => $mine,
+        [$rewrite, $headers] = $this->signed_rewrite($b, ['piece_id' => 'piece-a', 'post_id' => $mine,
                     'revision' => $made->get_data()['revision'],
-                    'title' => 'B took it', 'content' => '<p>B body.</p>'];
+                    'title' => 'B took it', 'content' => '<p>B body.</p>']);
 
         // B's key is genuine and carries `content.replace`, so the capability
         // tripwire says yes -- which is the point: the boundary is at the
         // write, and `identifier_mismatch` agrees with B, because B named the
         // identifier the post really carries.
         $this->assertTrue(($replace['permission_callback'])(new WP_REST_Request($rewrite, $this->key($b))));
-        $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($b)));
+        $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $headers));
         $this->assertSame(403, $refused->get_status(), (string) ($refused->get_data()['reason'] ?? ''));
         $this->assertSame('post_out_of_scope', $refused->get_data()['code']);
         $this->assertSame([], WpStub::$updated, "a second tenant's key rewrote the post anyway");
@@ -851,7 +872,8 @@ final class PluginTest extends TestCase {
 
         // THE ACCEPT-PROOF: tenant A sends the identical body through the same
         // route and its own post is rewritten.
-        $written = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($a)));
+        [$rewrite, $mine_headers] = $this->signed_rewrite($a, $rewrite);
+        $written = ($replace['callback'])(new WP_REST_Request($rewrite, $mine_headers));
         $this->assertSame(200, $written->get_status(), (string) ($written->get_data()['reason'] ?? ''));
         $this->assertSame('B took it', WpStub::$posts[$mine]['post_title']);
     }
@@ -1127,13 +1149,13 @@ final class PluginTest extends TestCase {
         $this->assertArrayNotHasKey(CadenceContentRequest::KEY_META, WpStub::$meta[41]);
 
         $replace = $this->routes['/content/replace'];
-        $rewrite = ['piece_id' => 'piece-old', 'post_id' => 41,
+        [$rewrite, $headers] = $this->signed_rewrite($narrow, ['piece_id' => 'piece-old', 'post_id' => 41,
                     'revision' => CadenceRevision::of('', ''),
-                    'title' => 'Rewritten', 'content' => '<p>Rewritten.</p>'];
+                    'title' => 'Rewritten', 'content' => '<p>Rewritten.</p>']);
         $this->assertTrue(($replace['permission_callback'])(
             new WP_REST_Request($rewrite, $this->key($narrow))));
 
-        $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($narrow)));
+        $refused = ($replace['callback'])(new WP_REST_Request($rewrite, $headers));
         $this->assertSame(403, $refused->get_status(), (string) ($refused->get_data()['reason'] ?? ''));
         $this->assertSame('existing_post_type_out_of_scope', $refused->get_data()['code']);
         $this->assertSame([], WpStub::$updated);
@@ -1142,7 +1164,8 @@ final class PluginTest extends TestCase {
         // and rewrites exactly what it always rewrote.
         $wide = CadenceKey::issue('tenant-wide', ['content.replace'], 7);
         $this->assertIsArray($wide, is_string($wide) ? $wide : '');
-        $written = ($replace['callback'])(new WP_REST_Request($rewrite, $this->key($wide)));
+        [$rewrite, $wide_headers] = $this->signed_rewrite($wide, $rewrite);
+        $written = ($replace['callback'])(new WP_REST_Request($rewrite, $wide_headers));
         $this->assertSame(200, $written->get_status(), (string) ($written->get_data()['reason'] ?? ''));
         $this->assertSame('Rewritten', WpStub::$posts[41]['post_title']);
     }

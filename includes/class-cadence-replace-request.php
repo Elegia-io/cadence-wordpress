@@ -76,6 +76,7 @@ final class CadenceReplaceRequest {
         'no_row_lock',
         CadenceAttestation::CODE,
         'post_adopted',
+        'rewrite_unconfirmed',
         'confirmation_unsigned',
         'confirmation_wrong_site',
         'confirmation_expired',
@@ -89,7 +90,7 @@ final class CadenceReplaceRequest {
      */
     public const SPENT_META = '_cadence_rewrite_spent';
 
-    /** The three fields a confirmed rewrite of an adopted post carries, all or none. */
+    /** The three fields every confirmed rewrite carries, all or none. */
     public const CONFIRMATION = ['overwrite_adopted', 'site', 'issued_at'];
 
     /**
@@ -170,30 +171,29 @@ final class CadenceReplaceRequest {
             return self::out_of_scope();
         }
 
-        // AN ADOPTED POST IS REWRITTEN ONLY OVER THE CLIENT'S CONFIRMATION.
+        // EVERY POST IS REWRITTEN ONLY OVER THE CLIENT'S CONFIRMATION.
         //
-        // Its text was written by a person, not by this connector, and a
-        // rewrite overwrites it with no copy kept here. So the rewrite must
-        // carry a confirmation, and each of five conjuncts has its own code:
-        // the confirmation is there and says yes; it was signed, because an
-        // exempt key sends no header and its fields would then be nobody's
-        // statement; it names this site, because a staging clone verifies the
-        // same public key; it is fresh; and it has not already been spent on
-        // this post, because the revision is only a hash of the text and a
-        // restore from WordPress Revisions puts a post back on the revision a
-        // captured confirmation names.
+        // A rewrite replaces the text of a live post with no copy kept here,
+        // whether a person wrote that text (an adopted post) or this connector
+        // delivered it. So the rewrite must carry a confirmation, and each of
+        // five conjuncts has its own code: the confirmation is there and says
+        // yes; it was signed, because an exempt key sends no header and its
+        // fields would then be nobody's statement (unreachable while
+        // `/content/replace` is in `NO_EXEMPTION`, and kept so that dropping it
+        // from there cannot admit one); it names this site, because a staging
+        // clone verifies the same public key; it is fresh; and it has not
+        // already been spent on this post, because the revision is only a
+        // hash of the text and a restore from WordPress Revisions puts a post
+        // back on the revision a captured confirmation names.
         //
         // AFTER the identity check, so none of the five answers anything about
-        // a post this key does not reach. On a post this connector created
-        // none of them is asked: its text is the pipeline's own.
-        $spent = null;
-        if (get_post_meta($fields['post_id'], CadenceAdoptRequest::ADOPTED_META, true) !== '') {
-            $confirmed = self::confirmed($fields, $attested);
-            if (isset($confirmed['code'])) {
-                return $confirmed;
-            }
-            $spent = $confirmed['spent'];
+        // a post this key does not reach.
+        $adopted = get_post_meta($fields['post_id'], CadenceAdoptRequest::ADOPTED_META, true) !== '';
+        $confirmed = self::confirmed($fields, $attested, $adopted);
+        if (isset($confirmed['code'])) {
+            return $confirmed;
         }
+        $spent = $confirmed['spent'];
 
         // THE POST AND THE PIECE HAVE TO BE THE SAME THING. The caller holds a
         // map from its own identifier to a WordPress post id; that map lives on
@@ -437,21 +437,27 @@ final class CadenceReplaceRequest {
     }
 
     /**
-     * Four of the five conjuncts over an adopted post, in order. A refusal,
-     * or the digest the fifth, `confirmation_spent`, is asked about under
-     * the row lock.
+     * Four of the five conjuncts over any rewrite. A refusal, or the digest
+     * the fifth, `confirmation_spent`, is asked about under the row lock.
+     * An absent confirmation names which post it was: `post_adopted` for a
+     * post a person wrote, `rewrite_unconfirmed` for one this connector
+     * delivered, so the refusal states the branch that fired.
      *
      * @return array{spent: string}|array{ok: false, code: string, reason: string}
      */
-    private static function confirmed(array $fields, array $attested): array {
+    private static function confirmed(array $fields, array $attested, bool $adopted): array {
         if (($fields['overwrite_adopted'] ?? null) !== true) {
-            return ['ok' => false, 'code' => 'post_adopted', 'reason' => sprintf(
-                'post %d was adopted, not made by this connector; a rewrite needs the client\'s '
-                . 'confirmation, and nothing was written', $fields['post_id'])];
+            return $adopted
+                ? ['ok' => false, 'code' => 'post_adopted', 'reason' => sprintf(
+                    'post %d was adopted, not made by this connector; a rewrite needs the client\'s '
+                    . 'confirmation, and nothing was written', $fields['post_id'])]
+                : ['ok' => false, 'code' => 'rewrite_unconfirmed', 'reason' => sprintf(
+                    'post %d is live on this site; a rewrite of it needs the client\'s signed '
+                    . 'confirmation, and this request carried none, so nothing was written', $fields['post_id'])];
         }
         if (($attested['attestation'] ?? null) !== 'verified') {
             return ['ok' => false, 'code' => 'confirmation_unsigned', 'reason' =>
-                'a confirmation to rewrite an adopted post is honoured only when signed, and this '
+                'a confirmation to rewrite a post is honoured only when signed, and this '
                 . 'request carried no signature; nothing was written'];
         }
         if ($fields['site'] !== CadenceAttestation::site()) {

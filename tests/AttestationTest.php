@@ -1321,7 +1321,9 @@ final class AttestationTest extends TestCase {
         $this->assertTrue($published['ok'], $published['reason'] ?? '');
 
         $rewrite = ['piece_id' => 'p-1', 'post_id' => $published['post_id'],
-                    'revision' => $published['revision'], 'title' => 'T2', 'content' => 'C2'];
+                    'revision' => $published['revision'], 'title' => 'T2', 'content' => 'C2',
+                    'overwrite_adopted' => true, 'site' => CadenceAttestation::site(),
+                    'issued_at' => gmdate('Y-m-d\TH:i:s\Z')];
         $r = CadenceReplaceRequest::run($rewrite, null, self::KEY,
             $this->signed('/content/replace', CadenceAttest::fields('/content/replace', $rewrite)));
 

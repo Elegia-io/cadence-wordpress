@@ -165,6 +165,17 @@ final class AttestationTest extends TestCase {
             'digest'   => '1289433105e5abe6536201b3f6aa3e2ad5b159f9eaa024069427f54a3a14ac0d',
             'header'   => 'v1 45da37c57dd21b36 TyM1bfalMC9APX4cXuAZRgEhrVaAu4A9XJAvyuG9uyby5CEs4hEDMfQwe-xWGCe_o8hMu_u7XF-_TIh6KvhRCQ',
         ],
+        [
+            'label'    => 'replace-with-retranslate-confirmation',
+            'route'    => '/content/replace',
+            // THE CONFIRMATION KIND, signed right after `issued_at` and before
+            // the optional text; the body's own boolean, reduced by the route.
+            'fields'   => CadenceReplaceRequest::signable(['piece_id' => 'acme-blog-2026-09-12-attestation', 'post_id' => 41, 'revision' => 'sha256:653d0e03211c28bf6d86ba229a45a6f055ee1586e700e99b0bd141423652a024', 'title' => 'Signing what we send (corrected)', 'content' => '<p>The wire carries a digest now, and the rewrite carries one too.</p>', 'overwrite_adopted' => true, 'site' => 'example.test/blog', 'issued_at' => '2026-09-24T12:00:00Z', 'confirmation_kind' => 'retranslate', 'excerpt' => 'A new translation, asked for.']),
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQvcmVwbGFjZQpwaWVjZV9pZDozMjphY21lLWJsb2ctMjAyNi0wOS0xMi1hdHRlc3RhdGlvbgpwb3N0X2lkOjI6NDEKcmV2aXNpb246NzE6c2hhMjU2OjY1M2QwZTAzMjExYzI4YmY2ZDg2YmEyMjlhNDVhNmYwNTVlZTE1ODZlNzAwZTk5YjBiZDE0MTQyMzY1MmEwMjQKdGl0bGU6MzI6U2lnbmluZyB3aGF0IHdlIHNlbmQgKGNvcnJlY3RlZCkKY29udGVudDo3MDo8cD5UaGUgd2lyZSBjYXJyaWVzIGEgZGlnZXN0IG5vdywgYW5kIHRoZSByZXdyaXRlIGNhcnJpZXMgb25lIHRvby48L3A+Cm92ZXJ3cml0ZV9hZG9wdGVkOjQ6dHJ1ZQpzaXRlOjE3OmV4YW1wbGUudGVzdC9ibG9nCmlzc3VlZF9hdDoyMDoyMDI2LTA5LTI0VDEyOjAwOjAwWgpjb25maXJtYXRpb25fa2luZDoxMTpyZXRyYW5zbGF0ZQpleGNlcnB0OjI5OkEgbmV3IHRyYW5zbGF0aW9uLCBhc2tlZCBmb3IuCg==',
+            'bytes'    => 460,
+            'digest'   => 'ecd53ac3c2750aa10e70dccb3813b6cc4cbf55c8f837205d38bce335186b73f4',
+            'header'   => 'v1 45da37c57dd21b36 1x3c5bY7299YCmFBHeSqDJiRL2DAd4VZOzvhSHrsq2cvdBah6VW6B7b_kLp1OrdM7Ly7SfYBlpMgd7Wqowo3DQ',
+        ],
         ];
         // THE LINK VECTORS JOIN THEM, reduced to the same flat shape by the ONE
         // implementation that reduces a plan. So every assertion in this file
@@ -284,14 +295,14 @@ final class AttestationTest extends TestCase {
     /**
      * THE DENOMINATOR, asserted rather than assumed: a loop over a silently
      * shortened list passes every assertion inside it. The contract fixture
-     * carries the same sixteen labels.
+     * carries the same seventeen labels.
      */
     public function test_every_contract_vector_is_transcribed(): void {
         $labels = array_column($this->vectors(), 'label');
-        $this->assertCount(16, $labels);
-        $this->assertCount(16, array_unique($labels));
+        $this->assertCount(17, $labels);
+        $this->assertCount(17, array_unique($labels));
         foreach (['content-read', 'content-reslug', 'replace-with-optional-text',
-                  'replace-with-one-optional-text'] as $label) {
+                  'replace-with-one-optional-text', 'replace-with-retranslate-confirmation'] as $label) {
             $this->assertContains($label, $labels);
         }
     }

@@ -685,8 +685,9 @@ as `text`), and the replace answer carries it as `confirmation_kind`.
 **The record is visible in wp-admin.** A post that has taken at least one
 confirmed rewrite shows a read-only "Confirmed rewrites" box on its edit
 screen, in both editors and on every post type, to users who can edit that
-post. It lists the same wording `confirmations()` returns, newest first. The
-record holds no time, so the box shows the order and not when.
+post. It lists the same wording `confirmations()` returns, translated where
+the site has a translation, newest first. The record holds no time, so the
+box shows the order and not when.
 
 ### Answers
 

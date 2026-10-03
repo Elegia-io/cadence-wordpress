@@ -22,7 +22,7 @@ final class CadenceRestRoute {
      * which reads the header directly and fails the moment a release bumps one
      * without the other, so drift is caught rather than merely discouraged.
      */
-    public const VERSION = '0.13.0';
+    public const VERSION = '0.14.0';
 
     /**
      * THE REPLY'S OWN SHAPE, as a number the caller can compare with `<=`
@@ -96,7 +96,7 @@ final class CadenceRestRoute {
             // `test_a_rewrite_answers_200_and_carries_the_new_revision` asks
             // for the one a replacement cannot be made without.
             foreach (['written', 'post_id', 'created', 'revision',
-                      'attestation', 'attestation_kid'] as $k) {
+                      'attestation', 'attestation_kid', 'confirmation_kind'] as $k) {
                 if (array_key_exists($k, $result)) {
                     $body[$k] = $result[$k];
                 }

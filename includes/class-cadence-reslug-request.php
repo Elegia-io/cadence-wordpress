@@ -137,7 +137,9 @@ final class CadenceReslugRequest {
                 return self::release($wpdb, self::refuse('update_failed', 'WordPress refused the update'
                     . (is_wp_error($id) ? ': ' . $id->get_error_message() : '')));
             }
-            if (add_post_meta($id, CadenceReplaceRequest::SPENT_META, $spent) === false) {
+            // Kind row first, for the reason `CadenceReplaceRequest::write` gives.
+            if (!CadenceReplaceRequest::record_kind($id, $spent, 'slug')
+                    || add_post_meta($id, CadenceReplaceRequest::SPENT_META, $spent) === false) {
                 return self::release($wpdb, self::refuse('update_failed',
                     'the confirmation could not be recorded as spent, so the slug was not kept'));
             }

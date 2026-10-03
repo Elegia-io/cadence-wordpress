@@ -328,6 +328,15 @@ final class WpStub {
      */
     public static array $notoptions = [];
 
+    /**
+     * What `__` answers for a source string, as a site's translation file
+     * would. Empty is the identity: an untranslated site.
+     */
+    public static array $translations = [];
+
+    /** Every `add_meta_box` call, as `[id, title, callback, screen, context]`. */
+    public static array $meta_boxes = [];
+
     public static function read(string $what): void {
         self::$reads[$what] = (self::$reads[$what] ?? 0) + 1;
     }
@@ -385,6 +394,8 @@ final class WpStub {
         self::$on_option_read = [];
         self::$home_url_filter = null;
         self::$notoptions = [];
+        self::$translations = [];
+        self::$meta_boxes = [];
     }
 
     public static function add_post(int $id, string $post_type = 'page',
@@ -1292,8 +1303,14 @@ function update_option(string $name, $value, $autoload = null): bool {
     return true;
 }
 
-function esc_html(string $s): string { return $s; }
-function __(string $s, string $d = ''): string { return $s; }
+// A real escaper, unlike the identities below it: a screen that prints a
+// string unescaped shows as raw markup in a test.
+function esc_html(string $s): string { return htmlspecialchars($s, ENT_QUOTES, 'UTF-8'); }
+function __(string $s, string $d = ''): string { return WpStub::$translations[$s] ?? $s; }
+function add_meta_box(string $id, string $title, callable $callback, $screen = null,
+                      string $context = 'advanced', string $priority = 'default'): void {
+    WpStub::$meta_boxes[] = [$id, $title, $callback, $screen, $context];
+}
 function esc_url(string $s): string { return $s; }
 function esc_attr(string $s): string { return $s; }
 // Not the identity the escapers above are: it keeps only the allowed element

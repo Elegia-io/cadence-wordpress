@@ -94,7 +94,9 @@ final class CadenceReplaceRequest {
      * WHAT EACH SPENT CONFIRMATION CONFIRMED. One row per spent digest
      * written since the kind existed, a JSON object `{spent, kind}`, written
      * in the same transaction as its `SPENT_META` row. A spent digest with no
-     * row here predates the field and reads as `text`.
+     * row here predates the field and reads as `text`, unless some row here
+     * cannot be parsed: that row may have been its own, so while one exists
+     * every digest without a row reads as `unreadable` instead.
      */
     public const KIND_META = '_cadence_rewrite_kind';
 
@@ -542,8 +544,7 @@ final class CadenceReplaceRequest {
                 continue;
             }
             $kind = $row['kind'] ?? null;
-            $kinds[$row['spent']] = is_string($kind) && $kind !== 'unreadable'
-                && isset(self::KIND_NOTES[$kind]) ? $kind : 'unreadable';
+            $kinds[$row['spent']] = is_string($kind) && isset(self::KIND_NOTES[$kind]) ? $kind : 'unreadable';
         }
         $out = [];
         foreach ((array) get_post_meta($post_id, self::SPENT_META, false) as $spent) {

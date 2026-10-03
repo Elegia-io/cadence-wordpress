@@ -61,6 +61,60 @@ final class CadenceAdmin {
         add_filter('page_row_actions', [self::class, 'row_actions'], 10, 2);
         add_action('admin_post_' . self::RELEASE_ACTION, [self::class, 'handle_release']);
         add_action('admin_notices', [self::class, 'release_notice']);
+        add_action('add_meta_boxes', [self::class, 'history_box'], 10, 2);
+    }
+
+    /**
+     * THE CONFIRMED-REWRITE HISTORY, on the edit screen of a post that has
+     * one and for a user who may edit that post. A post with no confirmation
+     * gets no box, so it does not sit empty on every post of the site. No
+     * screen is named, so it appears on whichever post type is being edited.
+     */
+    public static function history_box(string $post_type, $post): void {
+        if (!$post instanceof WP_Post || !current_user_can('edit_post', $post->ID)
+                || CadenceReplaceRequest::confirmations($post->ID) === []) {
+            return;
+        }
+        add_meta_box('cadence_rewrite_history', __('Confirmed rewrites', 'cadence-connector'),
+                     [self::class, 'history_render'], null, 'side');
+    }
+
+    /**
+     * Read-only: the record's wording, newest first, and no field a browser
+     * could submit with the post. The record holds no time, and the rows are
+     * stored in the order they were spent, so that order reversed is newest
+     * first.
+     */
+    public static function history_render($post): void {
+        if (!$post instanceof WP_Post || !current_user_can('edit_post', $post->ID)) {
+            return;
+        }
+        $rows = CadenceReplaceRequest::confirmations($post->ID);
+        if ($rows === []) {
+            return;
+        }
+        echo '<p>' . esc_html(__('Newest first.', 'cadence-connector')) . '</p><ol reversed>';
+        foreach (array_reverse($rows) as $row) {
+            echo '<li>' . esc_html(self::history_label($row['kind'])) . '</li>';
+        }
+        echo '</ol>';
+    }
+
+    /**
+     * `CadenceReplaceRequest::KIND_NOTES`, translatable. Spelled out here
+     * because a translation tool reads only literal strings.
+     */
+    public static function history_label(string $kind): string {
+        switch ($kind) {
+            case 'text':
+                return __('client confirmed this text', 'cadence-connector');
+            case 'retranslate':
+                return __('client asked for a new translation', 'cadence-connector');
+            case 'slug':
+                return __('client confirmed this slug change', 'cadence-connector');
+            default:
+                return __('the kind of confirmation could not be read', 'cadence-connector');
+        }
     }
 
     /**

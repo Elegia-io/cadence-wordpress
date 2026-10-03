@@ -4,7 +4,7 @@ Tags: rest-api, wpml, multilingual, publishing, translation
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 0.14.0
+Stable tag: 0.15.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,15 @@ Only the translation-linking endpoint does, and it supports WPML 4.5 or newer.
 Publishing and replacing work on a monolingual site with no WPML installed.
 
 == Changelog ==
+
+= 0.15.0 =
+* The post edit screen shows a "Confirmed rewrites" box on any post that has
+  taken a confirmed rewrite, newest first, each in the site's own words:
+  "client confirmed this text", "client asked for a new translation",
+  "client confirmed this slug change", or "the kind of confirmation could not
+  be read". It is read-only, appears only to users who can edit that post,
+  and is absent on posts with no confirmed rewrite. The site records no time
+  for a confirmation, so the box shows none.
 
 = 0.14.0 =
 * The replace endpoint accepts an optional, signed `confirmation_kind` with

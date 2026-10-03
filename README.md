@@ -678,8 +678,9 @@ signed right after `issued_at`, so adding or stripping it in transit is a
 `bad_replacement`. The site keeps the kind beside each spent confirmation
 (`CadenceReplaceRequest::confirmations` reads it back as "client confirmed
 this text" or "client asked for a new translation"; a confirmation spent
-before 0.14.0 reads as `text`, and a slug change as "client confirmed this
-slug change"), and the replace answer carries it as `confirmation_kind`.
+before 0.14.0 reads as `text`, a slug change as "client confirmed this slug
+change", and a recorded kind the site cannot read back as `unreadable`, never
+as `text`), and the replace answer carries it as `confirmation_kind`.
 
 ### Answers
 

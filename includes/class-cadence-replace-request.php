@@ -116,6 +116,9 @@ final class CadenceReplaceRequest {
         'text'        => 'client confirmed this text',
         'retranslate' => 'client asked for a new translation',
         'slug'        => 'client confirmed this slug change',
+        // A kind row this site wrote and cannot read back. Never `text`: that
+        // would state a confirmation the record does not show.
+        'unreadable'  => 'the kind of confirmation could not be read',
     ];
 
     /**
@@ -437,9 +440,13 @@ final class CadenceReplaceRequest {
                     'reason' => sprintf('%s could not be stored, so the rewrite was not kept', $name)]);
             }
         }
+        // THE KIND ROW FIRST, THEN THE SPENT ROW. On a table where the
+        // transaction does nothing, a failure between the two must leave a
+        // kind row with no spent row, which reads as nothing; the other order
+        // would leave a spent row with no kind, which reads as `text`.
         $kind = $fields['confirmation_kind'] ?? 'text';
-        if ($spent !== null && (add_post_meta($id, self::SPENT_META, $spent) === false
-                || !self::record_kind($id, $spent, $kind))) {
+        if ($spent !== null && (!self::record_kind($id, $spent, $kind)
+                || add_post_meta($id, self::SPENT_META, $spent) === false)) {
             return self::release($wpdb, ['ok' => false, 'code' => 'update_failed',
                 'reason' => 'the confirmation could not be recorded as spent, so the rewrite was not kept']);
         }
@@ -517,23 +524,30 @@ final class CadenceReplaceRequest {
 
     /**
      * THE SITE'S RECORD OF THE CONFIRMATIONS THIS POST SPENT, oldest first:
-     * each digest, what it confirmed, and that stated in words. A digest
-     * spent before the kind was recorded reads as `text`.
+     * each digest, what it confirmed, and that stated in words. Only a
+     * digest with no kind row at all, spent before the kind was recorded,
+     * reads as `text`. A kind row naming no known kind reads as
+     * `unreadable`, and so does every digest without its own row once any
+     * row cannot be parsed, since that row may have been its.
      *
      * @return list<array{spent: string, kind: string, note: string}>
      */
     public static function confirmations(int $post_id): array {
         $kinds = [];
+        $orphan = false;
         foreach ((array) get_post_meta($post_id, self::KIND_META, false) as $row) {
             $row = is_string($row) ? json_decode($row, true) : null;
-            if (is_array($row) && is_string($row['spent'] ?? null)
-                    && isset(self::KIND_NOTES[$row['kind'] ?? ''])) {
-                $kinds[$row['spent']] = $row['kind'];
+            if (!is_array($row) || !is_string($row['spent'] ?? null)) {
+                $orphan = true;
+                continue;
             }
+            $kind = $row['kind'] ?? null;
+            $kinds[$row['spent']] = is_string($kind) && $kind !== 'unreadable'
+                && isset(self::KIND_NOTES[$kind]) ? $kind : 'unreadable';
         }
         $out = [];
         foreach ((array) get_post_meta($post_id, self::SPENT_META, false) as $spent) {
-            $kind = $kinds[$spent] ?? 'text';
+            $kind = $kinds[$spent] ?? ($orphan ? 'unreadable' : 'text');
             $out[] = ['spent' => (string) $spent, 'kind' => $kind, 'note' => self::KIND_NOTES[$kind]];
         }
         return $out;

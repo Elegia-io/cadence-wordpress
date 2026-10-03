@@ -151,6 +151,17 @@ final class ReslugRequestTest extends TestCase {
         $this->assertArrayHasKey(CadenceReplaceRequest::SPENT_META, WpStub::$meta[self::ID]);
     }
 
+    /** THE KIND NOT RECORDED: the slug change rolls back and spends nothing. */
+    public function test_a_kind_that_cannot_be_recorded_rolls_the_slug_back(): void {
+        WpStub::$meta_add_fails = [CadenceReplaceRequest::KIND_META];
+        $r = $this->reslug($this->body());
+        $this->assertSame('update_failed', $r['code'] ?? null, $r['reason'] ?? '');
+        $log = $GLOBALS['wpdb']->log;
+        $this->assertSame('ROLLBACK', end($log));
+        $this->assertNotContains('COMMIT', $log);
+        $this->assertArrayNotHasKey(CadenceReplaceRequest::SPENT_META, WpStub::$meta[self::ID]);
+    }
+
     /** The site's record says a slug change was confirmed, not a text. */
     public function test_the_record_says_a_slug_change_was_confirmed(): void {
         $this->assertTrue($this->reslug($this->body())['ok']);

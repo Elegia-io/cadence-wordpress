@@ -1741,4 +1741,51 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertSame('mismatch', $r['attestation_branch'] ?? null);
         $this->assertSame([], WpStub::$updated);
     }
+
+    /** A KIND ROW NAMING NO KNOWN KIND reads as unreadable, never as text. */
+    public function test_a_kind_row_with_an_unknown_kind_reads_as_unreadable(): void {
+        foreach (['machine', 'unreadable', null] as $i => $kind) {
+            $id = 20 + $i;
+            add_post_meta($id, CadenceReplaceRequest::KIND_META, wp_json_encode(['spent' => 'd', 'kind' => $kind]));
+            add_post_meta($id, CadenceReplaceRequest::SPENT_META, 'd');
+            $this->assertSame([['spent' => 'd', 'kind' => 'unreadable',
+                                'note' => 'the kind of confirmation could not be read']],
+                              CadenceReplaceRequest::confirmations($id), var_export($kind, true));
+        }
+    }
+
+    /** AN UNPARSEABLE KIND ROW may have been any digest's: those without their own row are unreadable. */
+    public function test_an_unparseable_kind_row_makes_unmatched_digests_unreadable(): void {
+        add_post_meta(30, CadenceReplaceRequest::KIND_META, 'not json');
+        add_post_meta(30, CadenceReplaceRequest::KIND_META, wp_json_encode(['spent' => 'b', 'kind' => 'retranslate']));
+        add_post_meta(30, CadenceReplaceRequest::SPENT_META, 'a');
+        add_post_meta(30, CadenceReplaceRequest::SPENT_META, 'b');
+        $this->assertSame(['unreadable', 'retranslate'],
+            array_column(CadenceReplaceRequest::confirmations(30), 'kind'));
+    }
+
+    /** THE KIND NOT RECORDED: the rewrite rolls back and spends nothing. */
+    #[Group('wpml')]
+    public function test_a_kind_that_cannot_be_recorded_rolls_the_rewrite_back(): void {
+        $p = $this->publish();
+        WpStub::$meta_add_fails = [CadenceReplaceRequest::KIND_META];
+        $r = $this->replace($this->body($p, ['confirmation_kind' => 'retranslate']));
+        $this->assertSame('update_failed', $r['code'] ?? null, $r['reason'] ?? '');
+        $log = $this->statements();
+        $this->assertSame('ROLLBACK', end($log));
+        $this->assertNotContains('COMMIT', $log);
+        $this->assertArrayNotHasKey(CadenceReplaceRequest::SPENT_META, WpStub::$meta[$p['post_id']]);
+    }
+
+    /** SWAPPED after signing: signed `retranslate`, sent `text`, is a mismatch. */
+    #[Group('wpml')]
+    public function test_a_kind_swapped_after_signing_is_a_mismatch(): void {
+        $p = $this->publish();
+        $signed = $this->body($p, ['confirmation_kind' => 'retranslate']);
+        $r = $this->replace(array_merge($signed, ['confirmation_kind' => 'text']), null, CadenceAttest::KEY_ID,
+            CadenceAttest::header('/content/replace', CadenceAttest::fields('/content/replace', $signed),
+                                  CadenceAttest::KEY_ID));
+        $this->assertSame('mismatch', $r['attestation_branch'] ?? null);
+        $this->assertSame([], WpStub::$updated);
+    }
 }

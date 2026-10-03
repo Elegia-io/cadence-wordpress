@@ -90,8 +90,33 @@ final class CadenceReplaceRequest {
      */
     public const SPENT_META = '_cadence_rewrite_spent';
 
+    /**
+     * WHAT EACH SPENT CONFIRMATION CONFIRMED. One row per spent digest
+     * written since the kind existed, a JSON object `{spent, kind}`, written
+     * in the same transaction as its `SPENT_META` row. A spent digest with no
+     * row here predates the field and reads as `text`.
+     */
+    public const KIND_META = '_cadence_rewrite_kind';
+
     /** The three fields every confirmed rewrite carries, all or none. */
     public const CONFIRMATION = ['overwrite_adopted', 'site', 'issued_at'];
+
+    /**
+     * WHAT THE CLIENT CONFIRMED, sent as the optional `confirmation_kind`:
+     * the exact new text (`text`, and the reading of an absent field), or a
+     * fresh translation they asked for and never saw (`retranslate`).
+     */
+    public const CONFIRMATION_KINDS = ['text', 'retranslate'];
+
+    /**
+     * How the site's record states each kind. `slug` is a confirmed address
+     * change, recorded by `/content/reslug` under the same spent list.
+     */
+    public const KIND_NOTES = [
+        'text'        => 'client confirmed this text',
+        'retranslate' => 'client asked for a new translation',
+        'slug'        => 'client confirmed this slug change',
+    ];
 
     /**
      * OPTIONAL TEXT, written only when the body carries it and signed when it
@@ -412,7 +437,9 @@ final class CadenceReplaceRequest {
                     'reason' => sprintf('%s could not be stored, so the rewrite was not kept', $name)]);
             }
         }
-        if ($spent !== null && add_post_meta($id, self::SPENT_META, $spent) === false) {
+        $kind = $fields['confirmation_kind'] ?? 'text';
+        if ($spent !== null && (add_post_meta($id, self::SPENT_META, $spent) === false
+                || !self::record_kind($id, $spent, $kind))) {
             return self::release($wpdb, ['ok' => false, 'code' => 'update_failed',
                 'reason' => 'the confirmation could not be recorded as spent, so the rewrite was not kept']);
         }
@@ -428,7 +455,8 @@ final class CadenceReplaceRequest {
              // re-derived: one verification per request, and a second here
              // would be a second chance to disagree with the first.
              'attestation' => $attested['attestation']]
-            + (isset($attested['kid']) ? ['attestation_kid' => $attested['kid']] : []),
+            + (isset($attested['kid']) ? ['attestation_kid' => $attested['kid']] : [])
+            + ($spent !== null ? ['confirmation_kind' => $kind] : []),
             CadenceRevision::answer($id)
         );
         // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- transaction control has no WordPress API, and must not be cached.
@@ -476,6 +504,39 @@ final class CadenceReplaceRequest {
         // in `run`, where the record is also written.
         return ['spent' => hash('sha256',
             CadenceAttestation::material('/content/replace', self::signable($fields)))];
+    }
+
+    /**
+     * Record what a spent confirmation confirmed, beside its digest. Called
+     * inside the transaction that spends it; false fails the write.
+     */
+    public static function record_kind(int $post_id, string $spent, string $kind): bool {
+        return add_post_meta($post_id, self::KIND_META,
+            wp_json_encode(['spent' => $spent, 'kind' => $kind])) !== false;
+    }
+
+    /**
+     * THE SITE'S RECORD OF THE CONFIRMATIONS THIS POST SPENT, oldest first:
+     * each digest, what it confirmed, and that stated in words. A digest
+     * spent before the kind was recorded reads as `text`.
+     *
+     * @return list<array{spent: string, kind: string, note: string}>
+     */
+    public static function confirmations(int $post_id): array {
+        $kinds = [];
+        foreach ((array) get_post_meta($post_id, self::KIND_META, false) as $row) {
+            $row = is_string($row) ? json_decode($row, true) : null;
+            if (is_array($row) && is_string($row['spent'] ?? null)
+                    && isset(self::KIND_NOTES[$row['kind'] ?? ''])) {
+                $kinds[$row['spent']] = $row['kind'];
+            }
+        }
+        $out = [];
+        foreach ((array) get_post_meta($post_id, self::SPENT_META, false) as $spent) {
+            $kind = $kinds[$spent] ?? 'text';
+            $out[] = ['spent' => (string) $spent, 'kind' => $kind, 'note' => self::KIND_NOTES[$kind]];
+        }
+        return $out;
     }
 
     /**
@@ -547,6 +608,17 @@ final class CadenceReplaceRequest {
             foreach (self::CONFIRMATION as $name) {
                 $confirmation[$name] = $body[$name];
             }
+        }
+        // WHAT WAS CONFIRMED, optional and only inside a confirmation: alone it
+        // confirms nothing, and is refused rather than ignored.
+        if (array_key_exists('confirmation_kind', $body)) {
+            if ($present === []) {
+                return 'confirmation_kind travels only with overwrite_adopted, site and issued_at';
+            }
+            if (!in_array($body['confirmation_kind'], self::CONFIRMATION_KINDS, true)) {
+                return 'confirmation_kind, when present, must be text or retranslate';
+            }
+            $confirmation['confirmation_kind'] = $body['confirmation_kind'];
         }
         $optional = [];
         foreach (self::OPTIONAL_TEXT as $name) {

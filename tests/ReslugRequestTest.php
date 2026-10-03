@@ -151,6 +151,14 @@ final class ReslugRequestTest extends TestCase {
         $this->assertArrayHasKey(CadenceReplaceRequest::SPENT_META, WpStub::$meta[self::ID]);
     }
 
+    /** The site's record says a slug change was confirmed, not a text. */
+    public function test_the_record_says_a_slug_change_was_confirmed(): void {
+        $this->assertTrue($this->reslug($this->body())['ok']);
+        $record = CadenceReplaceRequest::confirmations(self::ID);
+        $this->assertSame(['slug'], array_column($record, 'kind'));
+        $this->assertSame('client confirmed this slug change', $record[0]['note']);
+    }
+
     /**
      * ONE ANSWER FOR EVERY POST THIS KEY DOES NOT REACH. A missing id,
      * another key's post (in or out of this key's type scope) and a human's

@@ -1630,4 +1630,115 @@ final class ReplaceRequestTest extends TestCase {
                                         null, CadenceAttest::KEY_ID, null);
         $this->assertSame('bad_replacement', $r['code']);
     }
+
+    // ------------------------------------------------------------------
+    // WHAT THE CLIENT CONFIRMED: the exact text, or a fresh translation they
+    // asked for and never saw. Optional, signed when present, recorded.
+    // ------------------------------------------------------------------
+
+    public static function confirmation_kinds(): array {
+        return ['text' => ['text', 'client confirmed this text'],
+                'retranslate' => ['retranslate', 'client asked for a new translation']];
+    }
+
+    /** Each kind verifies, is written, is answered, and is recorded with its wording. */
+    #[Group('wpml')]
+    #[\PHPUnit\Framework\Attributes\DataProvider('confirmation_kinds')]
+    public function test_a_confirmation_kind_is_signed_written_and_recorded(string $kind, string $note): void {
+        $p = $this->publish();
+        $body = $this->body($p, ['confirmation_kind' => $kind]);
+        $r = $this->replace($body);
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('The rewrite', WpStub::$posts[$p['post_id']]['post_title']);
+        $this->assertSame($kind, $r['confirmation_kind']);
+        $this->assertSame($kind, CadenceRestRoute::respond($r)['body']['confirmation_kind']);
+        $spent = hash('sha256', CadenceAttestation::material('/content/replace',
+            CadenceAttest::fields('/content/replace', $body)));
+        $this->assertSame([['spent' => $spent, 'kind' => $kind, 'note' => $note]],
+                          CadenceReplaceRequest::confirmations($p['post_id']));
+    }
+
+    /** ABSENT IS `text`: the existing caller's body is unchanged, verifies, and is recorded as text. */
+    #[Group('wpml')]
+    public function test_an_absent_kind_is_recorded_as_confirmed_text(): void {
+        $p = $this->publish();
+        $body = $this->body($p);
+        $this->assertArrayNotHasKey('confirmation_kind', $body);
+        $r = $this->replace($body);
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('text', $r['confirmation_kind']);
+        $record = CadenceReplaceRequest::confirmations($p['post_id']);
+        $this->assertSame('text', $record[0]['kind']);
+        $this->assertSame('client confirmed this text', $record[0]['note']);
+    }
+
+    /** A ROW SPENT BEFORE THE KIND EXISTED reads as confirmed text. */
+    public function test_a_spent_row_with_no_kind_reads_as_confirmed_text(): void {
+        add_post_meta(9, CadenceReplaceRequest::SPENT_META, 'old-digest');
+        $this->assertSame([['spent' => 'old-digest', 'kind' => 'text', 'note' => 'client confirmed this text']],
+                          CadenceReplaceRequest::confirmations(9));
+        $this->assertSame([], CadenceReplaceRequest::confirmations(10));
+    }
+
+    /** A post with an old row and a new one keeps each row's own kind, in order. */
+    #[Group('wpml')]
+    public function test_old_and_new_rows_keep_their_own_kinds(): void {
+        $p = $this->publish();
+        add_post_meta($p['post_id'], CadenceReplaceRequest::SPENT_META, 'old-digest');
+        $this->assertTrue($this->replace($this->body($p, ['confirmation_kind' => 'retranslate']))['ok']);
+        $this->assertSame(['text', 'retranslate'],
+            array_column(CadenceReplaceRequest::confirmations($p['post_id']), 'kind'));
+    }
+
+    public static function bad_kinds(): array {
+        return ['unknown' => ['machine'], 'capitalised' => ['Text'], 'blank' => [''],
+                'boolean' => [true], 'null' => [null], 'array' => [['text']]];
+    }
+
+    /** Any value but `text` or `retranslate` is `bad_replacement`, before the signature and any read. */
+    #[Group('wpml')]
+    #[\PHPUnit\Framework\Attributes\DataProvider('bad_kinds')]
+    public function test_an_unknown_kind_is_refused(mixed $kind): void {
+        $p = $this->publish();
+        WpStub::$reads = [];
+        $r = $this->replace($this->body($p, ['confirmation_kind' => $kind]), null, CadenceAttest::KEY_ID, 'v1 x y');
+        $this->assertSame('bad_replacement', $r['code'] ?? null, $r['reason'] ?? '');
+        $this->assertSame([], self::site_reads());
+        $this->assertSame([], WpStub::$updated);
+    }
+
+    /** THE KIND ALONE IS NOT A CONFIRMATION, and is refused rather than ignored. */
+    public function test_a_kind_without_the_confirmation_is_refused(): void {
+        $r = CadenceReplaceRequest::run(['piece_id' => 'p', 'post_id' => 3, 'revision' => 'r',
+                                         'title' => 't', 'content' => 'c', 'confirmation_kind' => 'text'],
+                                        null, CadenceAttest::KEY_ID, null);
+        $this->assertSame('bad_replacement', $r['code']);
+        $this->assertStringContainsString('confirmation_kind', $r['reason']);
+    }
+
+    /** STRIPPED after signing: the site must not record `text` over a signed `retranslate`. */
+    #[Group('wpml')]
+    public function test_a_kind_stripped_after_signing_is_a_mismatch(): void {
+        $p = $this->publish();
+        $signed = $this->body($p, ['confirmation_kind' => 'retranslate']);
+        $sent = $signed;
+        unset($sent['confirmation_kind']);
+        $r = $this->replace($sent, null, CadenceAttest::KEY_ID,
+            CadenceAttest::header('/content/replace', CadenceAttest::fields('/content/replace', $signed),
+                                  CadenceAttest::KEY_ID));
+        $this->assertSame('mismatch', $r['attestation_branch'] ?? null);
+        $this->assertSame([], WpStub::$updated);
+    }
+
+    /** ADDED after signing: an intermediary cannot relabel what the client confirmed. */
+    #[Group('wpml')]
+    public function test_a_kind_added_after_signing_is_a_mismatch(): void {
+        $p = $this->publish();
+        $signed = $this->body($p);
+        $r = $this->replace($signed + ['confirmation_kind' => 'text'], null, CadenceAttest::KEY_ID,
+            CadenceAttest::header('/content/replace', CadenceAttest::fields('/content/replace', $signed),
+                                  CadenceAttest::KEY_ID));
+        $this->assertSame('mismatch', $r['attestation_branch'] ?? null);
+        $this->assertSame([], WpStub::$updated);
+    }
 }

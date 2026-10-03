@@ -433,6 +433,30 @@ final class AttestationTest extends TestCase {
         CadenceAttestation::material('/content/replace', $fields);
     }
 
+    /**
+     * THE CONFIRMATION KIND IS SIGNED RIGHT AFTER `issued_at`, and only when
+     * present: absent, the material is byte-for-byte the one an existing
+     * caller signs (the `replace-with-rewrite-confirmation` vector pins those
+     * bytes); present, its one line sits between `issued_at` and the optional
+     * text.
+     */
+    public function test_the_confirmation_kind_is_signed_after_issued_at_only_when_present(): void {
+        $base = ['piece_id' => 'p', 'post_id' => 41, 'revision' => 'r', 'title' => 'T', 'content' => 'C',
+                 'overwrite_adopted' => 'true', 'site' => 'example.test', 'issued_at' => '2026-09-24T12:00:00Z',
+                 'excerpt' => 'E'];
+        $absent = CadenceAttestation::material('/content/replace', $base);
+        $this->assertStringNotContainsString('confirmation_kind', $absent);
+        $this->assertSame(['piece_id', 'post_id', 'revision', 'title', 'content', 'overwrite_adopted',
+                           'site', 'issued_at', 'confirmation_kind', 'excerpt'],
+            CadenceAttestation::signed_field_order('/content/replace', $base + ['confirmation_kind' => 'x']));
+        foreach (['text', 'retranslate'] as $kind) {
+            $present = CadenceAttestation::material('/content/replace', $base + ['confirmation_kind' => $kind]);
+            $this->assertSame(str_replace("issued_at:20:2026-09-24T12:00:00Z\n",
+                "issued_at:20:2026-09-24T12:00:00Z\nconfirmation_kind:" . strlen($kind) . ':' . $kind . "\n",
+                $absent), $present);
+        }
+    }
+
     /** An integer `post_id` is decimal ASCII, and its length is that string's. */
     public function test_an_integer_post_id_is_decimal_ascii(): void {
         $material = CadenceAttestation::material('/content/replace',

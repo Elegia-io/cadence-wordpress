@@ -119,9 +119,13 @@ final class CadenceAttestation {
         // material, so an intermediary can neither add one nor strip one
         // without a `mismatch`. A five-field body still verifies, and is then
         // refused by the replace route for carrying no confirmation.
+        // `confirmation_kind` follows `issued_at` and is signed the same way:
+        // only when the body carries it, so a body without it signs exactly
+        // the bytes it signed before the field existed.
         '/content/replace'   => ['piece_id', 'post_id', 'revision', 'title', 'content',
                                  self::OPTIONAL . 'overwrite_adopted', self::OPTIONAL . 'site',
-                                 self::OPTIONAL . 'issued_at', self::OPTIONAL . 'excerpt',
+                                 self::OPTIONAL . 'issued_at', self::OPTIONAL . 'confirmation_kind',
+                                 self::OPTIONAL . 'excerpt',
                                  self::OPTIONAL . 'seo_title', self::OPTIONAL . 'seo_description'],
         '/content/reslug'    => ['piece_id', 'post_id', 'old_slug', 'slug', 'overwrite_adopted',
                                  'site', 'issued_at'],

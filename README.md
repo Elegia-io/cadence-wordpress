@@ -456,7 +456,7 @@ something a human took down is the same destruction one field across.
 
 | Status | | |
 |---|---|---|
-| `200` | rewritten | `created: false`, with `post_id` and the new `revision` |
+| `200` | rewritten | `created: false`, with `post_id`, the new `revision` and the `confirmation_kind` the rewrite was recorded under |
 | `400` | the body is wrong | `bad_replacement`; re-sending cannot help |
 | `403` | the key does not reach this post (`post_out_of_scope`: absent, not this connector's, or another key's, told apart by nothing in the reply), or this key's own piece sits in a type it does not name (`existing_post_type_out_of_scope`) | nothing was written; re-reading cannot help |
 | `409` | the site disagrees | nothing was written; re-read and try again |
@@ -667,6 +667,19 @@ confirmation must name this site, be no more than 300 seconds old, and not
 already have been spent by an earlier rewrite: each confirmed rewrite
 records the signed material's digest, so the exact same confirmed body sent
 again inside the window is refused rather than reapplied.
+
+**The confirmation says what the client confirmed.** An optional
+`confirmation_kind` travels with the three fields: `text` when the client
+confirmed the exact new text, `retranslate` when the client asked for a fresh
+translation and never saw the result. Absent means `text`, and a body without
+it signs exactly the bytes it signed before the field existed. Present, it is
+signed right after `issued_at`, so adding or stripping it in transit is a
+`mismatch`. Any other value, or the field without the three, is
+`bad_replacement`. The site keeps the kind beside each spent confirmation
+(`CadenceReplaceRequest::confirmations` reads it back as "client confirmed
+this text" or "client asked for a new translation"; a confirmation spent
+before 0.14.0 reads as `text`, and a slug change as "client confirmed this
+slug change"), and the replace answer carries it as `confirmation_kind`.
 
 ### Answers
 

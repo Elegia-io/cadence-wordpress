@@ -4,7 +4,7 @@ Tags: rest-api, wpml, multilingual, publishing, translation
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 0.13.0
+Stable tag: 0.14.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -69,6 +69,16 @@ Only the translation-linking endpoint does, and it supports WPML 4.5 or newer.
 Publishing and replacing work on a monolingual site with no WPML installed.
 
 == Changelog ==
+
+= 0.14.0 =
+* The replace endpoint accepts an optional, signed `confirmation_kind` with
+  the confirmation: `text` when the client confirmed the exact new text,
+  `retranslate` when the client asked for a fresh translation and did not
+  see the result. Absent means `text`, so existing callers are unchanged.
+  Any other value, or the field without the confirmation, is refused.
+* The site records the kind beside each spent confirmation and the replace
+  answer carries it as `confirmation_kind`. Confirmations recorded before
+  this version read as `text`; a slug change records its own kind.
 
 = 0.13.0 =
 * The replace endpoint requires the client's signed confirmation

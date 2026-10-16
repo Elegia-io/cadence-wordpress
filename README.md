@@ -61,6 +61,16 @@ post types, no front-end output.
 Updates arrive through WordPress.org's plugin directory; the plugin carries no
 updater of its own.
 
+That is a decision, not a gap. Code that downloads an archive and unpacks it
+into a live web root would be the most dangerous thing in this plugin, and
+.org hosting means never writing it; the per-plugin auto-update toggle also
+needs an update source WordPress can find, which for this plugin is .org. So the tree has no update-check hook and
+no `Update URI` header, which would point WordPress away from .org.
+`tests/NoUpdaterTest.php` fails the build on the usual spellings of either.
+If updates are not arriving, the answer is in the .org listing, never in new
+code here. Only a .org refusal that cannot be fixed reopens this, and a
+private update server is then built as a reviewed security change.
+
 ### Issuing a key
 
 Callers authenticate with a **connector key**, not as a WordPress user. On

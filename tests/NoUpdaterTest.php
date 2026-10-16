@@ -23,16 +23,28 @@ use PHPUnit\Framework\TestCase;
  */
 final class NoUpdaterTest extends TestCase {
 
-    /** @return array<string, string> path => source */
+    /**
+     * Every file `build-zip.py` ships from code: the plugin file and all of
+     * `includes/`, recursively and whatever the extension, because the zip
+     * takes `includes` with `rglob("*")`.
+     *
+     * @return array<string, string> path => source
+     */
     private function sources(): array {
         $root = dirname(__DIR__);
-        $paths = array_merge([$root . '/cadence-connector.php'],
-            glob($root . '/includes/*.php') ?: []);
+        $paths = [$root . '/cadence-connector.php'];
+        $walk = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root . '/includes', FilesystemIterator::SKIP_DOTS));
+        foreach ($walk as $f) {
+            if ($f->isFile()) {
+                $paths[] = $f->getPathname();
+            }
+        }
         $out = [];
         foreach ($paths as $p) {
             $src = file_get_contents($p);
             $this->assertIsString($src, "$p could not be read");
-            $out[basename($p)] = $src;
+            $out[substr($p, strlen($root) + 1)] = $src;
         }
         return $out;
     }
@@ -41,7 +53,10 @@ final class NoUpdaterTest extends TestCase {
         $header = file_get_contents(dirname(__DIR__) . '/cadence-connector.php');
         $this->assertIsString($header);
         $this->assertStringContainsString('Plugin Name:', $header);
-        $this->assertDoesNotMatchRegularExpression('/^\s*\*?\s*Update URI\s*:/mi', $header);
+        // WordPress's own get_file_data() prefix, with `\s*` before the colon
+        // so this refuses more than WordPress parses, never less.
+        $this->assertDoesNotMatchRegularExpression(
+            '/^(?:[ \t]*<\?php)?[ \t\/*#@]*Update URI\s*:/mi', $header);
     }
 
     public function test_no_source_file_hooks_the_update_check_or_installs_a_download(): void {
@@ -52,11 +67,17 @@ final class NoUpdaterTest extends TestCase {
         $spellings = [
             'pre_set_site_transient_update_plugins',
             'site_transient_update_plugins',
+            'wp_update_plugins',
             'plugins_api',
             'upgrader_pre_download',
+            // Used, not named: a comment cites WP_Upgrader::create_lock's pattern.
+            'new WP_Upgrader',
+            'extends WP_Upgrader',
             'Plugin_Upgrader',
             'download_url',
             'unzip_file',
+            'ZipArchive',
+            'PclZip',
         ];
         $found = [];
         foreach ($sources as $file => $src) {

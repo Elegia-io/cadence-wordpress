@@ -64,7 +64,7 @@ updater of its own.
 That is a decision, not a gap. Code that downloads an archive and unpacks it
 into a live web root would be the most dangerous thing in this plugin, and
 .org hosting means never writing it; the per-plugin auto-update toggle also
-works only for .org-hosted plugins. So the tree has no update-check hook and
+needs an update source WordPress can find, which for this plugin is .org. So the tree has no update-check hook and
 no `Update URI` header, which would point WordPress away from .org.
 `tests/NoUpdaterTest.php` fails the build on the usual spellings of either.
 If updates are not arriving, the answer is in the .org listing, never in new

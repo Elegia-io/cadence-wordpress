@@ -58,14 +58,17 @@ final class CadenceWpmlMode {
             return null;
         }
         $class = self::$option_class ?? self::OPTION_CLASS;
-        $on = null;
-        if (class_exists($class) && method_exists($class, 'shouldTranslateEverything')) {
-            try {
-                $on = $class::shouldTranslateEverything();
-            } catch (\Throwable $e) {
-                $on = null;
+        $answer = null;
+        // THE LOOKUP IS INSIDE THE `try` TOO: `class_exists` runs the site's
+        // autoloaders, and one that throws is WPML not answering, not a 500.
+        try {
+            if (class_exists($class) && method_exists($class, 'shouldTranslateEverything')) {
+                $answer = $class::shouldTranslateEverything();
             }
+        } catch (\Throwable $e) {
+            $answer = null;
         }
+        $on = self::parse($answer);
         if ($on === false) {
             return null;
         }
@@ -79,5 +82,26 @@ final class CadenceWpmlMode {
             'WPML on this site would not say whether it translates everything automatically, '
             . 'so this connector cannot tell whether WPML would translate this piece by itself. '
             . 'Check that "Translate Everything Automatically" is off in WPML; nothing was %s', $verb)];
+    }
+
+    /**
+     * WPML's answer as on, off, or null for "not an answer".
+     *
+     * The WPML 4.7 to 4.9 source observed returns a bool. The value comes
+     * from a stored option, though, and a stored option can come back in the
+     * plain encodings WordPress and PHP give a boolean: `1`/`'1'` for on,
+     * `0`/`'0'`/`''` for off. Reading only `true` and `false` would refuse
+     * every publish on a site whose option is stored that way, so those are
+     * accepted. Anything else -- null, an array, any other string -- is not
+     * an answer, and stays null.
+     */
+    private static function parse($answer): ?bool {
+        if (in_array($answer, [true, 1, '1'], true)) {
+            return true;
+        }
+        if (in_array($answer, [false, 0, '0', ''], true)) {
+            return false;
+        }
+        return null;
     }
 }

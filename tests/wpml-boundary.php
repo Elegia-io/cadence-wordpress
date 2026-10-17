@@ -34,7 +34,10 @@
  * that does, or gets there through three frames of the plugin. The prefix is
  * the namespace WPML publishes under, not an enumeration of the four hooks
  * this suite happens to stub, so a fifth added tomorrow is inside the
- * boundary on the day it is written.
+ * boundary on the day it is written. A call into a class in WPML's `WPML\`
+ * PHP namespace crosses too: the one such class the plugin calls,
+ * `WPML\Setup\Option`, is stubbed in tests/wpml-setup-option.php, and its
+ * stub records the call under its fully qualified name.
  *
  * IT FAILS IN BOTH DIRECTIONS. A stubbed-lane test that reaches a hook is a
  * crossing; a `#[Group('wpml')]` test that reaches none is a test quietly
@@ -45,7 +48,8 @@
  *
  * WHAT IT DOES NOT OBSERVE, stated because a detector that reports an absence
  * owes the shape of what it cannot see. The recorder sits inside the stubs, so
- * it sees reaches through WPML's HOOK surface and only that. WPML also exposes
+ * it sees reaches through WPML's HOOK surface and the stubbed `WPML\` class
+ * calls, and only those. WPML also exposes
  * a `SitePress` object and `icl_*` functions, and a plugin talking to either
  * would reach WPML without this file noticing.
  *

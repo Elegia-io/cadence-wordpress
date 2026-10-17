@@ -72,7 +72,35 @@ final class WpmlModeTest extends TestCase {
             'class missing'  => [static function (): void { self::point_at('WPML\\Setup\\NoSuchOption'); }],
             'method missing' => [static function (): void { self::point_at(stdClass::class); }],
             'throws'         => [static function (): void { WpStub::$wpml_translate_everything_throws = true; }],
-            'not a boolean'  => [static function (): void { WpStub::$wpml_translate_everything = 1; }],
+            'null'           => [static function (): void { WpStub::$wpml_translate_everything = null; }],
+            'an array'       => [static function (): void { WpStub::$wpml_translate_everything = [true]; }],
+            'another string' => [static function (): void { WpStub::$wpml_translate_everything = 'yes'; }],
+            'autoloader throws' => [static function (): void {
+                self::point_at('WPML\\Setup\\ThrowingOption');
+                spl_autoload_register(self::$throwing_autoloader = static function (string $c): void {
+                    if ($c === 'WPML\\Setup\\ThrowingOption') {
+                        throw new RuntimeException('autoloader failed');
+                    }
+                });
+            }],
+        ];
+    }
+
+    private static ?Closure $throwing_autoloader = null;
+
+    protected function tearDown(): void {
+        if (self::$throwing_autoloader !== null) {
+            spl_autoload_unregister(self::$throwing_autoloader);
+            self::$throwing_autoloader = null;
+        }
+    }
+
+    /** @return array<string, array{mixed, bool}> WPML's answer => whether it reads as on */
+    public static function plain_answers(): array {
+        return [
+            'true' => [true, true], 'int 1' => [1, true], "string '1'" => ['1', true],
+            'false' => [false, false], 'int 0' => [0, false], "string '0'" => ['0', false],
+            'empty string' => ['', false],
         ];
     }
 
@@ -114,6 +142,22 @@ final class WpmlModeTest extends TestCase {
         $this->assertFalse($r['ok']);
         $this->assertSame('wpml_translate_everything_unknown', $r['code']);
         $this->assertNothingPublished();
+    }
+
+    /** Each plain encoding of on is refused, and each of off is published. */
+    #[Group('wpml')]
+    #[DataProvider('plain_answers')]
+    public function test_content_reads_the_plain_encodings_of_the_mode($answer, bool $on): void {
+        WpStub::$wpml_translate_everything = $answer;
+        $r = $this->publish(self::multilingual());
+
+        if ($on) {
+            $this->assertSame('wpml_translate_everything_on', $r['code'] ?? null);
+            $this->assertNothingPublished();
+        } else {
+            $this->assertTrue($r['ok'], $r['reason'] ?? '');
+            $this->assertCount(1, WpStub::$inserted);
+        }
     }
 
     /** No WPML, no such mode: published, even with the stub saying "on". */
@@ -166,6 +210,7 @@ final class WpmlModeTest extends TestCase {
         $this->assertFalse($r['ok']);
         $this->assertSame('wpml_translate_everything_unknown', $r['code']);
         $this->assertSame([], WpStub::$updated, 'the post was rewritten');
+        $this->assertSame([], $GLOBALS['wpdb']->log, 'a transaction was opened');
     }
 
     #[Group('wpml')]

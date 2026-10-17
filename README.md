@@ -401,7 +401,9 @@ A repeat under an identifier that is already used is not an update. A different
 body under the same identifier means the caller believes it is publishing
 something new; the live article is not this plugin's to overwrite on that belief.
 Trashed posts still answer for their identifier, so a piece somebody deleted is
-not resurrected by the next run of the pipeline.
+not resurrected by the next run of the pipeline. While WPML's *Translate
+Everything Automatically* mode is on, a repeat is refused like a first request,
+with `wpml_translate_everything_on`.
 
 **That rule has not changed.** What has changed is that a caller which really
 does mean to rewrite the article now has somewhere to say so (the endpoint

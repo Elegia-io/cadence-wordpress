@@ -1138,7 +1138,11 @@ final class PluginTest extends TestCase {
      *
      * At the route, for the same reason as above: the handler cannot apply a
      * scope the route never hands it.
+     *
+     * In the wpml lane because the accept-proof's write is reached only past
+     * the check that WPML is not translating everything automatically.
      */
+    #[Group('wpml')]
     public function test_a_key_does_not_rewrite_a_pre_stamp_piece_outside_its_types(): void {
         $narrow = CadenceKey::issue('tenant-narrow', ['content.replace'], 7, ['post']);
         $this->assertIsArray($narrow, is_string($narrow) ? $narrow : '');

@@ -552,7 +552,20 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertContains('/content/replace', CadenceAttestation::NO_EXEMPTION);
         $seen[] = 'confirmation_unsigned';
 
-        $this->assertCount(14, array_unique($seen));
+        // AND THE TWO WPML'S "TRANSLATE EVERYTHING AUTOMATICALLY" ADDS: on,
+        // and WPML not saying.
+        foreach (['wpml_translate_everything_on' => true,
+                  'wpml_translate_everything_unknown' => 'yes'] as $expected => $answer) {
+            WpStub::reset();
+            $p = $this->publish();
+            WpStub::$wpml_translate_everything = $answer;
+            $r = $this->replace($this->body($p));
+            $this->assertSame($expected, $r['code'] ?? null, $expected);
+            $this->assertSame([], WpStub::$updated, $expected);
+            $seen[] = $r['code'];
+        }
+
+        $this->assertCount(16, array_unique($seen));
 
         // AND THE PUBLISHED LIST IS THAT LIST, so the coverage test over in
         // RestRouteTest has something real to be measured against: a code added
@@ -1504,7 +1517,7 @@ final class ReplaceRequestTest extends TestCase {
             $this->assertContains($code, CadenceReplaceRequest::REFUSAL_CODES);
             $this->assertSame($status, CadenceRestRoute::STATUS[$code], $code);
         }
-        $this->assertCount(14, CadenceReplaceRequest::REFUSAL_CODES);
+        $this->assertCount(16, CadenceReplaceRequest::REFUSAL_CODES);
     }
 
     /**

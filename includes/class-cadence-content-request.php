@@ -67,7 +67,8 @@ final class CadenceContentRequest {
     public const REFUSAL_CODES = ['bad_request', 'capability_mismatch',
                                  'unsupported_language', 'post_type_out_of_scope',
                                  'existing_post_type_out_of_scope', 'insert_failed',
-                                 CadenceAttestation::CODE];
+                                 CadenceAttestation::CODE,
+                                 CadenceWpmlMode::ON, CadenceWpmlMode::UNKNOWN];
 
     /**
      * @param array    $body       the JSON body, already decoded
@@ -211,6 +212,13 @@ final class CadenceContentRequest {
         $languages = CadenceLanguageDeclaration::verify($body['declared'] ?? null, $fields['language']);
         if ($languages['ok'] !== true) {
             return ['ok' => false, 'code' => $languages['code'], 'reason' => $languages['reason']];
+        }
+        // AND NOT WHILE WPML WOULD TRANSLATE THE PIECE BY ITSELF. Before the
+        // repeat lookup and before any write; after the declaration, which has
+        // already asked whether WPML is here.
+        $mode = CadenceWpmlMode::refusal('published');
+        if ($mode !== null) {
+            return $mode;
         }
         $unsupported = $languages['unsupported'];
         // WHETHER THIS SITE HAS LANGUAGES AT ALL, carried down from the check

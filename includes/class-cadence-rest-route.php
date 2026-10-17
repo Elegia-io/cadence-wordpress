@@ -22,7 +22,7 @@ final class CadenceRestRoute {
      * which reads the header directly and fails the moment a release bumps one
      * without the other, so drift is caught rather than merely discouraged.
      */
-    public const VERSION = '0.15.0';
+    public const VERSION = '0.16.0';
 
     /**
      * THE REPLY'S OWN SHAPE, as a number the caller can compare with `<=`
@@ -300,6 +300,10 @@ final class CadenceRestRoute {
         'source_group_unreadable'    => 500,
         'identifier_mismatch'        => 409,
         'revision_mismatch'          => 409,
+        // WPML's "Translate Everything Automatically" is on, or WPML will not
+        // say whether it is: the site has to change, not the request.
+        'wpml_translate_everything_on'      => 409,
+        'wpml_translate_everything_unknown' => 409,
         'wpml_unavailable'           => 503,
         'no_row_lock'                => 503,
         'insert_failed'              => 500,

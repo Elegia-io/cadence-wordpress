@@ -4,7 +4,7 @@ Tags: rest-api, wpml, multilingual, publishing, translation
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 0.15.0
+Stable tag: 0.16.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -68,7 +68,21 @@ hosted plugin.
 Only the translation-linking endpoint does, and it supports WPML 4.5 or newer.
 Publishing and replacing work on a monolingual site with no WPML installed.
 
+= Does it work with WPML's "Translate Everything Automatically"? =
+
+No. The connector refuses to publish or replace a post while WPML's
+"Translate Everything Automatically" mode is on, because WPML would then
+machine-translate each piece by itself. Switch the mode off in WPML to publish.
+
 == Changelog ==
+
+= 0.16.0 =
+* Publishing and replacing refuse while WPML's "Translate Everything
+  Automatically" mode is on, with `wpml_translate_everything_on` (409) and a
+  reason that says to switch the mode off. Where WPML is active and will not
+  say whether the mode is on, they refuse with
+  `wpml_translate_everything_unknown` (409). Nothing is written either way.
+  A site with no WPML is unaffected.
 
 = 0.15.0 =
 * The post edit screen shows a "Confirmed rewrites" box on any post that has

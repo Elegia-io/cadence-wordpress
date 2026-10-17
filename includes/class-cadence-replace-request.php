@@ -81,6 +81,8 @@ final class CadenceReplaceRequest {
         'confirmation_wrong_site',
         'confirmation_expired',
         'confirmation_spent',
+        CadenceWpmlMode::ON,
+        CadenceWpmlMode::UNKNOWN,
     ];
 
     /**
@@ -281,6 +283,15 @@ final class CadenceReplaceRequest {
                 'the piece %s is on a post of a type this key does not publish into; '
                 . 'this key publishes into %s, and nothing was written',
                 $fields['piece_id'], implode(', ', $post_types))];
+        }
+
+        // AND NOT WHILE WPML WOULD TRANSLATE THE REWRITE BY ITSELF, asked
+        // before the row is locked: it is a fact about the site, not the post.
+        // Placed after the refusals above, which do not ask WPML anything, so
+        // they answer the same with or without it.
+        $mode = CadenceWpmlMode::refusal('written');
+        if ($mode !== null) {
+            return $mode;
         }
 
         // FROM HERE THE ROW IS HELD. Everything above is decided from copies

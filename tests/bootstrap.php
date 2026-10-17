@@ -94,6 +94,14 @@ final class WpStub {
      */
     public static bool $wpml_declines = false;
 
+    /**
+     * WHAT `WPML\Setup\Option::shouldTranslateEverything()` ANSWERS: WPML's
+     * "Translate Everything Automatically" mode. Mixed, not bool, so a test can
+     * hand back something that is not an answer; and a switch to make it throw.
+     */
+    public static mixed $wpml_translate_everything = false;
+    public static bool $wpml_translate_everything_throws = false;
+
     /** @var list<array> every postarr handed to wp_insert_post */
     public static array $inserted = [];
     /** @var list<array> every postarr handed to wp_update_post */
@@ -354,6 +362,9 @@ final class WpStub {
         self::$wpml_write_lands_as = [];
         self::$next_trid = 900;
         self::$wpml_declines = false;
+        self::$wpml_translate_everything = false;
+        self::$wpml_translate_everything_throws = false;
+        (new ReflectionProperty(CadenceWpmlMode::class, 'option_class'))->setValue(null, null);
         self::$inserted = [];
         self::$updated = [];
         self::$meta = [];
@@ -728,6 +739,14 @@ final class WpmlBoundary {
     public const PREFIX = 'wpml_';
 
     /**
+     * WPML's PHP namespace. The one class this plugin calls there,
+     * `WPML\Setup\Option`, is stubbed in tests/wpml-setup-option.php, and its
+     * stub reports here under its fully qualified name, so a call into WPML's
+     * classes crosses the line the same as a hook does.
+     */
+    public const CLASS_PREFIX = 'WPML\\';
+
+    /**
      * A reach nothing could attribute to a test -- a hook fired from a data
      * provider, a shutdown function, or the bootstrap itself. Recorded under
      * its own key rather than dropped: an unattributable crossing is still a
@@ -761,7 +780,8 @@ final class WpmlBoundary {
 
     /** Called by every stub below that answers for WPML, before it answers. */
     public static function reached(string $hook): void {
-        if (self::$log === null || !str_starts_with($hook, self::PREFIX)) {
+        if (self::$log === null
+            || !(str_starts_with($hook, self::PREFIX) || str_starts_with($hook, self::CLASS_PREFIX))) {
             return;
         }
         $test = self::current_test();
@@ -1525,6 +1545,8 @@ require_once __DIR__ . '/../includes/class-cadence-replace-request.php';
 require_once __DIR__ . '/../includes/class-cadence-adopt-request.php';
 require_once __DIR__ . '/../includes/class-cadence-read-request.php';
 require_once __DIR__ . '/../includes/class-cadence-reslug-request.php';
+require_once __DIR__ . '/../includes/class-cadence-wpml-mode.php';
+require_once __DIR__ . '/wpml-setup-option.php';
 
 /**
  * THE SIGNING SIDE, IN THE TEST SUITE ONLY.

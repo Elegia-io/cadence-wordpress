@@ -32,7 +32,8 @@ This plugin exposes an endpoint that writes that relationship through WPML's own
   not refused, but it is outside the supported range. Monolingual sites run the same plugin with no WPML;
   there is no second build, and which one a site is must be **declared** in
   the request rather than detected here. The publishing and replacing
-  endpoints do not need WPML.
+  endpoints do not need WPML. Where WPML is active, they refuse while its
+  *Translate Everything Automatically* mode is on: switch it off to publish.
 
 ## Installing
 
@@ -784,6 +785,8 @@ the reason is prose and changes freely.
 | `confirmation_wrong_site` | 403 | the confirmation was signed for another site; nothing was written |
 | `confirmation_expired` | 403 | the confirmation is more than 300 seconds from this site's clock; nothing was written |
 | `confirmation_spent` | 409 | this exact confirmed rewrite has already been applied; nothing was written |
+| `wpml_translate_everything_on` | 409 | WPML on this site is set to *Translate Everything Automatically*, so it would machine-translate the piece by itself. Switch the mode off in WPML; nothing was written (`/content` and `/content/replace`) |
+| `wpml_translate_everything_unknown` | 409 | WPML is active and would not say whether *Translate Everything Automatically* is on: the setting cannot be read, or WPML answered something that is not yes or no. Nothing was written (`/content` and `/content/replace`) |
 | `bad_adoption` | 400 | the adopt or its preview body is not the shape it claims |
 | `bad_release` | 400 | the release or its preview body is not the shape it claims |
 | `adopt_wrong_site` | 403 | the request was signed for another site; nothing was read or written |

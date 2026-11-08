@@ -108,7 +108,7 @@ function lane(string $phar, string $root, array $select): array {
         }
         // ONE METHOD PER ENTRY, NOT ONE DATA ROW. A provider's rows are the
         // same method and cross or do not cross together, and the recorder
-        // names the method. PHPUnit 11 spells a row `method#3` when the
+        // names the method. PHPUnit 12 spells a row `method#3` when the
         // provider numbers them and `method"blank"` when it names them -- the
         // second is why this is not a `#` split; a PHP method name can hold
         // neither character, so either one is the row label and nothing else.

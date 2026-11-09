@@ -525,7 +525,8 @@ plugin) is refused, as is a post created before this version.
 The post goes to the trash, as WordPress's own REST delete does without
 `force`: restorable until the trash empties itself. The status is read again
 under the row lock, so a draft published by hand in the meantime is refused.
-A site with the trash switched off (`EMPTY_TRASH_DAYS` 0, where WordPress
+A draft in a translation group with other posts is refused, since a trash-sync
+plugin could trash its translations with it. A site with the trash switched off (`EMPTY_TRASH_DAYS` 0, where WordPress
 erases instead of trashing) is refused before anything is touched.
 
 | Status | When | Body |
@@ -533,7 +534,7 @@ erases instead of trashing) is refused before anything is touched.
 | `200` | trashed | `ok: true`, `post_id`, `post_status: "trash"` |
 | `400` | `piece_id`, `post_id`, `site` or `issued_at` missing or the wrong type | `bad_delete` |
 | `403` | the key does not reach the post (`post_out_of_scope`), its type is not on the key (`existing_post_type_out_of_scope`), the connector did not create it (`delete_not_created`), it was signed for another site (`delete_wrong_site`) or too long ago (`delete_expired`), or the request is unsigned or altered (`attestation_unverified`) | nothing was deleted |
-| `409` | the post is not a draft (`delete_not_draft`, the reason names its status), or holds another piece (`identifier_mismatch`) | nothing was deleted |
+| `409` | the post is not a draft (`delete_not_draft`, the reason names its status), holds another piece (`identifier_mismatch`), has translations (`delete_grouped`), or WPML will not name its group (`group_unknown`) | nothing was deleted |
 | `503` | the site would not open a transaction (`no_row_lock`), or has the trash switched off (`delete_trash_disabled`) | nothing was attempted |
 | `500` | WordPress did not trash it (`delete_failed`) | nothing was deleted |
 
@@ -812,6 +813,7 @@ the reason is prose and changes freely.
 | `insert_failed` | 500 | WordPress refused the insert, or returned no id |
 | `bad_delete` | 400 | a delete without a non-blank `piece_id` or an integer `post_id` |
 | `delete_not_created` | 403 | a delete naming a post this connector did not create: adopted, copied from another post, or created before the creation record existed |
+| `delete_grouped` | 409 | a delete naming a draft in a translation group with other posts: a trash-sync plugin could trash them with it |
 | `delete_wrong_site` | 403 | a delete signed for another site |
 | `delete_expired` | 403 | a delete whose `issued_at` is more than 300 seconds from the site's clock |
 | `delete_trash_disabled` | 503 | the site has `EMPTY_TRASH_DAYS` below 1, so trashing would erase |

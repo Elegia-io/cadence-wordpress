@@ -260,6 +260,7 @@ final class CadenceRestRoute {
         'delete_expired'             => 403,
         'delete_trash_disabled'      => 503,
         'delete_not_draft'           => 409,
+        'delete_grouped'             => 409,
         'delete_failed'              => 500,
         'slug_mismatch'              => 409,
         'read_password_protected'    => 403,

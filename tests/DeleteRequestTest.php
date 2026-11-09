@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -45,6 +46,7 @@ final class DeleteRequestTest extends TestCase {
         $this->assertContains($code, CadenceDeleteRequest::REFUSAL_CODES);
     }
 
+    #[Group('wpml')]
     public function test_a_draft_this_connector_created_is_trashed(): void {
         $r = $this->delete($this->body());
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
@@ -85,6 +87,7 @@ final class DeleteRequestTest extends TestCase {
 
     /** Twin: the answering test, a draft. */
     #[DataProvider('not_drafts')]
+    #[Group('wpml')]
     public function test_a_post_that_is_not_a_draft_is_refused(string $status): void {
         WpStub::$posts[self::ID]['post_status'] = $status;
         $r = $this->delete($this->body());
@@ -94,6 +97,7 @@ final class DeleteRequestTest extends TestCase {
     }
 
     /** THE STATUS IS READ AGAIN UNDER THE LOCK: published by hand in between. */
+    #[Group('wpml')]
     public function test_a_draft_published_while_the_lock_was_awaited_is_refused(): void {
         WpStub::$on_lock = static function (): void {
             WpStub::$posts[self::ID]['post_status'] = 'publish';
@@ -137,6 +141,40 @@ final class DeleteRequestTest extends TestCase {
     }
 
     /** Twin: the answering test, issued now. A replay after a restore lands here. */
+    public function test_a_post_without_this_keys_exact_stamp_is_refused(): void {
+        unset(WpStub::$meta[self::ID][CadenceContentRequest::KEY_META]);
+        $this->assertRefused('post_out_of_scope', $this->delete($this->body()));
+    }
+
+    public function test_a_post_carrying_an_adoption_record_is_refused(): void {
+        WpStub::$meta[self::ID][CadenceAdoptRequest::ADOPTED_META] = '{"adopted":true}';
+        $this->assertRefused('delete_not_created', $this->delete($this->body()));
+    }
+
+    /** Twin: the answering test, alone in no group. */
+    #[Group('wpml')]
+    public function test_a_draft_with_translations_is_refused(): void {
+        WpStub::$posts[self::ID]['trid'] = 7;
+        WpStub::$posts[32] = ['post_type' => 'post', 'post_status' => 'publish', 'language' => 'de',
+                              'trid' => 7, 'post_title' => 'T', 'post_content' => 'C'];
+        $r = $this->delete($this->body());
+        $this->assertRefused('delete_grouped', $r);
+        $this->assertStringContainsString('32', $r['reason']);
+    }
+
+    #[Group('wpml')]
+    public function test_a_draft_alone_in_its_group_is_trashed(): void {
+        WpStub::$posts[self::ID]['trid'] = 7;
+        $r = $this->delete($this->body());
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+    }
+
+    #[Group('wpml')]
+    public function test_a_group_wpml_will_not_name_is_refused(): void {
+        WpStub::$posts[self::ID]['wpml_knows'] = false;
+        $this->assertRefused('group_unknown', $this->delete($this->body()));
+    }
+
     public function test_an_old_delete_is_refused(): void {
         $this->assertRefused('delete_expired', $this->delete($this->body(['issued_at' => '2020-01-01T00:00:00Z'])));
     }
@@ -210,11 +248,13 @@ final class DeleteRequestTest extends TestCase {
         $this->assertSame('exempt_refused', $r['attestation_branch']);
     }
 
+    #[Group('wpml')]
     public function test_no_transaction_is_refused(): void {
         $GLOBALS['wpdb']->fails_on = 'START TRANSACTION';
         $this->assertRefused('no_row_lock', $this->delete($this->body()));
     }
 
+    #[Group('wpml')]
     public function test_a_trash_wordpress_refuses_rolls_back(): void {
         WpStub::$trash_fails = true;
         $r = $this->delete($this->body());

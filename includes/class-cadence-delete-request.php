@@ -41,6 +41,8 @@ final class CadenceDeleteRequest {
         'delete_expired',
         'delete_not_created',
         'delete_trash_disabled',
+        'group_unknown',
+        'delete_grouped',
         'delete_not_draft',
         'no_row_lock',
         'delete_failed',
@@ -98,6 +100,13 @@ final class CadenceDeleteRequest {
             return ['ok' => false, 'code' => 'post_out_of_scope', 'reason' =>
                     'the post_id does not name a post this key published or adopted; nothing was deleted'];
         }
+        // THIS KEY'S STAMP, EXACTLY: no null-identity path here. A post that
+        // lost or never got its key stamp is no key's to delete.
+        if (!is_string($key_id) || trim($key_id) === ''
+                || get_post_meta($post_id, CadenceContentRequest::KEY_META, true) !== $key_id) {
+            return ['ok' => false, 'code' => 'post_out_of_scope', 'reason' =>
+                    'the post_id does not name a post this key published or adopted; nothing was deleted'];
+        }
         if (get_post_meta($post_id, CadenceContentRequest::META, true) !== $fields['piece_id']) {
             return self::refuse('identifier_mismatch', sprintf(
                 'post %d is not `%s` on this site; nothing was deleted', $post_id, $fields['piece_id']));
@@ -110,7 +119,8 @@ final class CadenceDeleteRequest {
         // THE CREATION RECORD, which only `/content`'s insert writes. An adopted
         // post, or one created before the record existed, has none.
         // Bound to the row: a copy of the stamp on another post holds another id.
-        if (get_post_meta($post_id, CadenceContentRequest::CREATED_META, true) !== (string) $post_id) {
+        if (get_post_meta($post_id, CadenceContentRequest::CREATED_META, true) !== (string) $post_id
+                || get_post_meta($post_id, CadenceAdoptRequest::ADOPTED_META, true) !== '') {
             return self::refuse('delete_not_created', sprintf(
                 'post %d was not created by this connector (adopted, copied from another post, or created '
                 . 'before the connector recorded creation); nothing was deleted', $post_id));
@@ -122,6 +132,26 @@ final class CadenceDeleteRequest {
             return self::refuse('delete_trash_disabled', sprintf(
                 'this site has the trash switched off (EMPTY_TRASH_DAYS is below 1), so trashing post %d '
                 . 'would erase it; nothing was deleted', $post_id));
+        }
+        // ALONE IN ITS TRANSLATION GROUP, as `/adopt/release` asks: a trash-sync
+        // bridge can trash a whole group with its draft, published posts
+        // included. Asked only of a multilingual site; a silent WPML refuses.
+        if (has_filter('wpml_element_language_details')) {
+            $element_type = 'post_' . get_post_type($post_id);
+            $trid = CadenceLinkRequest::current_trid($post_id, $element_type);
+            $outside = $trid === null ? []
+                : ($trid === false ? false
+                    : CadenceLinkRequest::members_outside_plan($trid, $element_type, [['post_id' => $post_id]]));
+            if ($outside === false) {
+                return self::refuse('group_unknown', sprintf(
+                    'WPML would not say which posts share post %d\'s translation group; nothing was deleted',
+                    $post_id));
+            }
+            if ($outside !== []) {
+                return self::refuse('delete_grouped', sprintf(
+                    'post %d has translations (%s); trashing it could trash them too, so nothing was deleted',
+                    $post_id, implode(', ', $outside)));
+            }
         }
 
         global $wpdb;

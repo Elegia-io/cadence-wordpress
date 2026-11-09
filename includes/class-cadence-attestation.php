@@ -145,9 +145,9 @@ final class CadenceAttestation {
         // writes nothing but answers a post's text, so one captured body must
         // not replay forever or on another site the tenant's key is pasted on.
         '/content/read'      => ['link', 'site', 'issued_at'],
-        // THE DELETE SIGNS WHICH POST AND WHICH PIECE. No site or time: a
-        // replay can only trash the same draft again, and that one is gone.
-        '/content/delete'    => ['piece_id', 'post_id'],
+        // THE DELETE SIGNS WHICH POST, WHICH PIECE, WHICH SITE AND WHEN: a
+        // draft restored from the trash must not be re-trashed by a replay.
+        '/content/delete'    => ['piece_id', 'post_id', 'site', 'issued_at'],
         '/translation-group' => ['trid', 'create_group', 'piece_id', self::MEMBERS],
         // THE ADOPT ROUTES SIGN WHICH SITE AND WHEN, last. Without `site` one
         // signed body serves every site the tenant's public key is pasted on;

@@ -50,9 +50,16 @@ final class CadenceContentRequest {
     public const KEY_META = '_cadence_key';
 
     /**
-     * WRITTEN ONLY BY THIS ROUTE'S INSERT, in the same call as `META`: the
-     * record that the connector created the post, which `/adopt` never
-     * writes. `/content/delete` reaches no post without it.
+     * WRITTEN ONLY BY THIS ROUTE, just after its insert: the record that the
+     * connector created the post, which `/adopt` never writes.
+     * `/content/delete` reaches no post without it.
+     *
+     * ITS VALUE IS THE POST'S OWN ID, so the record is bound to the row: a
+     * duplication or import plugin that copies every meta row onto a human's
+     * new draft copies an id that is not that draft's, and the delete refuses
+     * it. Written after the insert, not in `meta_input`, because the id does
+     * not exist before; a write that fails leaves a post the route cannot
+     * delete, which is the safe side.
      */
     public const CREATED_META = '_cadence_created';
 
@@ -302,7 +309,7 @@ final class CadenceContentRequest {
             // afterwards leaves a window in which the post exists without it,
             // and a retry landing in that window is exactly the duplicate this
             // class exists to prevent.
-            'meta_input'   => [self::META => $fields['piece_id'], self::CREATED_META => '1'],
+            'meta_input'   => [self::META => $fields['piece_id']],
         ];
         // THE CREATING KEY'S IDENTITY, in the same call and for the same
         // reason as the identifier beside it. Null for a caller this route
@@ -351,6 +358,7 @@ final class CadenceContentRequest {
             return ['ok' => false, 'code' => 'insert_failed',
                     'reason' => 'WordPress returned no post id and no error'];
         }
+        add_post_meta($id, self::CREATED_META, (string) $id, true);
 
         // The revision is read back rather than computed from the body: what
         // WordPress stores is what it was given after `wp_kses` and the save

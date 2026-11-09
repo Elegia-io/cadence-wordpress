@@ -20,11 +20,12 @@ final class DeleteRequestTest extends TestCase {
                                     'trid' => null, 'post_title' => 'T', 'post_content' => 'C'];
         WpStub::$meta[self::ID] = [CadenceContentRequest::META => 'piece-1',
                                    CadenceContentRequest::KEY_META => CadenceAttest::KEY_ID,
-                                   CadenceContentRequest::CREATED_META => '1'];
+                                   CadenceContentRequest::CREATED_META => (string) self::ID];
     }
 
     private function body(array $over = []): array {
-        return array_merge(['piece_id' => 'piece-1', 'post_id' => self::ID], $over);
+        return array_merge(['piece_id' => 'piece-1', 'post_id' => self::ID, 'site' => 'example.test',
+                            'issued_at' => gmdate('Y-m-d\\TH:i:s\\Z')], $over);
     }
 
     private function delete(array $body, ?string $key_id = CadenceAttest::KEY_ID,
@@ -58,11 +59,15 @@ final class DeleteRequestTest extends TestCase {
 
     /** @return array<string, array{0: array}> */
     public static function missing_ids(): array {
-        return ['no post_id' => [['piece_id' => 'piece-1']],
-                'post_id a string' => [['piece_id' => 'piece-1', 'post_id' => (string) self::ID]],
-                'post_id zero' => [['piece_id' => 'piece-1', 'post_id' => 0]],
-                'no piece_id' => [['post_id' => self::ID]],
-                'blank piece_id' => [['piece_id' => ' ', 'post_id' => self::ID]],
+        $ok = ['piece_id' => 'piece-1', 'post_id' => self::ID, 'site' => 'example.test',
+               'issued_at' => '2026-01-01T00:00:00Z'];
+        return ['no post_id' => [array_diff_key($ok, ['post_id' => 0])],
+                'post_id a string' => [['post_id' => (string) self::ID] + $ok],
+                'post_id zero' => [['post_id' => 0] + $ok],
+                'no piece_id' => [array_diff_key($ok, ['piece_id' => 0])],
+                'blank piece_id' => [['piece_id' => ' '] + $ok],
+                'no site' => [array_diff_key($ok, ['site' => 0])],
+                'no issued_at' => [array_diff_key($ok, ['issued_at' => 0])],
                 'empty body' => [[]]];
     }
 
@@ -109,9 +114,42 @@ final class DeleteRequestTest extends TestCase {
         $this->assertSame('draft', WpStub::$posts[self::ID]['post_status']);
     }
 
-    public function test_a_creation_record_with_another_value_is_refused(): void {
-        WpStub::$meta[self::ID][CadenceContentRequest::CREATED_META] = 'yes';
+    /** A DUPLICATION PLUGIN copied every stamp from post 30 onto this human's draft. */
+    public function test_a_creation_record_copied_from_another_post_is_refused(): void {
+        WpStub::$meta[self::ID][CadenceContentRequest::CREATED_META] = '30';
         $this->assertRefused('delete_not_created', $this->delete($this->body()));
+    }
+
+    public function test_the_trash_switched_off_is_refused_before_anything(): void {
+        $this->assertTrue(CadenceDeleteRequest::trash_kept(30));
+        $this->assertTrue(CadenceDeleteRequest::trash_kept(1));
+        $this->assertFalse(CadenceDeleteRequest::trash_kept(0));
+        $this->assertFalse(CadenceDeleteRequest::trash_kept(-1));
+        $source = file_get_contents(dirname(__DIR__) . '/includes/class-cadence-delete-request.php');
+        $this->assertStringContainsString(
+            "self::trash_kept(defined('EMPTY_TRASH_DAYS') ? (int) EMPTY_TRASH_DAYS : 0)", $source);
+        $this->assertContains('delete_trash_disabled', CadenceDeleteRequest::REFUSAL_CODES);
+    }
+
+    /** Twin: the answering test, signed for this site. */
+    public function test_a_delete_signed_for_another_site_is_refused(): void {
+        $this->assertRefused('delete_wrong_site', $this->delete($this->body(['site' => 'other.test'])));
+    }
+
+    /** Twin: the answering test, issued now. A replay after a restore lands here. */
+    public function test_an_old_delete_is_refused(): void {
+        $this->assertRefused('delete_expired', $this->delete($this->body(['issued_at' => '2020-01-01T00:00:00Z'])));
+    }
+
+    /** @return array<string, array{0: string}> statuses `admits` never reaches */
+    public static function unplaced(): array {
+        return ['auto-draft' => ['auto-draft'], 'inherit' => ['inherit'], 'custom' => ['in-review']];
+    }
+
+    #[DataProvider('unplaced')]
+    public function test_a_post_in_a_status_cadence_never_places_is_refused(string $status): void {
+        WpStub::$posts[self::ID]['post_status'] = $status;
+        $this->assertRefused('post_out_of_scope', $this->delete($this->body()));
     }
 
     /** A post with no connector stamp at all: out of scope, before anything finer. */

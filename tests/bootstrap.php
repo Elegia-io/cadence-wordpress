@@ -1458,6 +1458,8 @@ function get_current_user_id(): int {
 // the same reason WordPress's own test suite defines it: the guard is only
 // disarmed by being genuinely loaded inside WordPress.
 define('ABSPATH', '/wordpress/');
+// Core's default, from wp-includes/default-constants.php.
+define('EMPTY_TRASH_DAYS', 30);
 
 /**
  * Enough of WordPress's plugin API to load the entry file and see what it

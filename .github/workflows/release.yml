@@ -75,6 +75,10 @@ jobs:
       # came from, and the check runs on that pull request's head.
       pull-requests: read
       checks: read
+      # Read-only, for the Dependabot gate: GITHUB_TOKEN reads Dependabot alerts
+      # only with this key (`security-events` is code scanning).
+      # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions
+      vulnerability-alerts: read
     outputs:
       version: ${{ steps.plan.outputs.version }}
       gh_done: ${{ steps.plan.outputs.gh_done }}
@@ -84,6 +88,28 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # NO RELEASE WITH OPEN DEPENDABOT ALERTS (Elegia-io/cadence issue 2488).
+      # First, on every run, so `github` and `wordpress` never start while one is
+      # open; a push that releases nothing goes red too, on purpose: the alert is
+      # the thing to fix. 0 passes; 3 is open alerts; 2 is "measured nothing" (a 403, alerts
+      # disabled, an unparsable page), never read as zero. Only the alert number,
+      # severity and package are printed; nothing reaches $GITHUB_OUTPUT.
+      - name: Refuse while the repository has open Dependabot alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          set +e
+          python3 -I check-dependabot-alerts.py --repo "$GITHUB_REPOSITORY"
+          rc=$?
+          set -e
+          case "$rc" in
+            0) ;;
+            3) echo "::error::open Dependabot alerts: fix or dismiss them, then push again"; exit 1 ;;
+            2) echo "::error::the Dependabot gate measured nothing -- a breakage, not a pass"; exit 2 ;;
+            *) echo "::error::the Dependabot gate exited $rc, which it does not define -- refusing"; exit 2 ;;
+          esac
 
       - name: Read the version, and decide what is left to do
         id: plan

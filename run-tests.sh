@@ -38,6 +38,7 @@ $PODMAN run --rm --entrypoint php \
 python3 "${HERE}/tests/build_zip_test.py"
 # And what the release workflow decides, also a host script.
 python3 "${HERE}/tests/release_plan_test.py"
+python3 "${HERE}/tests/dependabot_alerts_test.py"
 
 # AND THE BOUNDARY BETWEEN THE TWO LANES, unconditionally -- including after a
 # run narrowed by "$@", since the check measures the whole suite and what a

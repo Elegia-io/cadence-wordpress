@@ -853,7 +853,9 @@ from against the number every install reports.
 version. The plugin header `Version`, `readme.txt` `Stable tag` and
 `CadenceRestRoute::VERSION` must agree, or the run refuses. A push that bumps
 nothing finds its GitHub release and WordPress.org tag already there, and does
-nothing. Before releasing, it refuses unless the commit is a merged pull request
+nothing. It refuses first while the repository has an open
+Dependabot alert, and when it cannot read the alerts (`check-dependabot-alerts.py`,
+tested by `tests/dependabot_alerts_test.py`). Before releasing, it refuses unless the commit is a merged pull request
 whose head had the same tree and passed the three required checks, run by
 GitHub Actions. A GitHub release that already exists must be published and
 tagged on the same tree, so a later push cannot finish it with other code.

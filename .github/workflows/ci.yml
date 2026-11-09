@@ -197,3 +197,7 @@ jobs:
       # so a change to it is tested here before it can release anything.
       - name: What the release workflow decides
         run: python3 tests/release_plan_test.py
+
+      # The Dependabot gate release.yml runs first (Elegia-io/cadence issue 2488).
+      - name: No release with open Dependabot alerts
+        run: python3 tests/dependabot_alerts_test.py

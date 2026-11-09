@@ -40,7 +40,8 @@ final class ReadmeContractTest extends TestCase {
         $published = array_unique(array_merge(
             CadenceContentRequest::REFUSAL_CODES,
             CadenceReplaceRequest::REFUSAL_CODES,
-            CadenceLinkRequest::REFUSAL_CODES
+            CadenceLinkRequest::REFUSAL_CODES,
+            CadenceDeleteRequest::REFUSAL_CODES
         ));
         // A DENOMINATOR, so a constant emptied by an edit cannot make this pass
         // by having nothing to look for.

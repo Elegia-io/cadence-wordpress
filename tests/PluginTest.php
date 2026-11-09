@@ -37,7 +37,7 @@ final class PluginTest extends TestCase {
         // about a different endpoint the day one is registered above it, and
         // still passes while doing so.
         $this->assertSame(['/translation-group', '/content', '/content/replace', '/content/read',
-                           '/content/reslug',
+                           '/content/reslug', '/content/delete',
                            '/adopt/preview', '/adopt',
                            '/adopt/release/preview', '/adopt/release'],
             array_keys($this->routes));
@@ -59,6 +59,20 @@ final class PluginTest extends TestCase {
                 $path . ' let in a key without content.adopt');
             $this->assertTrue($permit(new WP_REST_Request(['post_id' => 41], $this->key($adopter))), $path);
         }
+    }
+
+    /** DELETING A DRAFT takes `content.publish`, the grant that created it, and refuses a body without ids. */
+    public function test_the_delete_route_takes_a_publishing_key(): void {
+        $other = CadenceKey::issue('tenant-a', ['content.replace', 'translation.link', 'content.adopt'], 7);
+        $publisher = CadenceKey::issue('tenant-b', ['content.publish'], 7);
+        $permit = $this->routes['/content/delete']['permission_callback'];
+        $this->assertSame('POST', $this->routes['/content/delete']['methods']);
+        $this->assertFalse($permit(new WP_REST_Request(['post_id' => 41], WP_REST_Request::NO_KEY)));
+        $this->assertFalse($permit(new WP_REST_Request(['post_id' => 41], $this->key($other))));
+        $this->assertTrue($permit(new WP_REST_Request(['post_id' => 41], $this->key($publisher))));
+        $r = ($this->routes['/content/delete']['callback'])(new WP_REST_Request(null));
+        $this->assertSame(400, $r->get_status());
+        $this->assertSame('bad_delete', $r->get_data()['code']);
     }
 
     /** The route hands the body to the adopt code and answers its status. */

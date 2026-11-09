@@ -388,6 +388,15 @@ final class ContentRequestTest extends TestCase {
      * written afterwards leaves a window in which the post carries no identity.
      */
     #[Group('wpml')]
+    public function test_the_created_post_carries_the_creation_record(): void {
+        $r = $this->publish($this->body(), ['content.replace'], null, null, 'aaaa1111');
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        // The post's own id, so a copy of the stamp on another post does not match.
+        $this->assertSame((string) $r['post_id'],
+            WpStub::$meta[$r['post_id']][CadenceContentRequest::CREATED_META] ?? null);
+    }
+
+    #[Group('wpml')]
     public function test_the_created_post_carries_the_creating_keys_id(): void {
         $r = $this->publish($this->body(), ['content.replace'], null, null, 'aaaa1111');
 

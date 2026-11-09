@@ -50,6 +50,20 @@ final class CadenceContentRequest {
     public const KEY_META = '_cadence_key';
 
     /**
+     * WRITTEN ONLY BY THIS ROUTE, just after its insert: the record that the
+     * connector created the post, which `/adopt` never writes.
+     * `/content/delete` reaches no post without it.
+     *
+     * ITS VALUE IS THE POST'S OWN ID, so the record is bound to the row: a
+     * duplication or import plugin that copies every meta row onto a human's
+     * new draft copies an id that is not that draft's, and the delete refuses
+     * it. Written after the insert, not in `meta_input`, because the id does
+     * not exist before; a write that fails leaves a post the route cannot
+     * delete, which is the safe side.
+     */
+    public const CREATED_META = '_cadence_created';
+
+    /**
      * The statuses this endpoint means, and no others.
      *
      * WordPress accepts ANY string as a post status and stores it. A typo, or
@@ -344,6 +358,7 @@ final class CadenceContentRequest {
             return ['ok' => false, 'code' => 'insert_failed',
                     'reason' => 'WordPress returned no post id and no error'];
         }
+        add_post_meta($id, self::CREATED_META, (string) $id, true);
 
         // The revision is read back rather than computed from the body: what
         // WordPress stores is what it was given after `wp_kses` and the save

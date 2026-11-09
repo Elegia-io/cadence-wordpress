@@ -15,6 +15,9 @@ final class WpStub {
     public static string $home = 'https://example.test/';
     /** @var array<int, array{post_type: string, language: string, trid: int|null}> */
     public static array $posts = [];
+    /** Ids `wp_trash_post` trashed, in order; and the switch that makes it fail. */
+    public static array $trashed = [];
+    public static bool $trash_fails = false;
     /** @var list<array> every wpml_set_element_language_details call */
     public static array $writes = [];
 
@@ -350,6 +353,8 @@ final class WpStub {
     }
 
     public static function reset(): void {
+        self::$trashed = [];
+        self::$trash_fails = false;
         self::$home = 'https://example.test/';
         self::$posts = [];
         self::$writes = [];
@@ -595,6 +600,7 @@ final class WpdbStub {
             'post_title'   => $over['post_title']   ?? ($post['post_title']   ?? ''),
             'post_content' => $over['post_content'] ?? ($post['post_content'] ?? ''),
             'post_name'    => $over['post_name']    ?? ($post['post_name']    ?? ''),
+            'post_status'  => $over['post_status']  ?? ($post['post_status']  ?? 'draft'),
         ];
     }
 
@@ -653,6 +659,19 @@ function get_post($post_id = null): ?WP_Post {
  * from the row rather than from what was read before. See
  * `WpStub::$cache_cleared`.
  */
+/**
+ * WordPress's `wp_trash_post`: the post, or false/null when it was not
+ * trashed. `$trash_fails` answers false and changes nothing.
+ */
+function wp_trash_post(int $post_id = 0) {
+    if (WpStub::$trash_fails || !isset(WpStub::$posts[$post_id])) {
+        return false;
+    }
+    WpStub::$trashed[] = $post_id;
+    WpStub::$posts[$post_id]['post_status'] = 'trash';
+    return get_post($post_id);
+}
+
 function clean_post_cache(int $post_id): void {
     // THE DOCUMENTED NO-OP: real WordPress skips the invalidation entirely
     // while `wp_suspend_cache_invalidation()` is on, which is why a caller
@@ -1439,6 +1458,8 @@ function get_current_user_id(): int {
 // the same reason WordPress's own test suite defines it: the guard is only
 // disarmed by being genuinely loaded inside WordPress.
 define('ABSPATH', '/wordpress/');
+// Core's default, from wp-includes/default-constants.php.
+define('EMPTY_TRASH_DAYS', 30);
 
 /**
  * Enough of WordPress's plugin API to load the entry file and see what it
@@ -1545,6 +1566,7 @@ require_once __DIR__ . '/../includes/class-cadence-replace-request.php';
 require_once __DIR__ . '/../includes/class-cadence-adopt-request.php';
 require_once __DIR__ . '/../includes/class-cadence-read-request.php';
 require_once __DIR__ . '/../includes/class-cadence-reslug-request.php';
+require_once __DIR__ . '/../includes/class-cadence-delete-request.php';
 require_once __DIR__ . '/../includes/class-cadence-wpml-mode.php';
 require_once __DIR__ . '/wpml-setup-option.php';
 

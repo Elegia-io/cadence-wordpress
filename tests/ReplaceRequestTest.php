@@ -155,7 +155,8 @@ final class ReplaceRequestTest extends TestCase {
     #[Group('wpml')]
     public function test_the_revision_is_not_recorded_on_the_post(): void {
         $published = $this->publish();
-        $this->assertSame([CadenceContentRequest::META, CadenceContentRequest::KEY_META],
+        $this->assertSame([CadenceContentRequest::META, CadenceContentRequest::CREATED_META,
+                           CadenceContentRequest::KEY_META],
             array_keys(WpStub::$meta[$published['post_id']]),
             'a stored revision cannot notice the hand edit it exists to notice');
     }

@@ -32,6 +32,7 @@ require_once __DIR__ . '/includes/class-cadence-replace-request.php';
 require_once __DIR__ . '/includes/class-cadence-adopt-request.php';
 require_once __DIR__ . '/includes/class-cadence-read-request.php';
 require_once __DIR__ . '/includes/class-cadence-reslug-request.php';
+require_once __DIR__ . '/includes/class-cadence-delete-request.php';
 require_once __DIR__ . '/includes/class-cadence-rest-route.php';
 require_once __DIR__ . '/includes/class-cadence-admin.php';
 
@@ -201,6 +202,26 @@ add_action('rest_api_init', static function (): void {
         },
         'permission_callback' => static function ($request): bool {
             return CadenceKey::authorises($request->get_header(CadenceKey::HEADER), 'content.replace');
+        },
+    ]);
+
+    // TRASHING A DRAFT THIS CONNECTOR CREATED, for the key that created it:
+    // the same capability that created it, and nothing it did not create or
+    // that is not still a draft (`CadenceDeleteRequest`).
+    register_rest_route('cadence/v1', '/content/delete', [
+        'methods'  => 'POST',
+        'callback' => static function ($request) {
+            $result = CadenceDeleteRequest::run(
+                (array) $request->get_json_params(),
+                CadenceKey::publish_types_for($request->get_header(CadenceKey::HEADER)),
+                CadenceKey::key_id_for($request->get_header(CadenceKey::HEADER)),
+                $request->get_header(CadenceAttestation::HEADER)
+            );
+            $answer = CadenceRestRoute::respond($result);
+            return new WP_REST_Response($answer['body'], $answer['status']);
+        },
+        'permission_callback' => static function ($request): bool {
+            return CadenceKey::authorises($request->get_header(CadenceKey::HEADER), 'content.publish');
         },
     ]);
 

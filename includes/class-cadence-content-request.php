@@ -50,6 +50,13 @@ final class CadenceContentRequest {
     public const KEY_META = '_cadence_key';
 
     /**
+     * WRITTEN ONLY BY THIS ROUTE'S INSERT, in the same call as `META`: the
+     * record that the connector created the post, which `/adopt` never
+     * writes. `/content/delete` reaches no post without it.
+     */
+    public const CREATED_META = '_cadence_created';
+
+    /**
      * The statuses this endpoint means, and no others.
      *
      * WordPress accepts ANY string as a post status and stores it. A typo, or
@@ -295,7 +302,7 @@ final class CadenceContentRequest {
             // afterwards leaves a window in which the post exists without it,
             // and a retry landing in that window is exactly the duplicate this
             // class exists to prevent.
-            'meta_input'   => [self::META => $fields['piece_id']],
+            'meta_input'   => [self::META => $fields['piece_id'], self::CREATED_META => '1'],
         ];
         // THE CREATING KEY'S IDENTITY, in the same call and for the same
         // reason as the identifier beside it. Null for a caller this route

@@ -67,7 +67,7 @@ env:
 
 jobs:
   plan:
-    runs-on: ubuntu-26.04-arm
+    runs-on: ${{ vars.WP_RUNNER || 'ubuntu-26.04-arm' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -174,7 +174,7 @@ jobs:
   github:
     needs: plan
     if: needs.plan.outputs.noop == '0' || inputs.dry_run
-    runs-on: ubuntu-26.04-arm
+    runs-on: ${{ vars.WP_RUNNER || 'ubuntu-26.04-arm' }}
     timeout-minutes: 10
     permissions:
       contents: write
@@ -208,7 +208,7 @@ jobs:
   wordpress:
     needs: [plan, github]
     if: needs.plan.outputs.svn_done == '0' || inputs.dry_run
-    runs-on: ubuntu-26.04-arm
+    runs-on: ${{ vars.WP_RUNNER || 'ubuntu-26.04-arm' }}
     timeout-minutes: 10
     environment: wordpress-org
     permissions:

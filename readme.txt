@@ -4,7 +4,7 @@ Tags: rest-api, wpml, multilingual, publishing, translation
 Requires at least: 6.5
 Tested up to: 7.2
 Requires PHP: 8.1
-Stable tag: 0.16.0
+Stable tag: 0.16.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -75,6 +75,11 @@ No. The connector refuses to publish or replace a post while WPML's
 machine-translate each piece by itself. Switch the mode off in WPML to publish.
 
 == Changelog ==
+
+= 0.16.1 =
+* Tested with WordPress 7.2.
+* Fixes a PHP 8.6 deprecation (null array offset) when the connector refuses a
+  request with no error code.
 
 = 0.16.0 =
 * Publishing and replacing refuse while WPML's "Translate Everything

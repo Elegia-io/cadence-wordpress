@@ -160,7 +160,9 @@ final class CadenceRestRoute {
         if (isset($result['report']) && is_array($result['report'])) {
             $body = array_merge($body, $result['report']);
         }
-        return ['status' => self::STATUS[$code] ?? 500, 'body' => $body];
+        // A refusal with no code is a 500 too; null is never used as an offset,
+        // which PHP 8.6 deprecates.
+        return ['status' => is_string($code) ? (self::STATUS[$code] ?? 500) : 500, 'body' => $body];
     }
 
     /**

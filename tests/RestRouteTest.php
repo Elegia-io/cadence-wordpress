@@ -276,7 +276,20 @@ final class RestRouteTest extends TestCase {
         foreach ([['ok' => false, 'code' => 'invented_later', 'reason' => 'x'],
                   ['ok' => false, 'reason' => 'x'],
                   ['ok' => false]] as $i => $refusal) {
-            $r = CadenceRestRoute::respond($refusal);
+            // AND WITHOUT A NOTICE. PHP 8.6 deprecates a null array offset, and
+            // a refusal with no code is one; on a WP_DEBUG site the notice is
+            // printed ahead of the JSON reply.
+            $notices = [];
+            set_error_handler(static function (int $no, string $msg) use (&$notices): bool {
+                $notices[] = $msg;
+                return true;
+            });
+            try {
+                $r = CadenceRestRoute::respond($refusal);
+            } finally {
+                restore_error_handler();
+            }
+            $this->assertSame([], $notices, (string) $i);
             $this->assertSame(500, $r['status'], (string) $i);
             $this->assertArrayNotHasKey('written', $r['body']);
         }

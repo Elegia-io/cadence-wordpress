@@ -81,6 +81,7 @@ final class CadenceReplaceRequest {
         'confirmation_wrong_site',
         'confirmation_expired',
         'confirmation_spent',
+        'retranslate_live',
         CadenceWpmlMode::ON,
         CadenceWpmlMode::UNKNOWN,
     ];
@@ -111,6 +112,12 @@ final class CadenceReplaceRequest {
      * fresh translation they asked for and never saw (`retranslate`).
      */
     public const CONFIRMATION_KINDS = ['text', 'retranslate'];
+
+    /**
+     * The statuses a `retranslate` may replace the text of. Any other status
+     * is live, or set to go live, and a retranslate is text nobody saw.
+     */
+    public const RETRANSLATE_STATUSES = ['draft', 'pending'];
 
     /**
      * How the site's record states each kind. `slug` is a confirmed address
@@ -310,11 +317,12 @@ final class CadenceReplaceRequest {
         }
 
         try {
-            // The two fields a replacement overwrites, and no others: a
-            // refusal over anything else would refuse work that is safe.
+            // The two fields a replacement overwrites, and the status a
+            // retranslate is refused over: a refusal over anything else
+            // would refuse work that is safe.
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- a prepared SELECT ... FOR UPDATE row lock; no API takes one, and a cached read would defeat the lock.
             $row = $wpdb->get_row($wpdb->prepare(
-                "SELECT post_title, post_content FROM {$wpdb->posts} WHERE ID = %d FOR UPDATE",
+                "SELECT post_title, post_content, post_status FROM {$wpdb->posts} WHERE ID = %d FOR UPDATE",
                 $fields['post_id']));
             // Null for a row that is not there and for a read that failed
             // alike, and the answer is the same either way: this connector
@@ -353,6 +361,18 @@ final class CadenceReplaceRequest {
             // own cache dropped the same deliberate way, not assumed covered.
             clean_post_cache($fields['post_id']);
             wp_cache_delete($fields['post_id'], 'posts');
+
+            // A RETRANSLATE NEVER LANDS ON A LIVE POST. The client asked for a
+            // new translation and never saw it, so it may replace only a
+            // draft or a pending post. Read from the locked row, so a post
+            // published since the read at the top of `run` is refused too.
+            if (($fields['confirmation_kind'] ?? 'text') === 'retranslate'
+                    && !in_array((string) $row->post_status, self::RETRANSLATE_STATUSES, true)) {
+                return self::release($wpdb, ['ok' => false, 'code' => 'retranslate_live',
+                    'reason' => sprintf('post %d is %s on this site, and a retranslate nobody saw '
+                        . 'replaces only a draft or a pending post; nothing was written',
+                        $fields['post_id'], (string) $row->post_status)]);
+            }
 
             // THE FIFTH CONJUNCT, IN THE SAME CRITICAL SECTION AS ITS WRITE.
             // Asked before the lock, two copies of one confirmed body could

@@ -75,7 +75,7 @@ final class ReadRequestTest extends TestCase {
             'post_id' => self::ID, 'piece_id' => 'piece-1', 'language' => 'en',
             'title' => 'The title', 'content' => '<p>The body.</p>', 'excerpt' => 'An excerpt.',
             'seo_title' => 'SEO title', 'seo_description' => 'SEO description',
-            'slug' => 'the-title',
+            'slug' => 'the-title', 'post_status' => 'publish',
             'revision' => CadenceRevision::of('The title', '<p>The body.</p>'),
             'translations' => ['it' => 12],
         ], array_merge($r['report'], ['translations' => (array) $r['report']['translations']]));
@@ -216,7 +216,9 @@ final class ReadRequestTest extends TestCase {
     #[\PHPUnit\Framework\Attributes\DataProvider('statuses')]
     public function test_a_post_in_a_placed_status_is_read(string $status): void {
         $this->post(['post_status' => $status]);
-        $this->assertTrue($this->read()['ok']);
+        $r = $this->read();
+        $this->assertTrue($r['ok']);
+        $this->assertSame($status, $r['report']['post_status']);
     }
 
     /** A trashed post, an auto-draft or a revision row is not text anyone placed; refused alike. */

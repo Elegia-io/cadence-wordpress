@@ -292,6 +292,7 @@ final class CadenceRestRoute {
         'confirmation_wrong_site'    => 403,
         'confirmation_expired'       => 403,
         'confirmation_spent'         => 409,
+        'retranslate_live'           => 403,
         'post_type_out_of_scope'     => 403,
         'existing_post_type_out_of_scope' => 403,
         'link_post_type_out_of_scope' => 403,

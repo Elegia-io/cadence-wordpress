@@ -50,6 +50,13 @@ final class ReslugRequestTest extends TestCase {
         }
     }
 
+    /** A slug is handed to core slashed like every other field (core unslashes it). */
+    public function test_a_backslash_in_the_slug_reaches_wordpress_slashed(): void {
+        $r = $this->reslug($this->body(['slug' => 'new\\slug']));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('new\\slug', WpStub::$posts[self::ID]['post_name']);
+    }
+
     public function test_a_taken_slug_answers_the_suffixed_one(): void {
         WpStub::$posts[22] = ['post_type' => 'post', 'post_name' => 'new-slug', 'trid' => null];
         $r = $this->reslug($this->body());

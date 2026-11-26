@@ -132,7 +132,8 @@ final class CadenceReslugRequest {
                     'post %d no longer has the slug `%s`; refusing to change an address the caller has '
                     . 'not seen, and nothing was written', $post_id, $fields['old_slug'])));
             }
-            $id = wp_update_post(['ID' => $post_id, 'post_name' => $fields['slug']], true);
+            // Slashed: core unslashes what it is handed.
+            $id = wp_update_post(wp_slash(['ID' => $post_id, 'post_name' => $fields['slug']]), true);
             if (is_wp_error($id) || !is_int($id) || $id !== $post_id) {
                 return self::release($wpdb, self::refuse('update_failed', 'WordPress refused the update'
                     . (is_wp_error($id) ? ': ' . $id->get_error_message() : '')));

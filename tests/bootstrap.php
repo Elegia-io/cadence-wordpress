@@ -1054,17 +1054,22 @@ function wp_insert_post(array $postarr, bool $wp_error = false) {
     }
     $id = WpStub::$next_post_id++;
     WpStub::$inserted[] = $postarr;
+    // UNSLASHED, as core does to every field it is handed (see
+    // `add_post_meta`): a caller that did not `wp_slash` first loses every
+    // backslash.
+    $unslash = static fn ($v) => is_string($v) ? stripslashes($v) : $v;
     WpStub::$posts[$id] = [
-        'post_type' => $postarr['post_type'] ?? 'post',
-        'post_status' => $postarr['post_status'] ?? 'draft',
-        'post_title' => $postarr['post_title'] ?? '',
-        'post_content' => $postarr['post_content'] ?? '',
+        'post_type' => $unslash($postarr['post_type'] ?? 'post'),
+        'post_status' => $unslash($postarr['post_status'] ?? 'draft'),
+        'post_title' => $unslash($postarr['post_title'] ?? ''),
+        'post_content' => $unslash($postarr['post_content'] ?? ''),
         'language' => null, 'trid' => null, 'wpml_knows' => true,
     ];
     // `meta_input` is written by wp_insert_post itself, in the same call that
-    // creates the post -- which is why the plugin uses it.
+    // creates the post -- which is why the plugin uses it. Through
+    // `update_post_meta`, so unslashed once more.
     foreach ($postarr['meta_input'] ?? [] as $k => $v) {
-        WpStub::$meta[$id][$k] = $v;
+        WpStub::$meta[$id][$k] = $unslash($v);
     }
     return $id;
 }

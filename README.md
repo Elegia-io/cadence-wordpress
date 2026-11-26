@@ -3,7 +3,7 @@
 [Cadence](https://elegia.io) is Elegia's content system. It drafts, translates and reviews articles
 in a brand's own voice, starting from what the brand has already published.
 This plugin is how those articles reach your site: Cadence sends each finished
-piece to WordPress, usually as a draft for you to review, and links its
+piece to WordPress as a draft for you to review and publish, and links its
 language versions as WPML translations so nobody has to do it by hand.
 
 The plugin publishes a piece, replaces a piece it published, and links the
@@ -322,6 +322,14 @@ id, which is what later scopes `translation.link` to this key's own pieces.
 
 `external_id` is accepted as the 0.1.0 spelling of `piece_id`.
 
+**`status` is `draft` or `pending`, and nothing else.** The connector never puts
+a piece live: you publish it in WordPress. Under the AI Act's art. 50(4)
+exemption a human approves each piece before it is published, and the connector
+holds no record of that approval, so `publish`, `future`, `private` and any other
+string are refused with `status_not_allowed` and a `403`, before anything is
+looked up or written. A request naming a piece already on the site is refused the
+same way, not answered as a repeat.
+
 The post is created with the byline the presenting key names; the request body
 does not choose an author, so a key cannot publish under a byline the site did
 not grant it. Nothing else in the connector sets an author: there is one route
@@ -365,7 +373,7 @@ second time.
 | `201` | created | `created: true`, with `post_id` and `revision` |
 | `200` | it already existed | `created: false`, same `post_id`, and the post's current `revision` when the caller may edit that post |
 | `400` | the body is wrong, or names a post type this site does not register | `bad_request` |
-| `403` | the key does not reach this post type (`post_type_out_of_scope`), or already has this piece in a type it may not publish into (`existing_post_type_out_of_scope`) | nothing was created |
+| `403` | the status is not `draft` or `pending` (`status_not_allowed`), the key does not reach this post type (`post_type_out_of_scope`), or already has this piece in a type it may not publish into (`existing_post_type_out_of_scope`) | nothing was created |
 | `409` | the site disagrees: the declaration, or this piece's own language (`capability_mismatch`, `unsupported_language`) | nothing was created |
 
 A successful answer reports **what the call did**, not merely that a row
@@ -808,6 +816,7 @@ the reason is prose and changes freely.
 | `source_group_unreadable` | 500 | the source was written and WPML then said nothing usable about it, so its group cannot be named. **The source was written**; the translations were not |
 | `wpml_unavailable` | 503 | nothing on this site implements the WPML hooks. The reply carries `wpml_version`, the WPML version the site reports, when it reports one: a record for support, never a reason for the refusal |
 | `bad_request` | 400 | the content body is not the shape it claims |
+| `status_not_allowed` | 403 | a `/content` status other than `draft` or `pending`: the connector puts nothing live, you publish in WordPress |
 | `capability_mismatch` | 409 | the declaration and the site disagree about WPML |
 | `unsupported_language` | 409 | this site has no active WPML language for the piece itself |
 | `insert_failed` | 500 | WordPress refused the insert, or returned no id |

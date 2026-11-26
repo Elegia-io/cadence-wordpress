@@ -43,7 +43,10 @@ final class ReplaceRequestTest extends TestCase {
             // which is not what this file is about.
             'declared'    => ['multilingual' => true, 'languages' => ['en']],
             'post_type'   => 'post',
-            'status'      => 'publish',
+            // PLACED AS A DRAFT, the only way `/content` places anything, and
+            // then published by the customer in WordPress -- so what this
+            // file rewrites is a live post, as it is on a client's site.
+            'status'      => 'draft',
             'title'       => 'The original',
             'content'     => '<p>Original body.</p>',
         ], $over);
@@ -67,6 +70,9 @@ final class ReplaceRequestTest extends TestCase {
             $key_id,
             CadenceAttest::header('/content', CadenceAttest::fields('/content', $body), $key_id));
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        if (!isset($over['status'])) {
+            WpStub::$posts[$r['post_id']]['post_status'] = 'publish';
+        }
         return $r;
     }
 

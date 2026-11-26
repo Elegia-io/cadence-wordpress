@@ -60,11 +60,11 @@ final class AttestationTest extends TestCase {
         [
             'label'    => 'content-unicode-untrimmed-unnormalised',
             'route'    => '/content',
-            'fields'   => ['piece_id' => 'acme-blog-2026-09-12-attestation__it', 'language' => 'it', 'post_type' => 'post', 'status' => 'publish', 'title' => '  Firmare ciò che inviamo — 🔑  ', 'content' => '<p>Perché conta: é non è é — e 日本語 non è ASCII.</p>'],
-            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQKcGllY2VfaWQ6MzY6YWNtZS1ibG9nLTIwMjYtMDktMTItYXR0ZXN0YXRpb25fX2l0Cmxhbmd1YWdlOjI6aXQKcG9zdF90eXBlOjQ6cG9zdApzdGF0dXM6NzpwdWJsaXNoCnRpdGxlOjM4OiAgRmlybWFyZSBjaW/MgCBjaGUgaW52aWFtbyDigJQg8J+UkSAgCmNvbnRlbnQ6NjY6PHA+UGVyY2hlzIEgY29udGE6IGXMgSBub24gw6ggw6kg4oCUIGUg5pel5pys6KqeIG5vbiDDqCBBU0NJSS48L3A+Cg==',
-            'bytes'    => 250,
-            'digest'   => 'd4813246abe79c5c389a326369d201e7bc4d951d70e3fa148d64849e7212b15e',
-            'header'   => 'v1 45da37c57dd21b36 p-eFK_r1dEo9O8xwBuFrEG0VomFjN-nKU26PEOUcZa95pwEj7By4jnvkL-y_-aNfAR1-wf7uYtGixFvAyK6ADA',
+            'fields'   => ['piece_id' => 'acme-blog-2026-09-12-attestation__it', 'language' => 'it', 'post_type' => 'post', 'status' => 'draft', 'title' => '  Firmare ciò che inviamo — 🔑  ', 'content' => '<p>Perché conta: é non è é — e 日本語 non è ASCII.</p>'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQKcGllY2VfaWQ6MzY6YWNtZS1ibG9nLTIwMjYtMDktMTItYXR0ZXN0YXRpb25fX2l0Cmxhbmd1YWdlOjI6aXQKcG9zdF90eXBlOjQ6cG9zdApzdGF0dXM6NTpkcmFmdAp0aXRsZTozODogIEZpcm1hcmUgY2lvzIAgY2hlIGludmlhbW8g4oCUIPCflJEgIApjb250ZW50OjY2OjxwPlBlcmNoZcyBIGNvbnRhOiBlzIEgbm9uIMOoIMOpIOKAlCBlIOaXpeacrOiqniBub24gw6ggQVNDSUkuPC9wPgo=',
+            'bytes'    => 248,
+            'digest'   => '610fabffb6c089527afe979d33fc0a1ff0eec24d263252de2e3547cab4a44978',
+            'header'   => 'v1 45da37c57dd21b36 _JxXeDy-tEDGy2HkpzI4-b387iUPdCxs5sZC3sdzZzeQdukOYSpBm2Qi9xfjonPC-j8yAXY3XJ4LSMTXXYtqCQ',
         ],
         [
             'label'    => 'replace',

@@ -1842,19 +1842,29 @@ final class ReplaceRequestTest extends TestCase {
     // ------------------------------------------------------------------
 
     public static function live_statuses(): array {
-        return ['publish' => ['publish'], 'future' => ['future'], 'private' => ['private']];
+        // Not only the live statuses this site knows: an allowlist refuses
+        // a blank status, a custom one and a revision row's alike.
+        return ['publish' => ['publish'], 'future' => ['future'], 'private' => ['private'],
+                'blank' => [''], 'custom' => ['archived'], 'inherit' => ['inherit']];
     }
 
     public static function unpublished_statuses(): array {
         return ['draft' => ['draft'], 'pending' => ['pending']];
     }
 
-    /** A retranslate onto a live post: 403 `retranslate_live`, rolled back, nothing written or spent. */
+    /**
+     * A retranslate onto any post not draft or pending: 403 `retranslate_live`,
+     * rolled back, nothing written or spent. The status is the locked row's;
+     * the cached copy holds it too where the scope check admits it.
+     */
     #[Group('wpml')]
     #[\PHPUnit\Framework\Attributes\DataProvider('live_statuses')]
     public function test_a_retranslate_on_a_live_post_is_refused(string $status): void {
         $p = $this->publish(['status' => 'draft']);
-        WpStub::$posts[$p['post_id']]['post_status'] = $status;
+        WpStub::$row_override[$p['post_id']] = ['post_status' => $status];
+        if (in_array($status, CadenceAdoptRequest::STATUSES, true)) {
+            WpStub::$posts[$p['post_id']]['post_status'] = $status;
+        }
         $r = $this->replace($this->body($p, ['confirmation_kind' => 'retranslate']));
         $this->assertSame('retranslate_live', $r['code'] ?? null, $r['reason'] ?? '');
         $this->assertSame(403, CadenceRestRoute::respond($r)['status']);

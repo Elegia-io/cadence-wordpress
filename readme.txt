@@ -4,7 +4,7 @@ Tags: rest-api, wpml, multilingual, publishing, translation
 Requires at least: 6.5
 Tested up to: 7.2
 Requires PHP: 8.1
-Stable tag: 0.16.1
+Stable tag: 0.17.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -75,6 +75,11 @@ No. The connector refuses to publish or replace a post while WPML's
 machine-translate each piece by itself. Switch the mode off in WPML to publish.
 
 == Changelog ==
+
+= 0.17.0 =
+* The connector now only creates drafts and pending posts. A request to publish
+  is refused (`status_not_allowed`, 403), and so is any other status. You
+  publish in WordPress.
 
 = 0.16.1 =
 * Tested with WordPress 7.2.

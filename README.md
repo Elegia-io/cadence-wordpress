@@ -739,6 +739,13 @@ before 0.14.0 reads as `text`, a slug change as "client confirmed this slug
 change", and a recorded kind the site cannot read back as `unreadable`, never
 as `text`), and the replace answer carries it as `confirmation_kind`.
 
+**A retranslate never lands on a live post.** A `retranslate` replaces only a
+post whose status is `draft` or `pending`. On any other status (`publish`,
+`future`, `private`) it is refused with `retranslate_live`, decided from the
+locked row before anything is written. Confirmed `text` is unchanged.
+`/content/read` answers the post's `post_status`, so a caller can tell a live
+post from a draft before it asks.
+
 **The record is visible in wp-admin.** A post that has taken at least one
 confirmed rewrite shows a read-only "Confirmed rewrites" box on its edit
 screen, in both editors and on every post type, to users who can edit that
@@ -840,6 +847,7 @@ the reason is prose and changes freely.
 | `confirmation_wrong_site` | 403 | the confirmation was signed for another site; nothing was written |
 | `confirmation_expired` | 403 | the confirmation is more than 300 seconds from this site's clock; nothing was written |
 | `confirmation_spent` | 409 | this exact confirmed rewrite has already been applied; nothing was written |
+| `retranslate_live` | 403 | the confirmation is a `retranslate` the client never saw, and the post is not a draft or pending; nothing was written |
 | `wpml_translate_everything_on` | 409 | WPML on this site is set to *Translate Everything Automatically*, so it would machine-translate the piece by itself. Switch the mode off in WPML; nothing was written (`/content` and `/content/replace`) |
 | `wpml_translate_everything_unknown` | 409 | WPML is active and would not say whether *Translate Everything Automatically* is on: the setting cannot be read, or WPML answered something that is not yes or no. Nothing was written (`/content` and `/content/replace`) |
 | `bad_adoption` | 400 | the adopt or its preview body is not the shape it claims |

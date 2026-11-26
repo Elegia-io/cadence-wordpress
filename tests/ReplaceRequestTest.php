@@ -572,7 +572,14 @@ final class ReplaceRequestTest extends TestCase {
             $seen[] = $r['code'];
         }
 
-        $this->assertCount(16, array_unique($seen));
+        // AND A RETRANSLATE ONTO A LIVE POST.
+        WpStub::reset();
+        $p = $this->publish();
+        $r = $this->replace($this->body($p, ['confirmation_kind' => 'retranslate']));
+        $this->assertSame('retranslate_live', $r['code'] ?? null);
+        $seen[] = $r['code'];
+
+        $this->assertCount(17, array_unique($seen));
 
         // AND THE PUBLISHED LIST IS THAT LIST, so the coverage test over in
         // RestRouteTest has something real to be measured against: a code added
@@ -1524,7 +1531,7 @@ final class ReplaceRequestTest extends TestCase {
             $this->assertContains($code, CadenceReplaceRequest::REFUSAL_CODES);
             $this->assertSame($status, CadenceRestRoute::STATUS[$code], $code);
         }
-        $this->assertCount(16, CadenceReplaceRequest::REFUSAL_CODES);
+        $this->assertCount(17, CadenceReplaceRequest::REFUSAL_CODES);
     }
 
     /**
@@ -1685,7 +1692,8 @@ final class ReplaceRequestTest extends TestCase {
     #[Group('wpml')]
     #[\PHPUnit\Framework\Attributes\DataProvider('confirmation_kinds')]
     public function test_a_confirmation_kind_is_signed_written_and_recorded(string $kind, string $note): void {
-        $p = $this->publish();
+        // A draft: a retranslate onto a live post is `retranslate_live`, below.
+        $p = $this->publish(['status' => 'draft']);
         $body = $this->body($p, ['confirmation_kind' => $kind]);
         $r = $this->replace($body);
         $this->assertTrue($r['ok'], $r['reason'] ?? '');
@@ -1723,7 +1731,7 @@ final class ReplaceRequestTest extends TestCase {
     /** A post with an old row and a new one keeps each row's own kind, in order. */
     #[Group('wpml')]
     public function test_old_and_new_rows_keep_their_own_kinds(): void {
-        $p = $this->publish();
+        $p = $this->publish(['status' => 'draft']);
         add_post_meta($p['post_id'], CadenceReplaceRequest::SPENT_META, 'old-digest');
         $this->assertTrue($this->replace($this->body($p, ['confirmation_kind' => 'retranslate']))['ok']);
         $this->assertSame(['text', 'retranslate'],
@@ -1807,7 +1815,7 @@ final class ReplaceRequestTest extends TestCase {
     /** THE KIND NOT RECORDED: the rewrite rolls back and spends nothing. */
     #[Group('wpml')]
     public function test_a_kind_that_cannot_be_recorded_rolls_the_rewrite_back(): void {
-        $p = $this->publish();
+        $p = $this->publish(['status' => 'draft']);
         WpStub::$meta_add_fails = [CadenceReplaceRequest::KIND_META];
         $r = $this->replace($this->body($p, ['confirmation_kind' => 'retranslate']));
         $this->assertSame('update_failed', $r['code'] ?? null, $r['reason'] ?? '');
@@ -1827,5 +1835,75 @@ final class ReplaceRequestTest extends TestCase {
                                   CadenceAttest::KEY_ID));
         $this->assertSame('mismatch', $r['attestation_branch'] ?? null);
         $this->assertSame([], WpStub::$updated);
+    }
+
+    // ------------------------------------------------------------------
+    // A RETRANSLATE IS TEXT NOBODY SAW, so it never lands on a live post.
+    // ------------------------------------------------------------------
+
+    public static function live_statuses(): array {
+        return ['publish' => ['publish'], 'future' => ['future'], 'private' => ['private']];
+    }
+
+    public static function unpublished_statuses(): array {
+        return ['draft' => ['draft'], 'pending' => ['pending']];
+    }
+
+    /** A retranslate onto a live post: 403 `retranslate_live`, rolled back, nothing written or spent. */
+    #[Group('wpml')]
+    #[\PHPUnit\Framework\Attributes\DataProvider('live_statuses')]
+    public function test_a_retranslate_on_a_live_post_is_refused(string $status): void {
+        $p = $this->publish(['status' => 'draft']);
+        WpStub::$posts[$p['post_id']]['post_status'] = $status;
+        $r = $this->replace($this->body($p, ['confirmation_kind' => 'retranslate']));
+        $this->assertSame('retranslate_live', $r['code'] ?? null, $r['reason'] ?? '');
+        $this->assertSame(403, CadenceRestRoute::respond($r)['status']);
+        $this->assertSame([], WpStub::$updated);
+        $this->assertSame('The original', WpStub::$posts[$p['post_id']]['post_title']);
+        $this->assertSame([], CadenceReplaceRequest::confirmations($p['post_id']));
+        $log = $this->statements();
+        $this->assertSame('ROLLBACK', end($log));
+        $this->assertNotContains('COMMIT', $log);
+    }
+
+    /** Twin: on a draft or a pending post a retranslate writes. */
+    #[Group('wpml')]
+    #[\PHPUnit\Framework\Attributes\DataProvider('unpublished_statuses')]
+    public function test_a_retranslate_on_an_unpublished_post_writes(string $status): void {
+        $p = $this->publish(['status' => 'draft']);
+        WpStub::$posts[$p['post_id']]['post_status'] = $status;
+        $r = $this->replace($this->body($p, ['confirmation_kind' => 'retranslate']));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $this->assertSame('The rewrite', WpStub::$posts[$p['post_id']]['post_title']);
+    }
+
+    /** Twin: confirmed text still replaces a live post, with the kind named or absent. */
+    #[Group('wpml')]
+    public function test_confirmed_text_on_a_live_post_writes(): void {
+        foreach ([['confirmation_kind' => 'text'], []] as $over) {
+            WpStub::reset();
+            $p = $this->publish();
+            $r = $this->replace($this->body($p, $over));
+            $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        }
+    }
+
+    /** DECIDED FROM THE LOCKED ROW: a post published since the cache was read is refused. */
+    #[Group('wpml')]
+    public function test_a_post_published_before_the_lock_refuses_a_retranslate(): void {
+        $p = $this->publish(['status' => 'draft']);
+        WpStub::$row_override[$p['post_id']] = ['post_status' => 'publish'];
+        $r = $this->replace($this->body($p, ['confirmation_kind' => 'retranslate']));
+        $this->assertSame('retranslate_live', $r['code'] ?? null, $r['reason'] ?? '');
+        $this->assertSame([], WpStub::$updated);
+    }
+
+    /** And the other way: a post unpublished before the lock takes the retranslate. */
+    #[Group('wpml')]
+    public function test_a_post_unpublished_before_the_lock_takes_a_retranslate(): void {
+        $p = $this->publish();
+        WpStub::$row_override[$p['post_id']] = ['post_status' => 'draft'];
+        $r = $this->replace($this->body($p, ['confirmation_kind' => 'retranslate']));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
     }
 }

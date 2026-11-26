@@ -48,7 +48,7 @@ final class CadenceReadRequest {
 
     /** Every name the reply carries beside the envelope. A caller asserts each one present. */
     public const REPLY_FIELDS = ['post_id', 'piece_id', 'language', 'title', 'content', 'excerpt',
-                                 'seo_title', 'seo_description', 'slug', 'revision', 'translations'];
+                                 'seo_title', 'seo_description', 'slug', 'post_status', 'revision', 'translations'];
 
     /**
      * WHERE THE SEO TEXT LIVES: the meta keys Yoast SEO reads. `/content/replace`
@@ -132,6 +132,7 @@ final class CadenceReadRequest {
                     'seo_title'       => $seo['seo_title'],
                     'seo_description' => $seo['seo_description'],
                     'slug'            => $post->post_name,
+                    'post_status'     => $post->post_status,
                     'revision'        => CadenceRevision::of($post->post_title, $post->post_content),
                     // AN OBJECT ON THE WIRE even when empty: `{}` and never `[]`.
                     'translations'    => (object) $translations,

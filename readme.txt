@@ -4,7 +4,7 @@ Tags: rest-api, wpml, multilingual, publishing, translation
 Requires at least: 6.5
 Tested up to: 7.2
 Requires PHP: 8.1
-Stable tag: 0.17.0
+Stable tag: 0.17.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -75,6 +75,18 @@ No. The connector refuses to publish or replace a post while WPML's
 machine-translate each piece by itself. Switch the mode off in WPML to publish.
 
 == Changelog ==
+
+= 0.17.1 =
+* Fixes backslashes being dropped from posts the connector writes. Creating a
+  post (`/content`) and replacing one (`/content/replace`) now keep every
+  backslash in the title, content, excerpt and piece identifier: `1\95` used
+  to be saved as `195`. A slug change (`/content/reslug`) now passes its slug
+  to WordPress the same way; WordPress still removes backslashes from slugs.
+* A post created before this fix was saved with any backslash in its piece
+  identifier dropped. A retry of that request no longer finds the post and
+  creates a second one, so check for a duplicate if your identifiers hold `\`.
+* The connector's tests now check the delete route's signing format against
+  the sending service's own example.
 
 = 0.17.0 =
 * The connector now only creates drafts and pending posts. A request to publish

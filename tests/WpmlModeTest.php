@@ -37,7 +37,7 @@ final class WpmlModeTest extends TestCase {
             'language'  => 'en',
             'declared'  => $declared,
             'post_type' => 'post',
-            'status'    => 'publish',
+            'status'    => 'draft',
             'title'     => 'The original',
             'content'   => '<p>Original body.</p>',
         ];

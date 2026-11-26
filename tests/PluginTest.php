@@ -351,7 +351,7 @@ final class PluginTest extends TestCase {
         $this->assertFalse(($this->route[2]['permission_callback'])(
             new WP_REST_Request($body, WP_REST_Request::NO_KEY)));
         $this->assertFalse(($this->routes['/content']['permission_callback'])(new WP_REST_Request(
-            ['piece_id' => 'x', 'post_type' => 'post', 'status' => 'publish'],
+            ['piece_id' => 'x', 'post_type' => 'post', 'status' => 'draft'],
             WP_REST_Request::NO_KEY)));
         $this->assertFalse(($this->routes['/content/replace']['permission_callback'])(new WP_REST_Request(
             ['post_id' => 1], WP_REST_Request::NO_KEY)),
@@ -477,7 +477,7 @@ final class PluginTest extends TestCase {
         $ids = [];
         foreach (['en' => 'piece-en', 'de' => 'piece-de'] as $language => $piece) {
             $made = $publish(new WP_REST_Request([
-                'piece_id' => $piece, 'post_type' => 'post', 'status' => 'publish',
+                'piece_id' => $piece, 'post_type' => 'post', 'status' => 'draft',
                 'title' => 'T-' . $language, 'content' => 'C', 'language' => $language,
                 'declared' => ['multilingual' => true, 'languages' => ['en', 'de']]]));
             $this->assertSame(201, $made->get_status(), $language);
@@ -666,7 +666,7 @@ final class PluginTest extends TestCase {
         $ids = [];
         foreach (['en' => 'piece-en', 'de' => 'piece-de'] as $language => $piece) {
             $made = $publish(new WP_REST_Request([
-                'piece_id' => $piece, 'post_type' => 'post', 'status' => 'publish',
+                'piece_id' => $piece, 'post_type' => 'post', 'status' => 'draft',
                 'title' => 'T-' . $language, 'content' => 'C', 'language' => $language,
                 'declared' => ['multilingual' => true, 'languages' => ['en', 'de']]], $a));
             $this->assertSame(201, $made->get_status(), $language);
@@ -726,14 +726,14 @@ final class PluginTest extends TestCase {
         $link    = $this->route[2]['callback'];
 
         $made = $publish(new WP_REST_Request([
-            'piece_id' => 'a-en', 'post_type' => 'post', 'status' => 'publish',
+            'piece_id' => 'a-en', 'post_type' => 'post', 'status' => 'draft',
             'title' => 'T', 'content' => 'C', 'language' => 'en',
             'declared' => ['multilingual' => true, 'languages' => ['en', 'de']]], $a));
         $this->assertSame(201, $made->get_status());
         $theirs = $made->get_data()['post_id'];
 
         $mine = $publish(new WP_REST_Request([
-            'piece_id' => 'b-de', 'post_type' => 'post', 'status' => 'publish',
+            'piece_id' => 'b-de', 'post_type' => 'post', 'status' => 'draft',
             'title' => 'T', 'content' => 'C', 'language' => 'de',
             'declared' => ['multilingual' => true, 'languages' => ['en', 'de']]], $b));
         $this->assertSame(201, $mine->get_status());
@@ -798,7 +798,7 @@ final class PluginTest extends TestCase {
         $piece = ['piece_id' => 'shared-slug', 'language' => 'en',
                   'declared' => ['multilingual' => true, 'languages' => ['en']]];
 
-        $made = $publish(new WP_REST_Request($piece + ['post_type' => 'page', 'status' => 'publish',
+        $made = $publish(new WP_REST_Request($piece + ['post_type' => 'page', 'status' => 'draft',
             'title' => "A's title", 'content' => "<p>A's body.</p>"], $this->key($a)));
         $this->assertSame(201, $made->get_status());
         $mine = $made->get_data()['post_id'];
@@ -862,7 +862,7 @@ final class PluginTest extends TestCase {
         $this->assertIsArray($b, is_string($b) ? $b : '');
 
         $made = ($this->routes['/content']['callback'])(new WP_REST_Request([
-            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'publish',
+            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'draft',
             'title' => "A's title", 'content' => "<p>A's body.</p>", 'language' => 'en',
             'declared' => ['multilingual' => true, 'languages' => ['en']]], $this->key($a)));
         $this->assertSame(201, $made->get_status(), (string) ($made->get_data()['reason'] ?? ''));
@@ -904,7 +904,7 @@ final class PluginTest extends TestCase {
         $a = CadenceKey::issue('tenant-a', ['content.publish', 'content.replace'], 7);
         $b = CadenceKey::issue('tenant-b', ['content.publish', 'content.replace'], 7);
         $made = ($this->routes['/content']['callback'])(new WP_REST_Request([
-            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'publish',
+            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'draft',
             'title' => 'T', 'content' => 'C', 'language' => 'en',
             'declared' => ['multilingual' => true, 'languages' => ['en']]], $this->key($a)));
         $this->assertSame(201, $made->get_status());
@@ -915,7 +915,7 @@ final class PluginTest extends TestCase {
         // B's OWN piece, in the trash: a post B cannot read, so it may not
         // rewrite or reslug it either, and it answers like the rest.
         $own = ($this->routes['/content']['callback'])(new WP_REST_Request([
-            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'publish',
+            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'draft',
             'title' => 'T', 'content' => 'C', 'language' => 'en',
             'declared' => ['multilingual' => true, 'languages' => ['en']]], $this->key($b)));
         $this->assertSame(201, $own->get_status());
@@ -958,7 +958,7 @@ final class PluginTest extends TestCase {
             string $route, string $status): void {
         $b = CadenceKey::issue('tenant-b', ['content.publish', 'content.replace'], 7);
         $own = ($this->routes['/content']['callback'])(new WP_REST_Request([
-            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'publish',
+            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'draft',
             'title' => 'T', 'content' => 'C', 'language' => 'en',
             'declared' => ['multilingual' => true, 'languages' => ['en']]], $this->key($b)));
         $this->assertSame(201, $own->get_status());
@@ -1003,7 +1003,7 @@ final class PluginTest extends TestCase {
     public function test_a_key_reaches_its_own_piece_in_a_placed_status(string $route): void {
         $b = CadenceKey::issue('tenant-b', ['content.publish', 'content.replace'], 7);
         $own = ($this->routes['/content']['callback'])(new WP_REST_Request([
-            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'publish',
+            'piece_id' => 'piece-a', 'post_type' => 'post', 'status' => 'draft',
             'title' => 'T', 'content' => 'C', 'language' => 'en',
             'declared' => ['multilingual' => true, 'languages' => ['en']]], $this->key($b)));
         $id = $own->get_data()['post_id'];

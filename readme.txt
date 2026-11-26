@@ -15,7 +15,7 @@ Receives articles from Cadence, Elegia's content system, as WordPress drafts, wi
 Cadence is Elegia's content system. It drafts, translates and reviews articles
 in a brand's own voice, starting from what the brand has already published.
 This plugin is how those articles reach your site: Cadence sends each finished
-piece to WordPress, usually as a draft for you to review, and links its
+piece to WordPress as a draft for you to review and publish, and links its
 language versions as WPML translations so nobody has to do it by hand.
 
 WPML has no documented REST endpoint for creating or linking translated posts,

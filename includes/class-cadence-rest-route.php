@@ -280,6 +280,9 @@ final class CadenceRestRoute {
         'not_adopted'                => 409,
         'adopt_failed'               => 500,
         'post_out_of_scope'          => 403,
+        // A live status on `/content`: the body is well formed, and what it
+        // asks for is the one thing the connector never does.
+        'status_not_allowed'         => 403,
         // A rewrite refused for want of the client's confirmation: absent on
         // an adopted post or on a delivered one, unsigned, for another site,
         // stale, or spent.

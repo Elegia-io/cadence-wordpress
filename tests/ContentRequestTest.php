@@ -529,25 +529,51 @@ final class ContentRequestTest extends TestCase {
     }
 
     /**
-     * ONLY THE STATUSES THIS ENDPOINT MEANS. WordPress accepts any string as a
-     * post status and stores it; `auto-draft`, `inherit` or a typo produce a
-     * post that exists and appears nowhere, which is worse than a refusal
-     * because nothing reports it.
+     * NOTHING GOES LIVE FROM THIS ROUTE: ONLY `draft` AND `pending` ARE
+     * ACCEPTED, and every other status is refused as `status_not_allowed`.
+     *
+     * The AI Act art. 50(4) editorial-responsibility exemption rests on a human
+     * approving each piece before it is published, and this connector holds no
+     * record of that approval (Elegia-io/cadence#2070). So the customer
+     * publishes in WordPress, and the route refuses `publish`, `future` and
+     * `private` (each one a post somebody can read without that step) and any
+     * string WordPress would store and no screen would show. An ALLOWLIST: a
+     * status a plugin registers later is refused without this file changing.
      */
-    public function test_refuses_a_status_it_does_not_publish(): void {
-        foreach (['auto-draft', 'inherit', 'trash', 'publised', '', 'future'] as $status) {
+    public function test_refuses_every_status_but_draft_and_pending(): void {
+        foreach (['publish', 'future', 'private', 'Publish', 'draft ', 'auto-draft',
+                  'inherit', 'trash', 'publised', ''] as $status) {
             WpStub::reset();
             WpStub::$capabilities = ['publish_posts' => [null], 'edit_posts' => [null]];
             $r = $this->publish($this->body(['status' => $status]));
-            $this->assertFalse($r['ok'], $status . ' was accepted');
-            $this->assertSame('bad_request', $r['code']);
-            $this->assertSame([], WpStub::$inserted, $status);
+            $this->assertFalse($r['ok'], var_export($status, true) . ' was accepted');
+            $this->assertSame('status_not_allowed', $r['code'], var_export($status, true));
+            $this->assertSame([], WpStub::$inserted, var_export($status, true));
         }
     }
 
+    /**
+     * AND A PUBLISH NAMING A PIECE THE SITE ALREADY HAS IS REFUSED TOO, rather
+     * than answered as the idempotent repeat: the check comes before the lookup,
+     * so no branch of this route reads `publish` as anything but a refusal.
+     */
     #[Group('wpml')]
-    public function test_accepts_the_three_statuses_it_does_publish(): void {
-        foreach (['draft', 'pending', 'publish'] as $status) {
+    public function test_a_publish_for_a_piece_already_placed_is_refused(): void {
+        $first = $this->publish($this->body(['status' => 'draft']));
+        $this->assertTrue($first['ok'], $first['reason'] ?? '');
+
+        $again = $this->publish($this->body(['status' => 'publish']));
+        $this->assertFalse($again['ok']);
+        $this->assertSame('status_not_allowed', $again['code']);
+        $this->assertSame('draft', WpStub::$inserted[0]['post_status']);
+        $this->assertCount(1, WpStub::$inserted);
+    }
+
+    /** THE ACCEPT-PROOF: without it the refusal above passes on a route that refuses everything. */
+    #[Group('wpml')]
+    public function test_accepts_the_two_statuses_it_does_place(): void {
+        $this->assertSame(['draft', 'pending'], CadenceContentRequest::STATUSES);
+        foreach (['draft', 'pending'] as $status) {
             WpStub::reset();
             WpStub::$capabilities = ['publish_posts' => [null], 'edit_posts' => [null]];
             $r = $this->publish($this->body(['status' => $status]));
@@ -599,10 +625,10 @@ final class ContentRequestTest extends TestCase {
      */
     #[Group('wpml')]
     public function test_a_trashed_post_still_answers_for_its_identifier(): void {
-        $first = $this->publish($this->body(['status' => 'publish']));
+        $first = $this->publish($this->body(['status' => 'draft']));
         WpStub::$posts[$first['post_id']]['post_status'] = 'trash';
 
-        $again = $this->publish($this->body(['status' => 'publish']));
+        $again = $this->publish($this->body(['status' => 'draft']));
         $this->assertTrue($again['ok'], $again['reason'] ?? '');
         $this->assertFalse($again['created'], 'a deleted piece was published again');
         $this->assertSame($first['post_id'], $again['post_id']);
@@ -629,10 +655,10 @@ final class ContentRequestTest extends TestCase {
      */
     #[Group('wpml')]
     public function test_an_auto_draft_answers_for_its_identifier(): void {
-        $first = $this->publish($this->body(['status' => 'publish']));
+        $first = $this->publish($this->body(['status' => 'draft']));
         WpStub::$posts[$first['post_id']]['post_status'] = 'auto-draft';
 
-        $again = $this->publish($this->body(['status' => 'publish']));
+        $again = $this->publish($this->body(['status' => 'draft']));
         $this->assertTrue($again['ok'], $again['reason'] ?? '');
         $this->assertFalse($again['created']);
         $this->assertSame($first['post_id'], $again['post_id']);

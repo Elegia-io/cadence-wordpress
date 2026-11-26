@@ -64,21 +64,27 @@ final class CadenceContentRequest {
     public const CREATED_META = '_cadence_created';
 
     /**
-     * The statuses this endpoint means, and no others.
+     * The statuses this endpoint places, and no others: NONE OF THEM IS LIVE.
      *
-     * WordPress accepts ANY string as a post status and stores it. A typo, or
-     * `auto-draft`, or `inherit`, produces a row that exists and appears in no
-     * query and on no admin screen -- content that was published as far as the
-     * caller knows and is nowhere as far as anyone else does.
+     * The customer publishes in WordPress. The AI Act art. 50(4)
+     * editorial-responsibility exemption rests on a human approving each piece
+     * before it goes live, and this connector holds no record of that approval
+     * (Elegia-io/cadence#2070), so `publish`, `future` and `private` are
+     * refused as `status_not_allowed`. An allowlist, and also the guard it
+     * always was: WordPress accepts ANY string as a post status and stores it,
+     * and a typo or `auto-draft` produces a row no query and no screen shows.
      */
-    public const STATUSES = ['draft', 'pending', 'publish'];
+    public const STATUSES = ['draft', 'pending'];
+
+    /** The code a status outside `STATUSES` is refused with. */
+    public const STATUS_REFUSAL = 'status_not_allowed';
 
     /**
      * Every code `run` can refuse with. Published for the same reason the
      * linker's is: so the REST layer can be tested for covering all of them
      * rather than for covering the ones its own tests happened to name.
      */
-    public const REFUSAL_CODES = ['bad_request', 'capability_mismatch',
+    public const REFUSAL_CODES = ['bad_request', self::STATUS_REFUSAL, 'capability_mismatch',
                                  'unsupported_language', 'post_type_out_of_scope',
                                  'existing_post_type_out_of_scope', 'insert_failed',
                                  CadenceAttestation::CODE,
@@ -129,9 +135,18 @@ final class CadenceContentRequest {
             return ['ok' => false, 'code' => 'bad_request', 'reason' => $fields];
         }
 
+        // NOTHING GOES LIVE FROM HERE (see `STATUSES`). Before the attestation
+        // and before the piece lookup, so no branch -- the idempotent repeat
+        // included -- reads a live status as anything but this refusal.
+        if (!in_array($fields['status'], self::STATUSES, true)) {
+            return ['ok' => false, 'code' => self::STATUS_REFUSAL,
+                    'reason' => sprintf('status must be one of %s: the connector places drafts and the customer '
+                                        . 'publishes in WordPress', implode(', ', self::STATUSES))];
+        }
+
         // THE ATTESTATION, AND IT RUNS HERE.
         //
-        // AFTER `validate` AND BEFORE EVERYTHING ELSE. After, because the
+        // AFTER `validate` AND THE STATUS CHECK, BEFORE EVERYTHING ELSE. After, because the
         // signed set has to exist before there are bytes to verify and because
         // an absent or non-string field is this connector's own `bad_request`
         // decided on its own grounds -- folding it in would answer 403
@@ -503,9 +518,6 @@ final class CadenceContentRequest {
         }
         if (trim($body['piece_id']) === '') {
             return 'piece_id must not be blank; it is what makes a retry safe';
-        }
-        if (!in_array($body['status'], self::STATUSES, true)) {
-            return sprintf('status must be one of %s', implode(', ', self::STATUSES));
         }
         // WHETHER THE SITE HAS THIS POST TYPE IS NOT ASKED HERE. It is a read
         // of the client's site and it happens in `run`, after the key's own

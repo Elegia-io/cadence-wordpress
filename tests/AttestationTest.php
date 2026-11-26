@@ -39,7 +39,7 @@ final class AttestationTest extends TestCase {
     private const KEY = 'ca11ab1e0000key2';
 
     /**
-     * THE CONTRACT'S SIXTEEN VECTORS, verbatim: twelve flat ones here, four link ones below.
+     * THE CONTRACT'S EIGHTEEN VECTORS, verbatim: fourteen flat ones here, four link ones below.
      *
      * `material` is base64 of the exact bytes hashed -- carried so a failure
      * can be diffed as BYTES. A digest that differs tells you the layout is
@@ -176,6 +176,16 @@ final class AttestationTest extends TestCase {
             'digest'   => 'ecd53ac3c2750aa10e70dccb3813b6cc4cbf55c8f837205d38bce335186b73f4',
             'header'   => 'v1 45da37c57dd21b36 1x3c5bY7299YCmFBHeSqDJiRL2DAd4VZOzvhSHrsq2cvdBah6VW6B7b_kLp1OrdM7Ly7SfYBlpMgd7Wqowo3DQ',
         ],
+        [
+            'label'    => 'content-delete',
+            'route'    => '/content/delete',
+            // THE DELETE ROUTE'S FOUR FIELDS, in the order both signers use.
+            'fields'   => ['piece_id' => 'acme-blog-2026-11-09-canary', 'post_id' => 4242, 'site' => 'example.test/blog', 'issued_at' => '2026-11-09T12:00:00Z'],
+            'material' => 'Y2FkZW5jZS1hdHRlc3QtdjEKL2NvbnRlbnQvZGVsZXRlCnBpZWNlX2lkOjI3OmFjbWUtYmxvZy0yMDI2LTExLTA5LWNhbmFyeQpwb3N0X2lkOjQ6NDI0MgpzaXRlOjE3OmV4YW1wbGUudGVzdC9ibG9nCmlzc3VlZF9hdDoyMDoyMDI2LTExLTA5VDEyOjAwOjAwWgo=',
+            'bytes'    => 149,
+            'digest'   => '73bd2056b8bb1efb0efa18885ef9e39aa818fefa7dda4933b153e65c5f72aba6',
+            'header'   => 'v1 45da37c57dd21b36 gAdv6ovMKiq_tXLibIiadQroyS8FPA-u3_YZLJBAGnVCntoQbBdlF4GDOoTraZC6VmAruetlY8ktpIWDBO8oDg',
+        ],
         ];
         // THE LINK VECTORS JOIN THEM, reduced to the same flat shape by the ONE
         // implementation that reduces a plan. So every assertion in this file
@@ -295,14 +305,15 @@ final class AttestationTest extends TestCase {
     /**
      * THE DENOMINATOR, asserted rather than assumed: a loop over a silently
      * shortened list passes every assertion inside it. The contract fixture
-     * carries the same seventeen labels.
+     * carries the same eighteen labels.
      */
     public function test_every_contract_vector_is_transcribed(): void {
         $labels = array_column($this->vectors(), 'label');
-        $this->assertCount(17, $labels);
-        $this->assertCount(17, array_unique($labels));
+        $this->assertCount(18, $labels);
+        $this->assertCount(18, array_unique($labels));
         foreach (['content-read', 'content-reslug', 'replace-with-optional-text',
-                  'replace-with-one-optional-text', 'replace-with-retranslate-confirmation'] as $label) {
+                  'replace-with-one-optional-text', 'replace-with-retranslate-confirmation',
+                  'content-delete'] as $label) {
             $this->assertContains($label, $labels);
         }
     }
@@ -374,6 +385,36 @@ final class AttestationTest extends TestCase {
             $this->assertSame('verified', $r['attestation'], $v['label']);
             $this->assertSame(self::VECTOR_KID, $r['kid'], $v['label']);
         }
+    }
+
+    /**
+     * THE DELETE VECTOR'S FIELD ORDER IS PART OF WHAT IS SIGNED. Every pair of
+     * its four lines swapped is material the contract's signature refuses, so
+     * a signer that drifted to another order fails here rather than on a
+     * client's site.
+     */
+    public function test_the_delete_vector_refuses_any_two_fields_swapped(): void {
+        $v = array_values(array_filter($this->vectors(),
+            static fn (array $v): bool => $v['label'] === 'content-delete'))[0];
+        $pk = base64_decode(self::VECTOR_PK, true);
+        $signature = CadenceAttestation::parse($v['header'])['signature'];
+        $lines = explode("\n", CadenceAttestation::material($v['route'], $v['fields']));
+        // The prefix, the route, the four fields, and the empty tail after the last LF.
+        $this->assertCount(7, $lines);
+        $this->assertTrue(sodium_crypto_sign_verify_detached($signature,
+            CadenceAttestation::digest(implode("\n", $lines)), $pk), 'the unswapped vector must verify');
+        $swapped = 0;
+        for ($i = 2; $i < 6; $i++) {
+            for ($j = $i + 1; $j < 6; $j++) {
+                $reordered = $lines;
+                [$reordered[$i], $reordered[$j]] = [$lines[$j], $lines[$i]];
+                $this->assertFalse(sodium_crypto_sign_verify_detached($signature,
+                    CadenceAttestation::digest(implode("\n", $reordered)), $pk),
+                    sprintf('lines %d and %d swapped still verified', $i, $j));
+                $swapped++;
+            }
+        }
+        $this->assertSame(6, $swapped);
     }
 
     /**

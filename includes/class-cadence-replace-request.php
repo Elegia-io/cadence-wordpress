@@ -412,7 +412,9 @@ final class CadenceReplaceRequest {
      * @param array{piece_id: string, post_id: int, revision: string, title: string, content: string} $fields
      */
     private static function write(object $wpdb, array $fields, array $attested, ?string $spent): array {
-        $id = wp_update_post([
+        // SLASHED, because core unslashes every field it is handed: text
+        // passed as it is loses each backslash (`1\95` is stored as `195`).
+        $id = wp_update_post(wp_slash([
             'ID'           => $fields['post_id'],
             'post_title'   => $fields['title'],
             'post_content' => $fields['content'],
@@ -422,7 +424,7 @@ final class CadenceReplaceRequest {
             // across, and it would be reported as a successful rewrite. The
             // identifier already on the post is what this request matched
             // against, so writing it again could only change it.
-        ] + (isset($fields['excerpt']) ? ['post_excerpt' => $fields['excerpt']] : []), true);
+        ] + (isset($fields['excerpt']) ? ['post_excerpt' => $fields['excerpt']] : [])), true);
 
         // WP_Error, or 0, and neither is an exception -- exactly as on the
         // insert path. Read as an id, `0` is falsy, which is what "no post"

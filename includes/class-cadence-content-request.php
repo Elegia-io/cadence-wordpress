@@ -360,7 +360,9 @@ final class CadenceContentRequest {
             $postarr['post_author'] = $author;
         }
 
-        $id = wp_insert_post($postarr, true);
+        // SLASHED, because core unslashes every field it is handed,
+        // `meta_input` included: text passed as it is loses each backslash.
+        $id = wp_insert_post(wp_slash($postarr), true);
 
         // WP_Error, or 0, and neither is an exception. Read as an id, `0` is
         // falsy -- which is also what "no post" looks like everywhere else, so

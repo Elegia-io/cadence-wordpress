@@ -1040,4 +1040,23 @@ final class ContentRequestTest extends TestCase {
                 $label . ': the repeat withheld the revision');
         }
     }
+
+    /**
+     * BACKSLASHES AND QUOTES SURVIVE AN INSERT BYTE FOR BYTE. Core unslashes
+     * every field `wp_insert_post` is handed, `meta_input` included, so text
+     * passed unslashed loses each backslash: `1\95` is stored as `195`.
+     */
+    #[Group('wpml')]
+    public function test_backslashes_and_quotes_survive_an_insert_unchanged(): void {
+        $title   = 'A \\ title with "quotes" and \'apostrophes\'';
+        $content = '<p>1\\95, C:\\path\\to, a \\\\ pair, "double" and \'single\'.</p>';
+        $piece   = 'piece\\2026-11-26';
+        $r = $this->publish($this->body(['piece_id' => $piece, 'title' => $title, 'content' => $content]));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $post = WpStub::$posts[$r['post_id']];
+        $this->assertSame($title, $post['post_title']);
+        $this->assertSame($content, $post['post_content']);
+        $this->assertSame($piece, WpStub::$meta[$r['post_id']][CadenceContentRequest::META]);
+        $this->assertSame(CadenceRevision::of($title, $content), $r['revision']);
+    }
 }

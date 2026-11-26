@@ -1605,6 +1605,26 @@ final class ReplaceRequestTest extends TestCase {
         $this->assertSame(CadenceRevision::of('The rewrite', '<p>Rewritten body.</p>'), $r['revision']);
     }
 
+    /**
+     * BACKSLASHES AND QUOTES SURVIVE A REWRITE BYTE FOR BYTE. Core unslashes
+     * every field `wp_update_post` is handed, so text passed unslashed loses
+     * each backslash: `1\95` is stored as `195` (issue 14).
+     */
+    #[Group('wpml')]
+    public function test_backslashes_and_quotes_survive_a_replace_unchanged(): void {
+        $p = $this->publish();
+        $title   = 'A \\ title with "quotes" and \'apostrophes\'';
+        $content = '<p>1\\95, C:\\path\\to, a \\\\ pair, "double" and \'single\'.</p>';
+        $excerpt = 'An excerpt \\n with "quotes"';
+        $r = $this->replace($this->body($p, ['title' => $title, 'content' => $content, 'excerpt' => $excerpt]));
+        $this->assertTrue($r['ok'], $r['reason'] ?? '');
+        $post = WpStub::$posts[$p['post_id']];
+        $this->assertSame($title, $post['post_title']);
+        $this->assertSame($content, $post['post_content']);
+        $this->assertSame($excerpt, $post['post_excerpt']);
+        $this->assertSame(CadenceRevision::of($title, $content), $r['revision']);
+    }
+
     /** Twin of the above: absent, nothing is written over what the post holds. */
     #[Group('wpml')]
     public function test_absent_optional_fields_leave_the_post_alone(): void {

@@ -1120,7 +1120,11 @@ function wp_update_post(array $postarr, bool $wp_error = false) {
             break;
         }
         if (array_key_exists($field, $postarr)) {
-            WpStub::$posts[$id][$field] = $postarr[$field];
+            // UNSLASHED, as core's `wp_insert_post` does to every field it is
+            // handed (see `add_post_meta` below): a caller that did not
+            // `wp_slash` first loses every backslash.
+            WpStub::$posts[$id][$field] = is_string($postarr[$field])
+                ? stripslashes($postarr[$field]) : $postarr[$field];
         } elseif ($cached !== null) {
             WpStub::$posts[$id][$field] = $cached->$field;
         }
@@ -1174,6 +1178,9 @@ function wp_json_encode($data, int $options = 0, int $depth = 512) {
 }
 
 function wp_slash($value) {
+    if (is_array($value)) {
+        return array_map('wp_slash', $value);
+    }
     return is_string($value) ? addslashes($value) : $value;
 }
 
